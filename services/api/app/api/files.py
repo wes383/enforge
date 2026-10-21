@@ -8,9 +8,11 @@ from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.formparsers import MultiPartException
 
 from app.api.schemas import FileUploadResponse
+from app.services.dispatch import dispatch_document_parse
 from app.services.uploads import (
     UploadValidationError,
     content_disposition,
+    get_file_record,
     iter_file,
     open_download,
     sanitize_original_filename,
@@ -111,6 +113,19 @@ async def upload_project_file(
             detail="Failed to store uploaded file",
         ) from exc
 
+    try:
+        await run_in_threadpool(
+            dispatch_document_parse,
+            stored.file_id,
+            stored.project_id,
+        )
+    except Exception:
+        logger.warning(
+            "Failed to dispatch parse task for file %s",
+            stored.file_id,
+            exc_info=True,
+        )
+
     return FileUploadResponse(
         file_id=stored.file_id,
         source_id=stored.source_id,
@@ -120,7 +135,27 @@ async def upload_project_file(
         size_bytes=stored.size_bytes,
         sha256=stored.sha256,
         parser_status=stored.parser_status,
+        parser_version=stored.parser_version,
+        parse_error=stored.parse_error,
         created_at=stored.created_at,
+    )
+
+
+@router.get("/files/{file_id}", response_model=FileUploadResponse)
+async def get_project_file(file_id: UUID) -> FileUploadResponse:
+    record = await run_in_threadpool(get_file_record, file_id)
+    return FileUploadResponse(
+        file_id=record.file_id,
+        source_id=record.source_id,
+        project_id=record.project_id,
+        original_name=record.original_name,
+        mime_type=record.mime_type,
+        size_bytes=record.size_bytes,
+        sha256=record.sha256,
+        parser_status=record.parser_status,
+        parser_version=record.parser_version,
+        parse_error=record.parse_error,
+        created_at=record.created_at,
     )
 
 

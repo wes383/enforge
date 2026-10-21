@@ -81,4 +81,6 @@ class FileUploadResponse(BaseModel):
     size_bytes: int
     sha256: str
     parser_status: ParserStatus
+    parser_version: str | None
+    parse_error: str | None
     created_at: datetime

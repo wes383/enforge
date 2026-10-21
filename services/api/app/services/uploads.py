@@ -64,6 +64,23 @@ class StoredUpload:
     size_bytes: int
     sha256: str
     parser_status: ParserStatus
+    parser_version: str | None
+    parse_error: str | None
+    created_at: datetime
+
+
+@dataclass(frozen=True, slots=True)
+class FileRecord:
+    file_id: UUID
+    source_id: UUID
+    project_id: UUID
+    original_name: str
+    mime_type: str
+    size_bytes: int
+    sha256: str
+    parser_status: ParserStatus
+    parser_version: str | None
+    parse_error: str | None
     created_at: datetime
 
 
@@ -171,6 +188,8 @@ def store_upload(
                 size_bytes=len(content),
                 sha256=digest,
                 parser_status=version.parser_status,
+                parser_version=version.parser_version,
+                parse_error=version.parse_error,
                 created_at=version.created_at,
             )
     except Exception:
@@ -179,6 +198,34 @@ def store_upload(
         except StorageError:
             logger.exception("Failed to remove orphaned upload %s", storage_key)
         raise
+
+
+def get_file_record(file_id: UUID) -> FileRecord:
+    with get_database().session() as session:
+        version = session.get(SourceVersion, file_id)
+        if version is None:
+            raise EntityNotFound("File not found")
+        project = session.get(ResearchProject, version.project_id)
+        if project is None or project.deleted_at is not None:
+            raise EntityNotFound("File not found")
+        source = session.get(Source, version.source_id)
+        original_name = sanitize_original_filename(
+            version.version_metadata.get("original_filename")
+            or (source.title if source else None)
+        )
+        return FileRecord(
+            file_id=version.id,
+            source_id=version.source_id,
+            project_id=version.project_id,
+            original_name=original_name,
+            mime_type=version.mime_type or "application/octet-stream",
+            size_bytes=version.size_bytes or 0,
+            sha256=version.content_hash,
+            parser_status=version.parser_status,
+            parser_version=version.parser_version,
+            parse_error=version.parse_error,
+            created_at=version.created_at,
+        )
 
 
 def open_download(file_id: UUID) -> DownloadHandle:

@@ -9,13 +9,17 @@ description = "Shared core modules for the Deep Research Writing Agent"
 requires-python = ">=3.12"
 dependencies = [
   "alembic==1.20.0",
+  "beautifulsoup4==4.15.0",
   "celery[redis]==5.6.3",
+  "httpx==0.28.1",
   "pgvector==0.5.1",
   "psycopg[binary]==3.3.6",
   "pydantic==2.14.1",
   "pydantic-settings==2.16.1",
+  "pypdf==6.21.1",
   "redis==6.4.0",
   "SQLAlchemy==2.0.55",
+  "trafilatura==2.3.1",
 ]
 
 [tool.setuptools.packages.find]

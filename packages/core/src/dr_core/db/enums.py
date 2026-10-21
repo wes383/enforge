@@ -59,6 +59,7 @@ class SearchProviderName(StrEnum):
     EXA = "exa"
     CROSSREF = "crossref"
     SEMANTIC_SCHOLAR = "semantic_scholar"
+    MOCK = "mock"
 
 
 class SearchQueryStatus(StrEnum):

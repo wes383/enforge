@@ -2,7 +2,7 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Literal
 
-from pydantic import Field
+from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -38,6 +38,34 @@ class Settings(BaseSettings):
 
     file_storage_root: Path = Path("data/files")
     max_upload_bytes: int = Field(default=5 * 1024 * 1024, gt=0)
+
+    provider_request_timeout_seconds: float = Field(default=20.0, gt=0, le=120)
+    provider_connect_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    provider_max_retries: int = Field(default=3, ge=0, le=10)
+    provider_retry_backoff_seconds: float = Field(default=0.5, ge=0, le=10)
+    provider_cache_ttl_seconds: int = Field(default=900, ge=0)
+    provider_cache_max_entries: int = Field(default=512, ge=1)
+
+    tavily_enabled: bool = False
+    tavily_api_key: SecretStr | None = None
+    exa_enabled: bool = False
+    exa_api_key: SecretStr | None = None
+    firecrawl_enabled: bool = False
+    firecrawl_api_key: SecretStr | None = None
+    firecrawl_max_concurrency: int = Field(default=2, ge=1, le=8)
+    crossref_enabled: bool = False
+    crossref_mailto: str | None = None
+    semantic_scholar_enabled: bool = False
+    semantic_scholar_api_key: SecretStr | None = None
+
+    web_fetch_max_bytes: int = Field(default=2_000_000, gt=0)
+    web_fetch_min_content_chars: int = Field(default=400, ge=0)
+
+    parser_max_input_bytes: int = Field(default=5 * 1024 * 1024, gt=0)
+    parser_max_output_chars: int = Field(default=2_000_000, gt=0)
+    parser_max_pdf_pages: int = Field(default=200, ge=1, le=2000)
+    parse_task_soft_time_limit_seconds: int = Field(default=240, ge=1)
+    parse_task_hard_time_limit_seconds: int = Field(default=300, ge=1)
 
     # pgvector's HNSW index supports at most 2000 dimensions. Changing this
     # value requires a new Alembic migration for document_chunks.embedding.

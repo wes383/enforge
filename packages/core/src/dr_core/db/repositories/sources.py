@@ -231,17 +231,37 @@ class SourceVersionRepository(Repository):
             .limit(1)
         )
 
+    def mark_parsing(
+        self,
+        version_id: UUID,
+        *,
+        project_id: UUID,
+        parser_version: str | None = None,
+    ) -> SourceVersion:
+        version = self.get(version_id, project_id=project_id)
+        version.parser_status = ParserStatus.PARSING
+        version.parser_version = parser_version
+        version.parse_error = None
+        self.session.flush()
+        return version
+
     def mark_parsed(
         self,
         version_id: UUID,
         *,
         project_id: UUID,
         parser_version: str,
+        metadata_updates: dict | None = None,
     ) -> SourceVersion:
         version = self.get(version_id, project_id=project_id)
         version.parser_status = ParserStatus.PARSED
         version.parser_version = parser_version
         version.parse_error = None
+        if metadata_updates:
+            version.version_metadata = {
+                **version.version_metadata,
+                **metadata_updates,
+            }
         self.session.flush()
         return version
 
@@ -252,12 +272,19 @@ class SourceVersionRepository(Repository):
         project_id: UUID,
         error: str,
         parser_version: str | None = None,
+        metadata_updates: dict | None = None,
     ) -> SourceVersion:
         version = self.get(version_id, project_id=project_id)
+        if version.parser_status is ParserStatus.PARSED:
+            return version
         version.parser_status = ParserStatus.FAILED
-        version.parse_error = error
-        if parser_version is not None:
-            version.parser_version = parser_version
+        version.parser_version = parser_version
+        version.parse_error = error[:4000]
+        if metadata_updates:
+            version.version_metadata = {
+                **version.version_metadata,
+                **metadata_updates,
+            }
         self.session.flush()
         return version
 
