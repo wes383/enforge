@@ -326,17 +326,23 @@ export default function SourcesPage() {
                 <details className="group mt-auto pt-4">
                   <summary className="flex cursor-pointer list-none items-center justify-between gap-2 rounded-md border border-border px-3 py-2 text-xs text-foreground-muted transition-colors hover:bg-hover-bg">
                     <span>
-                      {pick(
-                        locale,
-                        `${source.versions.length} 个版本`,
-                        `${source.versions.length} versions`,
-                      )}
+                      {source.versions.length === 0
+                        ? pick(locale, "无正文内容", "No content captured")
+                        : pick(
+                            locale,
+                            `${source.versions.length} 个版本`,
+                            `${source.versions.length} versions`,
+                          )}
                     </span>
                     <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
                   </summary>
                   {source.versions.length === 0 ? (
                     <p className="mt-2 px-1 text-xs text-foreground-subtle">
-                      {pick(locale, "没有来源版本。", "No source versions.")}
+                      {pick(
+                        locale,
+                        "未抓到摘要或正文，这条来源只有元数据。",
+                        "No abstract or fetched text was captured; only metadata is available.",
+                      )}
                     </p>
                   ) : (
                     <ul className="mt-2 space-y-2">

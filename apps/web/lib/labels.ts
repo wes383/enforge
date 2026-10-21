@@ -202,7 +202,7 @@ export const PARSER_STATUS: Record<string, { label: Copy; variant: BadgeVariant 
   parsing: { label: { zh: "解析中", en: "Parsing" }, variant: "info" },
   parsed: { label: { zh: "已解析", en: "Parsed" }, variant: "success" },
   failed: { label: { zh: "解析失败", en: "Failed" }, variant: "danger" },
-  skipped: { label: { zh: "已跳过", en: "Skipped" }, variant: "secondary" },
+  skipped: { label: { zh: "无需解析", en: "No parsing" }, variant: "secondary" },
 };
 
 export function parserStatusLabel(status: string, locale: Locale): string {
