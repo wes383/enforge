@@ -35,7 +35,7 @@
 - 证据矩阵：按研究问题输出主要结论、支持/相反证据 ID、独立来源数、来源与证据质量理由、局限和未解决缺口；相反证据完整保留并进入报告，矩阵 JSON 作为 `evidence_matrix` artifact 持久化。
 - 论证型提纲：每个章节保存标题、写作目的、关联研究问题、关键主张、支持证据 ID、反对证据 ID、预期字数和 `planned/drafted/verified` 状态；提纲审批通过后，写作和核验阶段会回写章节状态。
 - 分章节长文写作：写作节点按章节选择数据库证据，正文包含本节问题、核心判断、证据、反方观点、局限和下一节衔接；章节保存 `citation_map`、使用过的证据 ID 和版本，内容变化时自动生成新版本。
-- 可选的模型写作：只有显式配置真实 LLM Provider 且 `RESEARCH_LLM_WRITING_ENABLED=true` 时才启用；输出必须是 JSON，且通过引用标记、段落引用、数字和参考文献禁令校验，否则自动回退到确定性写作。
+- 可选的模型写作：配置 `OPENAI_API_KEY`（任意 OpenAI 兼容端点）并显式打开 `RESEARCH_LLM_WRITING_ENABLED=true` 时才启用；输出必须是 JSON，且通过引用标记、段落引用、数字和参考文献禁令校验，否则自动回退到确定性写作。
 - 主张核验：从正文抽取带引用和缺少引用的事实性、量化、因果、比较、规范与预测主张；确定性规则检查引用映射、来源存在性、原文定位、数字/年份一致性、词项支持、绝对化措辞和反驳证据，状态为 `SUPPORTED`/`PARTIAL`/`CONTRADICTED`/`UNSUPPORTED`/`UNVERIFIABLE`，失败的核验结果不会被自动升级。
 - 参考文献审计：正文引用标记映射、悬空标记、映射但未使用、证据来源未被引用、标题/作者/年份/出版方/DOI 或 URL 缺失均由程序检查；审计结果写入报告与核验 artifact。
 - 核验交付物：`citation_audit` JSON artifact 包含引用核验、参考文献审计、逐条主张核验、证据关系和理由；报告包含 `## Claim Verification` 与 `## Reference Audit`，并保留研究局限与未解决问题。
@@ -43,7 +43,7 @@
 - SQLAlchemy 2.0 仓储层，覆盖项目、运行、研究问题、检索、来源、切片、证据、主张、提纲、章节、引用核验、审批、事件和导出文件。
 - Alembic 从空数据库初始化、重复升级、降级/再升级和 `alembic check` 均通过；Compose 中的 `migrate` 服务在 `api`、`worker` 启动前完成迁移。
 - 文件记录与实际文件对账工具，能够报告缺失文件和孤儿文件。
-- 容器内单元测试和集成测试，当前 `233 passed`。
+- 容器内单元测试和集成测试，当前 `237 passed`（通过 `docker-compose.test.yml` 强制 mock，真实密钥不参与测试）。
 - 不包含 MinIO、S3 或任何对象存储服务。
 
 ## 服务拓扑
@@ -110,6 +110,7 @@ enforge/
 ├── tests/integration/              Docker 环境集成测试
 ├── tests/evaluation/               阶段 9 质量评测集自动化测试
 ├── docker-compose.yml
+├── docker-compose.test.yml         测试覆盖：强制 mock 提供商，隔离真实密钥
 ├── .env.example
 ├── .gitignore
 ├── .dockerignore
@@ -335,9 +336,12 @@ SSE 使用数据库轮询，每页最多 500 条，按事件 `id` 严格递增�
 评测代码位于 `packages/core/src/dr_core/evaluation/`，使用确定性 Mock 场景提供商，可重复运行：
 
 ```bash
-docker compose --profile test run --rm test python -m dr_core.evaluation
-docker compose --profile test run --rm test python -m dr_core.evaluation --list
-docker compose --profile test run --rm test python -m dr_core.evaluation \
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  --profile test run --rm test python -m dr_core.evaluation
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  --profile test run --rm test python -m dr_core.evaluation --list
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  --profile test run --rm test python -m dr_core.evaluation \
   --case controversial_topic --output /app/data/files/_tmp/eval.json
 ```
 
@@ -399,16 +403,21 @@ docker compose --profile test run --rm test python -m dr_core.evaluation \
 | 网页正文 | `WebContentProvider` | Firecrawl、`MockWebContentProvider` |
 | 文档解析 | `DocumentParserProvider` | 本地 pypdf/trafilatura/BeautifulSoup、`MockDocumentParser` |
 | 向量 | `EmbeddingProvider` | 现有协议与 `MockEmbeddingProvider` |
-| 文本生成 | `LLMProvider` | 协议与 `MockLLMProvider`；真实模型需按协议自行注册适配器 |
+| 文本生成 | `LLMProvider` | OpenAI 兼容 Chat Completions 适配器（`OPENAI_API_KEY` 存在时注册）、`MockLLMProvider` |
 
 ### 如何配置真实大模型与外部研究服务
 
-外部研究服务通过 `.env` 中的 `*_ENABLED` 开关与后端密钥启用（见“提供商开关与限制”），密钥只存在于后端环境变量，浏览器不可见。真实大模型写作与主张复核需要两步：
+外部研究服务通过 `.env` 中的 `*_ENABLED` 开关与后端密钥启用（见“提供商开关与限制”），密钥只存在于后端环境变量，浏览器不可见。真实大模型写作只需要填环境变量，无需改代码：
 
-1. 实现 `LLMProvider` 协议（`generate(prompt, *, system, max_tokens, temperature) -> LLMResponse`，返回模型名与 token 用量），参考 `packages/core/src/dr_core/providers/base.py`。
-2. 在 `build_provider_registry()` 中注册该适配器，并设置 `RESEARCH_LLM_WRITING_ENABLED=true` 或 `RESEARCH_CLAIM_LLM_REVIEW=true`。
+1. 在 `.env` 中设置 `OPENAI_API_KEY`；如使用兼容 OpenAI 协议的其他服务（Azure OpenAI 兼容网关、vLLM、Ollama、国内大模型的 OpenAI 兼容端点等），同时设置 `OPENAI_BASE_URL` 与 `OPENAI_MODEL`。
+2. 打开工作流开关：`RESEARCH_LLM_WRITING_ENABLED=true`（章节写作）和/或 `RESEARCH_CLAIM_LLM_REVIEW=true`（主张复核）。
+3. `docker compose up -d --force-recreate api worker` 让新配置生效。
 
-仓库未内置真实 LLM 适配器；未注册真实 Provider 时这两个开关不会生效，写作与核验保持确定性路径。Embedding 同理：注册真实 `EmbeddingProvider` 并保持 `EMBEDDING_DIMENSION` 与模型维度一致（修改维度需要新迁移）。
+适配器 `OpenAICompatibleLLMProvider`（`packages/core/src/dr_core/providers/llm.py`）走 `POST {OPENAI_BASE_URL}/chat/completions`，复用提供商层统一的超时、重试与缓存策略，并把 `usage` 映射为 token 用量供观测记录。默认不注册：只有 `OPENAI_API_KEY` 非空时才进入 `ProviderRegistry`，因此没有 Key 时系统依旧完全离线、写作与核验保持确定性路径。
+
+模型输出仍受严格校验：必须是 `{"markdown": ...}` JSON，只能使用给定引用标记，段落必须有引用，数字/年份必须能在证据中找到，禁止自行生成参考文献列表；任一校验失败都会记录原因并回退到确定性写作，`MockLLMProvider` 会被显式跳过，不会污染真实产物。
+
+Embedding 仍需自行接入：注册真实 `EmbeddingProvider` 并保持 `EMBEDDING_DIMENSION` 与模型维度一致（修改维度需要新迁移）；未接入时使用确定性 Mock 向量，检索质量低于真实模型。
 
 ### 提供商开关与限制
 
@@ -682,7 +691,7 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
 - 每个引用标记都写入章节的 `citation_map`（标记 → 来源 UUID）并保存实际使用的证据 ID；相同内容重跑保持幂等，内容变化时创建新的 `draft_sections` 版本。
 - 没有证据的章节明确说明“不生成结论性陈述”，不会补充常识、统计数字或虚构引用。
 
-可选模型写作由 `RESEARCH_LLM_WRITING_ENABLED` 控制，默认关闭。只有在 `ProviderRegistry` 中存在真实 `LLMProvider` 时才会调用；Mock Provider 会被跳过。模型输出必须是 `{"markdown": ...}` JSON，且每个正文段落都要有引用标记、不能出现未提供的标记、不能包含参考文献章节，正文中的数字/年份必须能在所给证据中找到；任一校验失败都会回退到确定性写作。
+可选模型写作由 `RESEARCH_LLM_WRITING_ENABLED` 控制，默认关闭。只有在 `ProviderRegistry` 中存在真实 `LLMProvider`（配置 `OPENAI_API_KEY` 后自动注册 OpenAI 兼容适配器）时才会调用；Mock Provider 会被跳过。模型输出必须是 `{"markdown": ...}` JSON，且每个正文段落都要有引用标记、不能出现未提供的标记、不能包含参考文献章节，正文中的数字/年份必须能在所给证据中找到；任一校验失败都会回退到确定性写作。
 
 ### 主张核验
 
@@ -698,7 +707,7 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
 
 状态为 `SUPPORTED`、`PARTIAL`、`CONTRADICTED`、`UNSUPPORTED`、`UNVERIFIABLE`。每次核验都通过 `claim_fingerprint` 幂等写入 `claims`，并把证据关系写入 `claim_evidence`（`supports`/`refutes`）。`merged_status` 只允许保留或降低已有结论：历史失败状态不会被后续核验自动升级为 `SUPPORTED`，只有明确的重新核验通过才会改变。
 
-`RESEARCH_CLAIM_LLM_REVIEW=true` 且存在真实 Provider 时，可对确定性核验未通过的主张做一次语义复核；模型只能指出问题或进一步降级，不能把状态升级为 `SUPPORTED`。核验未通过的主张会保留原状态、链接证据理由，并在报告中列出、在局限中提示，不会自动改写为通过。
+`RESEARCH_CLAIM_LLM_REVIEW=true` 且存在真实 Provider（配置 `OPENAI_API_KEY`）时，可对确定性核验未通过的主张做一次语义复核；模型只能指出问题或进一步降级，不能把状态升级为 `SUPPORTED`。核验未通过的主张会保留原状态、链接证据理由，并在报告中列出、在局限中提示，不会自动改写为通过。
 
 ### 参考文献与核验交付物
 
@@ -874,8 +883,8 @@ docker compose exec api python -m dr_core.maintenance
 | `RESEARCH_RETRIEVAL_MODE` | `hybrid` | `hybrid`/`keyword`/`vector`；向量不可用时回退关键词 |
 | `RESEARCH_RETRIEVAL_LIMIT` | `10` | 每个研究问题召回并融合的切片数量上限 |
 | `RESEARCH_CHUNK_MAX_CHARS` | `1200` | 单个文档切片的最大字符数 |
-| `RESEARCH_LLM_WRITING_ENABLED` | `false` | 是否允许真实 LLM 参与章节写作；必须同时存在真实 Provider，校验失败自动回退确定性写作 |
-| `RESEARCH_CLAIM_LLM_REVIEW` | `false` | 是否允许真实 LLM 复核未通过的主张；只能降级或补充理由，不能升级为 `SUPPORTED` |
+| `RESEARCH_LLM_WRITING_ENABLED` | `false` | 是否允许真实 LLM 参与章节写作；需同时配置 `OPENAI_API_KEY`，校验失败自动回退确定性写作 |
+| `RESEARCH_CLAIM_LLM_REVIEW` | `false` | 是否允许真实 LLM 复核未通过的主张；需同时配置 `OPENAI_API_KEY`，只能降级或补充理由，不能升级为 `SUPPORTED` |
 | `MAX_ACTIVE_RUNS_PER_PROJECT` | `3` | 每个项目允许的非终态运行数；0 表示关闭限流 |
 | `LANGFUSE_ENABLED` | `false` | 是否启用 Langfuse trace 上报 |
 | `LANGFUSE_HOST` | `https://cloud.langfuse.com` | Langfuse 服务地址 |
@@ -891,6 +900,9 @@ docker compose exec api python -m dr_core.maintenance
 | `FIRECRAWL_ENABLED` / `FIRECRAWL_API_KEY` | `false` / 空 | Firecrawl 抓取开关与密钥 |
 | `CROSSREF_ENABLED` / `CROSSREF_MAILTO` | `false` / 空 | Crossref 开关与可选联系邮箱 |
 | `SEMANTIC_SCHOLAR_ENABLED` / `SEMANTIC_SCHOLAR_API_KEY` | `false` / 空 | Semantic Scholar 开关与可选密钥 |
+| `OPENAI_API_KEY` | 空 | OpenAI 兼容端点密钥；非空时注册真实 LLM 适配器，为空则完全离线 |
+| `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Chat Completions 基地址，可指向任意 OpenAI 兼容网关 |
+| `OPENAI_MODEL` | `gpt-4o-mini` | 写作与主张复核使用的模型名 |
 | `PROVIDER_REQUEST_TIMEOUT_SECONDS` | `20` | 提供商读取超时 |
 | `PROVIDER_CONNECT_TIMEOUT_SECONDS` | `5` | 提供商连接超时 |
 | `PROVIDER_MAX_RETRIES` | `3` | 429/5xx/网络错误的最大重试次数 |
@@ -939,10 +951,19 @@ docker compose exec api python -m dr_core.maintenance
 
 ## 测试
 
-容器内单元测试和集成测试（需要核心服务已启动）：
+测试必须与真实密钥隔离：`docker-compose.test.yml` 会把 `api`、`worker`、`test` 强制切到 `RESEARCH_PROVIDER_MODE=mock` 并清空所有提供商密钥、Langfuse 与 LLM 开关，因此即使 `.env` 里填了真实 Key，测试也不会联网、不会消耗配额，结果也保持确定性。
 
 ```bash
-docker compose --profile test run --build --rm test
+# 1) 用 mock 配置重建并启动被测服务
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  --profile test up -d --build api worker
+
+# 2) 运行单元 + 集成 + 评测（237 passed）
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  --profile test run --rm --build test
+
+# 3) 测试结束后恢复真实配置
+docker compose up -d --force-recreate api worker
 ```
 
 阶段 9 测试内容：
@@ -952,6 +973,8 @@ docker compose --profile test run --build --rm test
 - 日志脱敏过滤器对 `api_key`、`password`、`Bearer` 等模式的替换。
 - 提示词注入扫描与不可信内容包裹：英文/中文模式、标签转义和防御规则。
 - 项目级并发限流：达到上限返回 `ActiveRunLimitExceeded`（API 映射 429），重复幂等键不受限流影响，终态运行不占用额度。
+- OpenAI 兼容适配器：请求体与 `Authorization` 头、`usage` 映射为 token 用量、5xx 转 `ProviderUnavailable`、缺字段或空内容转 `ProviderResponseError`；只有 `OPENAI_API_KEY` 非空时才注册到 `ProviderRegistry`。
+- 真实 LLM 写作链路（本地假端点，不出网）：打开 `RESEARCH_LLM_WRITING_ENABLED` 后运行完成，章节事件 `used_llm=true`，引用标记仍全部来自数据库证据。
 - 质量评测集：10 类场景全部完成且断言通过，恢复成功率 1.0，指标达到阈值；人工复核比较函数统计一致率。
 
 阶段 8 测试内容：
@@ -1037,10 +1060,11 @@ docker compose --profile test run --build --rm test
 - 缺失文件与孤儿文件识别。
 - 原有健康检查、CORS、文件跨容器往返和 Celery 测试任务。
 
-当前结果：`233 passed`（阶段 9 新增观测、安全、限流与质量评测测试；测试全程不需要网络或真实 API Key）。质量评测也可以单独运行：
+当前结果：`237 passed`（阶段 9 新增观测、安全、限流、LLM 适配器与质量评测测试；测试全程不需要网络或真实 API Key）。质量评测也可以单独运行：
 
 ```bash
-docker compose --profile test run --rm test python -m dr_core.evaluation
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  --profile test run --rm test python -m dr_core.evaluation
 ```
 
 前端静态检查：
@@ -1088,7 +1112,7 @@ docker compose exec -T postgres psql -U enforge -d enforge -c \
 | Compose 配置检查 | `docker compose config --quiet` | 通过 |
 | 镜像构建 | `docker compose up -d --build` | `postgres`、`redis`、`migrate`、`api`、`worker`、`web` 全部 healthy |
 | 数据库迁移 | `migrate` 服务执行 `alembic upgrade head` | 成功；`alembic check` 返回 `No new upgrade operations detected` |
-| Python 单元/集成/评测测试 | `docker compose --profile test run --rm test` | `233 passed` |
+| Python 单元/集成/评测测试 | `docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test run --rm --build test` | `237 passed` |
 | 前端类型检查 | `npm run typecheck` | 通过 |
 | 前端代码检查 | `npm run lint` | 通过 |
 | 前端构建 | `npm run build` | Next.js 16.4 生产构建通过 |
@@ -1166,7 +1190,7 @@ Linux/macOS 的恢复命令同样将第二个卷参数改为 `-v "$PWD/backups:/
 
 - 当前为单用户本地 MVP，没有用户登录和多用户项目权限；“项目级权限”指项目存在且未软删除、所有运行/文件/审批/证据按 `project_id` 强制过滤，以及 `MAX_ACTIVE_RUNS_PER_PROJECT` 并发限制。对外暴露的部署必须在反向代理后启用认证；多用户访问控制不在本仓库阶段计划内。
 - Phase 1 冒烟接口和 `POST /dev/runs/{run_id}/fail` 仅用于验收，必须在非本地环境设置 `ENABLE_DEV_ENDPOINTS=false`。
-- 阶段 7 的提纲与章节正文默认由确定性生成器基于数据库中的研究问题与证据组织，保证离线可测、引用可追溯；可选的真实 LLM 写作/主张复核开关默认关闭，仓库未内置真实 LLM 适配器，缺少真实 `LLMProvider` 时不会调用模型，因此行文风格和论证深度仍受确定性模板限制。
+- 阶段 7 的提纲与章节正文默认由确定性生成器基于数据库中的研究问题与证据组织，保证离线可测、引用可追溯；可选的真实 LLM 写作/主张复核开关默认关闭，仓库已内置 OpenAI 兼容适配器（`OPENAI_API_KEY` 非空时注册），但未配置密钥或校验失败时不会调用模型，行文风格和论证深度仍受确定性模板限制。真实模型产出的质量与成本未纳入当前评测指标（评测集固定使用确定性 Mock 提供商）。
 - 阶段 4 的提供商默认全部关闭；只有同时设置 `*_ENABLED=true` 和后端密钥才会启用。启用但缺少密钥时会记录警告并跳过，不影响服务启动。未配置任何第三方 API Key 时，系统仍可迁移、启动并通过全部测试（测试使用 Mock 提供商，不访问网络）。
 - Tavily、Exa、Firecrawl、Crossref、Semantic Scholar 均在后端调用，密钥不会下发浏览器；错误信息、日志和缓存键不包含密钥。Firecrawl 只接受通过 SSRF 校验的 HTTP/HTTPS 公网地址，并在重定向后再次校验最终 URL。
 - 网页全文依赖 Firecrawl；未启用时来源只保留搜索摘要。付费墙、仅摘要、屏蔽和超限响应会记录为不同抓取状态，不会当作全文入库；Crossref 不提供被引列表，因此不伪造引用关系。
@@ -1195,4 +1219,4 @@ Linux/macOS 的恢复命令同样将第二个卷参数改为 `-v "$PWD/backups:/
 
 ## 下一阶段
 
-阶段 9 是实施步骤的最后一个阶段，MVP 闭环（创建项目 → 拆解问题 → 检索 → 获取原文 → 解析 → 证据 → 缺口 → 提纲 → 写作 → 核验 → 参考文献 → 导出）已完成并通过最终验收。多用户权限、真实 LLM 适配器、生产级观测运维与评测集扩展不在本仓库阶段计划内，未获确认前不会提前实现。
+阶段 9 是实施步骤的最后一个阶段，MVP 闭环（创建项目 → 拆解问题 → 检索 → 获取原文 → 解析 → 证据 → 缺口 → 提纲 → 写作 → 核验 → 参考文献 → 导出）已完成并通过最终验收；可选的模型写作通过内置 OpenAI 兼容适配器接入（默认关闭，尚未在真实付费模型上做端到端验证）。真实 Embedding 提供商、多用户权限、生产级观测运维与评测集扩展不在本仓库阶段计划内，未获确认前不会提前实现。

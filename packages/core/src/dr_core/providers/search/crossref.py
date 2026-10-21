@@ -32,7 +32,7 @@ _FIELDS = ",".join(
         "abstract",
         "reference",
         "is-referenced-by-count",
-        "reference-count",
+        "references-count",
         "type",
     )
 )
@@ -234,7 +234,9 @@ class CrossrefProvider:
                 citation_count=_optional_non_negative(
                     item.get("is-referenced-by-count")
                 ),
-                reference_count=_optional_non_negative(item.get("reference-count")),
+                reference_count=_optional_non_negative(
+                    item.get("references-count", item.get("reference-count"))
+                ),
                 work_type=_optional_str(item.get("type")),
                 rank=rank,
                 metadata={"crossref_type": item.get("type")},

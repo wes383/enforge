@@ -55,6 +55,13 @@ class Settings(BaseSettings):
     semantic_scholar_enabled: bool = False
     semantic_scholar_api_key: SecretStr | None = None
 
+    # Optional OpenAI-compatible chat model for section writing and claim review.
+    # Registration only happens when a key is present; the workflow still requires
+    # RESEARCH_LLM_WRITING_ENABLED / RESEARCH_CLAIM_LLM_REVIEW to call it.
+    openai_api_key: SecretStr | None = None
+    openai_base_url: str = "https://api.openai.com/v1"
+    openai_model: str = "gpt-4o-mini"
+
     web_fetch_max_bytes: int = Field(default=2_000_000, gt=0)
     web_fetch_min_content_chars: int = Field(default=400, ge=0)
 

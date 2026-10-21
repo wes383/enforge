@@ -50,6 +50,24 @@ def _client(handler) -> httpx.Client:
     return httpx.Client(transport=httpx.MockTransport(handler))
 
 
+def _offline_settings(**overrides) -> Settings:
+    """Settings with every external provider pinned off, ignoring ambient env."""
+    pinned = {
+        "tavily_enabled": False,
+        "tavily_api_key": None,
+        "exa_enabled": False,
+        "exa_api_key": None,
+        "firecrawl_enabled": False,
+        "firecrawl_api_key": None,
+        "crossref_enabled": False,
+        "semantic_scholar_enabled": False,
+        "semantic_scholar_api_key": None,
+        "openai_api_key": None,
+    }
+    pinned.update(overrides)
+    return Settings(_env_file=None, **pinned)
+
+
 def _email_payload() -> dict:
     return {
         "message": {
@@ -74,7 +92,7 @@ def _email_payload() -> dict:
                         }
                     ],
                     "is-referenced-by-count": 12,
-                    "reference-count": 30,
+                    "references-count": 30,
                     "type": "journal-article",
                 }
             ]
@@ -179,6 +197,9 @@ def test_crossref_normalizes_search_work_and_references():
         assert "mailto@example.com" in request.headers["user-agent"]
         if request.url.path.endswith("/works"):
             assert request.url.params["query.bibliographic"] == "traceable"
+            select = request.url.params["select"].split(",")
+            assert "references-count" in select
+            assert "reference-count" not in select
         return httpx.Response(200, json=_email_payload(), request=request)
 
     provider = CrossrefProvider(
@@ -191,6 +212,7 @@ def test_crossref_normalizes_search_work_and_references():
     assert result.authors == ["Ada Lovelace", "Research Group"]
     assert result.abstract == "Abstract text"
     assert result.citation_count == 12
+    assert result.reference_count == 30
     assert result.work_type == "journal-article"
     assert result.published_at.isoformat() == "2023-04-05"
 
@@ -471,7 +493,7 @@ def test_fetch_orchestration_falls_back_to_next_provider():
 
 def test_registry_builds_mocks_or_configured_providers():
     mock_registry = build_provider_registry(
-        Settings(_env_file=None),
+        _offline_settings(),
         use_mocks=True,
     )
     assert mock_registry.web_search
@@ -482,16 +504,16 @@ def test_registry_builds_mocks_or_configured_providers():
     assert mock_registry.llm is not None
     mock_registry.close()
 
-    empty = build_provider_registry(Settings(_env_file=None))
+    empty = build_provider_registry(_offline_settings())
     assert empty.web_search == []
     assert empty.academic_search == []
     assert empty.web_content == []
+    assert empty.llm is None
     assert empty.parsers
     empty.close()
 
     configured = build_provider_registry(
-        Settings(
-            _env_file=None,
+        _offline_settings(
             tavily_enabled=True,
             tavily_api_key="secret",
             provider_cache_ttl_seconds=0,
@@ -502,7 +524,7 @@ def test_registry_builds_mocks_or_configured_providers():
     configured.close()
 
     missing_key = build_provider_registry(
-        Settings(_env_file=None, tavily_enabled=True)
+        _offline_settings(tavily_enabled=True)
     )
     assert missing_key.web_search == []
     missing_key.close()

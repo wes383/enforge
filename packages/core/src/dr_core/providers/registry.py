@@ -16,6 +16,7 @@ from dr_core.providers.base import (
 from dr_core.providers.cache import InMemoryProviderCache, ProviderCache
 from dr_core.providers.content import FirecrawlProvider
 from dr_core.providers.http import RetryPolicy
+from dr_core.providers.llm import OpenAICompatibleLLMProvider
 from dr_core.providers.mocks import (
     MockAcademicSearchProvider,
     MockDocumentParser,
@@ -136,10 +137,23 @@ def build_provider_registry(
         else:
             _warn_missing_key("Firecrawl", "FIRECRAWL_API_KEY")
 
+    llm: LLMProvider | None = None
+    openai_key = _secret(settings.openai_api_key)
+    if openai_key:
+        llm = OpenAICompatibleLLMProvider(
+            openai_key,
+            base_url=settings.openai_base_url,
+            model=settings.openai_model,
+            timeout_seconds=settings.provider_request_timeout_seconds,
+            connect_timeout_seconds=settings.provider_connect_timeout_seconds,
+            retry_policy=retry_policy,
+        )
+
     return ProviderRegistry(
         web_search=web_search,
         academic_search=academic_search,
         web_content=web_content,
+        llm=llm,
         parsers=[
             LocalDocumentParser(
                 max_input_bytes=settings.parser_max_input_bytes,

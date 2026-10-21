@@ -22,6 +22,7 @@ from dr_core.providers.errors import (
     UnsupportedDocumentType,
 )
 from dr_core.providers.http import JsonHttpClient, RetryPolicy
+from dr_core.providers.llm import OpenAICompatibleLLMProvider
 from dr_core.providers.mocks import (
     MockAcademicSearchProvider,
     MockDocumentParser,
@@ -90,6 +91,7 @@ __all__ = [
     "MockLLMProvider",
     "MockSearchProvider",
     "MockWebContentProvider",
+    "OpenAICompatibleLLMProvider",
     "ParseStatus",
     "ParsedDocument",
     "ParsedPage",
