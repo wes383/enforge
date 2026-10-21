@@ -21,6 +21,7 @@ x-offline-environment: &offline-environment
   SEMANTIC_SCHOLAR_ENABLED: "false"
   SEMANTIC_SCHOLAR_API_KEY: ""
   OPENAI_API_KEY: ""
+  RESEARCH_LLM_PLANNING_ENABLED: "false"
   RESEARCH_LLM_WRITING_ENABLED: "false"
   RESEARCH_CLAIM_LLM_REVIEW: "false"
   LANGFUSE_ENABLED: "false"

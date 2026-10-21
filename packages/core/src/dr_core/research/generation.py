@@ -23,6 +23,21 @@ from dr_core.research.models import (
 )
 
 
+_QUESTION_LIMITS = {
+    ResearchDepth.QUICK: 3,
+    ResearchDepth.STANDARD: 4,
+    ResearchDepth.DEEP: 5,
+}
+
+
+def depth_question_limit(brief: ResearchBrief) -> int:
+    return _QUESTION_LIMITS[brief.research_depth]
+
+
+def default_priority(index: int) -> int:
+    return max(10, 90 - index * 10)
+
+
 def build_plan(
     brief: ResearchBrief,
     *,
@@ -31,11 +46,7 @@ def build_plan(
 ) -> ResearchPlan:
     topic = brief.topic.strip().rstrip("。.!?！？")
     scope = (brief.research_scope or "").strip()
-    limit = {
-        ResearchDepth.QUICK: 3,
-        ResearchDepth.STANDARD: 4,
-        ResearchDepth.DEEP: 5,
-    }[brief.research_depth]
+    limit = depth_question_limit(brief)
     if brief.language is ProjectLanguage.ZH:
         candidates = [
             f"{topic}的核心概念、现状与主要结论是什么？",
@@ -86,7 +97,7 @@ def build_plan(
     questions = [
         ResearchQuestion(
             question=question,
-            priority=max(10, 90 - index * 10),
+            priority=default_priority(index),
         )
         for index, question in enumerate(deduped)
     ]

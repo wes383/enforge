@@ -35,6 +35,7 @@
 - 证据矩阵：按研究问题输出主要结论、支持/相反证据 ID、独立来源数、来源与证据质量理由、局限和未解决缺口；相反证据完整保留并进入报告，矩阵 JSON 作为 `evidence_matrix` artifact 持久化。
 - 论证型提纲：每个章节保存标题、写作目的、关联研究问题、关键主张、支持证据 ID、反对证据 ID、预期字数和 `planned/drafted/verified` 状态；提纲审批通过后，写作和核验阶段会回写章节状态。
 - 分章节长文写作：写作节点按章节选择数据库证据，正文包含本节问题、核心判断、证据、反方观点、局限和下一节衔接；章节保存 `citation_map`、使用过的证据 ID 和版本，内容变化时自动生成新版本。
+- 可选的模型规划：打开 `RESEARCH_LLM_PLANNING_ENABLED=true` 后由大模型按项目简报生成研究问题，语言、深度（决定问题数）、范围、目标读者和上一轮审批反馈都进入提示词；输出必须是 JSON，且要通过去重、数量、语言和题目相关性校验，否则回退到确定性模板并在研究局限中记录原因。
 - 可选的模型写作：配置 `OPENAI_API_KEY`（任意 OpenAI 兼容端点）并显式打开 `RESEARCH_LLM_WRITING_ENABLED=true` 时才启用；输出必须是 JSON，且通过引用标记、段落引用、数字和参考文献禁令校验，否则自动回退到确定性写作。
 - 主张核验：从正文抽取带引用和缺少引用的事实性、量化、因果、比较、规范与预测主张；确定性规则检查引用映射、来源存在性、原文定位、数字/年份一致性、词项支持、绝对化措辞和反驳证据，状态为 `SUPPORTED`/`PARTIAL`/`CONTRADICTED`/`UNSUPPORTED`/`UNVERIFIABLE`，失败的核验结果不会被自动升级。
 - 参考文献审计：正文引用标记映射、悬空标记、映射但未使用、证据来源未被引用、标题/作者/年份/出版方/DOI 或 URL 缺失均由程序检查；审计结果写入报告与核验 artifact。
@@ -43,7 +44,7 @@
 - SQLAlchemy 2.0 仓储层，覆盖项目、运行、研究问题、检索、来源、切片、证据、主张、提纲、章节、引用核验、审批、事件和导出文件。
 - Alembic 从空数据库初始化、重复升级、降级/再升级和 `alembic check` 均通过；Compose 中的 `migrate` 服务在 `api`、`worker` 启动前完成迁移。
 - 文件记录与实际文件对账工具，能够报告缺失文件和孤儿文件。
-- 容器内单元测试和集成测试，当前 `240 passed`（通过 `docker-compose.test.yml` 强制 mock，真实密钥不参与测试）。
+- 容器内单元测试和集成测试，当前 `251 passed`（通过 `docker-compose.test.yml` 强制 mock，真实密钥不参与测试）。
 - 不包含 MinIO、S3 或任何对象存储服务。
 
 ## 服务拓扑
@@ -301,7 +302,7 @@ SSE 使用数据库轮询，每页最多 500 条，按事件 `id` 严格递增�
 | `/runs/{run_id}/article` | 目录与章节切换、编辑/预览、保存新版本、点击引用标记回查证据、主张与引用审计、生成最终报告和下载 |
 
 - 实时进度：页面先读取事件历史，再以 `EventSource` 从最后事件 ID 续传；按事件 ID 去重，流关闭后自动重连并显示 `connecting/live/reconnecting/closed` 状态。概览数据来自运行 API 和汇总 API，不使用前端计时器伪造进度。
-- 审批：修改内容提交到审批 API，由后端按 `ResearchPlan`/`Outline` 校验后恢复工作流；批准、拒绝和修改都会实际改变后续执行。页面会同步待审批版本，避免过期角标。
+- 审批：编辑后的内容随“批准”一起提交到审批 API（`decision=modified`），由后端按 `ResearchPlan`/`Outline` 校验后恢复工作流，因此页面上只有一个批准按钮，含义是“保存当前修改并批准”；需要重新生成时填写反馈后驳回。页面会同步待审批版本，避免过期角标。
 - 章节编辑：保存会创建新版本，后端重新计算引用映射和使用证据；未知引用标记被拒绝，前端显示错误而不是静默丢弃。
 - 核验与导出：引用审计、主张核验和 artifact 均从后端读取；点击“生成最终报告”调用同步导出接口，重新核验后返回新版本，再通过受控下载接口导出 Markdown 与参考文献。
 - 每个请求都有加载、错误和空状态；API 不可用时显示明确错误而不是伪造数据。所有页面刷新后从项目、运行和事件持久化状态恢复。
@@ -410,7 +411,7 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 外部研究服务通过 `.env` 中的 `*_ENABLED` 开关与后端密钥启用（见“提供商开关与限制”），密钥只存在于后端环境变量，浏览器不可见。真实大模型写作只需要填环境变量，无需改代码：
 
 1. 在 `.env` 中设置 `OPENAI_API_KEY`；如使用兼容 OpenAI 协议的其他服务（Azure OpenAI 兼容网关、vLLM、Ollama、国内大模型的 OpenAI 兼容端点等），同时设置 `OPENAI_BASE_URL` 与 `OPENAI_MODEL`。
-2. 打开工作流开关：`RESEARCH_LLM_WRITING_ENABLED=true`（章节写作）和/或 `RESEARCH_CLAIM_LLM_REVIEW=true`（主张复核）。
+2. 打开工作流开关：`RESEARCH_LLM_PLANNING_ENABLED=true`（生成研究问题）、`RESEARCH_LLM_WRITING_ENABLED=true`（章节写作）和/或 `RESEARCH_CLAIM_LLM_REVIEW=true`（主张复核）。
 3. `docker compose up -d --force-recreate api worker` 让新配置生效。
 
 适配器 `OpenAICompatibleLLMProvider`（`packages/core/src/dr_core/providers/llm.py`）走 `POST {OPENAI_BASE_URL}/chat/completions`，把 `usage` 映射为 token 用量供观测记录。默认不注册：只有 `OPENAI_API_KEY` 非空时才进入 `ProviderRegistry`，因此没有 Key 时系统依旧完全离线、写作与核验保持确定性路径。
@@ -422,9 +423,10 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 | 层级 | 未启用模型 | 启用模型写作/复核（默认值） |
 |---|---|---|
 | 单次模型请求 | — | `LLM_REQUEST_TIMEOUT_SECONDS` × (`LLM_MAX_RETRIES`+1) = 120s |
+| `plan_research` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 120s（打开 `RESEARCH_LLM_PLANNING_ENABLED` 时） |
 | `write_sections` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 章节数 × 120s |
 | `verify_claims` 节点 | 90s | 90s + `RESEARCH_CLAIM_LLM_REVIEW_LIMIT` × 120s |
-| Celery 软/硬时限 | 300s / 360s | 2730s / 2790s（取配置值与推算下限的较大者，Worker 启动时打印一条 WARNING 说明实际生效值） |
+| Celery 软/硬时限 | 300s / 360s | 2730s / 2790s；再打开规划时为 2970s / 3030s（取配置值与推算下限的较大者，Worker 启动时打印一条 WARNING 说明实际生效值） |
 
 主张复核另有次数上限（`RESEARCH_CLAIM_LLM_REVIEW_LIMIT`，默认 10），超出的主张保留确定性核验状态并记录一条日志，避免费用与耗时随主张数量线性膨胀。单节模型调用超时或校验失败只影响该节，会回退到确定性写作并继续。
 
@@ -528,7 +530,7 @@ Embedding 仍需自行接入：注册真实 `EmbeddingProvider` 并保持 `EMBED
 | 节点 | 行为 |
 |---|---|
 | `parse_brief` | 校验研究简报，建立主问题与子问题，确定语言、深度、引用风格与预算 |
-| `plan_research` | 生成版本化研究计划；被拒绝后根据反馈生成新版本 |
+| `plan_research` | 生成版本化研究计划（默认深度感知的确定性模板，打开 `RESEARCH_LLM_PLANNING_ENABLED` 时由模型生成并校验）；被拒绝后根据反馈生成新版本 |
 | `await_plan_approval` | 写入待审批记录并 `interrupt`；批准进入检索，拒绝回到规划，修改内容直接生效 |
 | `generate_queries` | 按轮次及研究问题生成网页/学术查询，跳过重复语句 |
 | `search_sources` | 调用已启用的搜索与学术提供商，记录查询执行状态、来源和所属研究问题 |
@@ -725,6 +727,8 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
 
 可选模型写作由 `RESEARCH_LLM_WRITING_ENABLED` 控制，默认关闭。只有在 `ProviderRegistry` 中存在真实 `LLMProvider`（配置 `OPENAI_API_KEY` 后自动注册 OpenAI 兼容适配器）时才会调用；Mock Provider 会被跳过。模型输出必须是 `{"markdown": ...}` JSON，且每个正文段落都要有引用标记、不能出现未提供的标记、不能包含参考文献章节，正文中的数字/年份必须能在所给证据中找到；任一校验失败都会回退到确定性写作。
 
+研究问题本身也可以交给模型（`RESEARCH_LLM_PLANNING_ENABLED`，默认关闭）。`plan_research` 请求 `{"summary", "questions": [{"question", "priority"}]}` JSON，提示词带上项目语言、研究深度（决定问题数 3/4/5）、范围、目标读者、日期范围与上一轮审批反馈，简报和反馈文本按不可信内容包裹并附注入防御规则。返回的计划必须满足：摘要非空、问题清理（去列表前缀、合并空白、截断）后去重不少于 2 条、数量不超过深度上限、语言与项目一致（英文项目要含拉丁字母、中文项目要含中日韩字符）、至少一条问题与简报共享词元，且不得包含代码块或不可信标签；模型调用失败、JSON 非法或任一校验不通过都回退到 `generation.build_plan` 的确定性模板，并把回退原因写入 `limitations`（最终进入报告的局限章节）。阶段完成事件的 payload 带 `planner: "llm" | "template"`，用于区分本次计划来源。
+
 ### 主张核验
 
 `verify_claims` 使用能识别引号内问号的保守分句器，把正文拆成事实性主张，并优先使用确定性规则：
@@ -915,6 +919,7 @@ docker compose exec api python -m dr_core.maintenance
 | `RESEARCH_RETRIEVAL_MODE` | `hybrid` | `hybrid`/`keyword`/`vector`；向量不可用时回退关键词 |
 | `RESEARCH_RETRIEVAL_LIMIT` | `10` | 每个研究问题召回并融合的切片数量上限 |
 | `RESEARCH_CHUNK_MAX_CHARS` | `1200` | 单个文档切片的最大字符数 |
+| `RESEARCH_LLM_PLANNING_ENABLED` | `false` | 是否允许真实 LLM 生成研究问题；需同时配置 `OPENAI_API_KEY`，校验失败自动回退确定性模板 |
 | `RESEARCH_LLM_WRITING_ENABLED` | `false` | 是否允许真实 LLM 参与章节写作；需同时配置 `OPENAI_API_KEY`，校验失败自动回退确定性写作 |
 | `RESEARCH_CLAIM_LLM_REVIEW` | `false` | 是否允许真实 LLM 复核未通过的主张；需同时配置 `OPENAI_API_KEY`，只能降级或补充理由，不能升级为 `SUPPORTED` |
 | `RESEARCH_CLAIM_LLM_REVIEW_LIMIT` | `10` | 单次运行最多复核多少条主张，超出部分保留确定性状态，用于约束真实模型的耗时与费用 |
@@ -993,7 +998,7 @@ docker compose exec api python -m dr_core.maintenance
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test up -d --build api worker
 
-# 2) 运行单元 + 集成 + 评测（240 passed）
+# 2) 运行单元 + 集成 + 评测（251 passed）
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -1010,6 +1015,7 @@ docker compose up -d --force-recreate api worker
 - 项目级并发限流：达到上限返回 `ActiveRunLimitExceeded`（API 映射 429），重复幂等键不受限流影响，终态运行不占用额度。
 - OpenAI 兼容适配器：请求体与 `Authorization` 头、`usage` 映射为 token 用量、5xx 转 `ProviderUnavailable`、缺字段或空内容转 `ProviderResponseError`；只有 `OPENAI_API_KEY` 非空时才注册到 `ProviderRegistry`。
 - 真实 LLM 写作链路（本地假端点，不出网）：打开 `RESEARCH_LLM_WRITING_ENABLED` 后运行完成，章节事件 `used_llm=true`，引用标记仍全部来自数据库证据；主张复核调用次数不超过 `RESEARCH_CLAIM_LLM_REVIEW_LIMIT`。
+- LLM 生成研究问题（本地假端点）：打开 `RESEARCH_LLM_PLANNING_ENABLED` 后研究问题来自模型输出并按深度上限截断、`planner=llm`；模型返回非法内容或问题跑题/语言不符时回退确定性模板并记录局限、`planner=template`；`_llm_planner` 门禁跳过 Mock Provider，规划开启时节点与 Celery 时限各放大相应的模型调用预算。
 - 模型时间预算：LLM 使用独立的超时/重试（不受 `PROVIDER_*` 影响）；未启用模型时节点与 Celery 时限保持原值，启用后按章节数与复核上限放大，且不会低于运维显式配置的更大值。
 - 质量评测集：10 类场景全部完成且断言通过，恢复成功率 1.0，指标达到阈值；人工复核比较函数统计一致率。
 
@@ -1096,7 +1102,7 @@ docker compose up -d --force-recreate api worker
 - 缺失文件与孤儿文件识别。
 - 原有健康检查、CORS、文件跨容器往返和 Celery 测试任务。
 
-当前结果：`240 passed`（阶段 9 新增观测、安全、限流、LLM 适配器与质量评测测试；测试全程不需要网络或真实 API Key）。质量评测也可以单独运行：
+当前结果：`251 passed`（阶段 9 新增观测、安全、限流、LLM 适配器与质量评测测试；测试全程不需要网络或真实 API Key）。质量评测也可以单独运行：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
@@ -1148,7 +1154,7 @@ docker compose exec -T postgres psql -U enforge -d enforge -c \
 | Compose 配置检查 | `docker compose config --quiet` | 通过 |
 | 镜像构建 | `docker compose up -d --build` | `postgres`、`redis`、`migrate`、`api`、`worker`、`web` 全部 healthy |
 | 数据库迁移 | `migrate` 服务执行 `alembic upgrade head` | 成功；`alembic check` 返回 `No new upgrade operations detected` |
-| Python 单元/集成/评测测试 | `docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test run --rm --build test` | `240 passed` |
+| Python 单元/集成/评测测试 | `docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test run --rm --build test` | `251 passed` |
 | 前端类型检查 | `npm run typecheck` | 通过 |
 | 前端代码检查 | `npm run lint` | 通过 |
 | 前端构建 | `npm run build` | Next.js 16.4 生产构建通过 |

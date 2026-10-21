@@ -8,6 +8,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Worst-case number of model calls the writing node can make in one run; used to
 # derive the Celery time-limit floor when model writing is enabled.
 LLM_SECTION_CALL_BUDGET = 12
+# Planning asks the model once per plan version, so a run that is revised by the
+# approver can make a couple of planning calls before searching starts.
+LLM_PLANNING_CALL_BUDGET = 2
 
 
 class Settings(BaseSettings):
@@ -59,9 +62,10 @@ class Settings(BaseSettings):
     semantic_scholar_enabled: bool = False
     semantic_scholar_api_key: SecretStr | None = None
 
-    # Optional OpenAI-compatible chat model for section writing and claim review.
-    # Registration only happens when a key is present; the workflow still requires
-    # RESEARCH_LLM_WRITING_ENABLED / RESEARCH_CLAIM_LLM_REVIEW to call it.
+    # Optional OpenAI-compatible chat model for planning, section writing and
+    # claim review. Registration only happens when a key is present; the workflow
+    # still requires RESEARCH_LLM_PLANNING_ENABLED / RESEARCH_LLM_WRITING_ENABLED /
+    # RESEARCH_CLAIM_LLM_REVIEW to call it.
     openai_api_key: SecretStr | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o-mini"
@@ -98,6 +102,7 @@ class Settings(BaseSettings):
     research_retrieval_mode: Literal["hybrid", "keyword", "vector"] = "hybrid"
     research_retrieval_limit: int = Field(default=10, ge=1, le=100)
     research_chunk_max_chars: int = Field(default=1200, ge=200, le=10000)
+    research_llm_planning_enabled: bool = False
     research_llm_writing_enabled: bool = False
     research_claim_llm_review: bool = False
     # Caps paid model calls per run so verification time stays bounded.
@@ -128,7 +133,11 @@ class Settings(BaseSettings):
 
     @property
     def llm_workflow_enabled(self) -> bool:
-        return self.research_llm_writing_enabled or self.research_claim_llm_review
+        return (
+            self.research_llm_planning_enabled
+            or self.research_llm_writing_enabled
+            or self.research_claim_llm_review
+        )
 
     @property
     def llm_call_budget_seconds(self) -> int:
@@ -139,6 +148,8 @@ class Settings(BaseSettings):
     def llm_run_time_floor_seconds(self) -> int:
         """Ceiling a model-writing run needs before Celery may kill it."""
         calls = LLM_SECTION_CALL_BUDGET + self.research_claim_llm_review_limit
+        if self.research_llm_planning_enabled:
+            calls += LLM_PLANNING_CALL_BUDGET
         return self.llm_call_budget_seconds * calls + self.research_node_timeout_seconds
 
     @property

@@ -91,6 +91,7 @@ from dr_core.research.models import (
     SearchQuery as SearchQueryModel,
     SourceRecord,
 )
+from dr_core.research.planning import build_plan_with_llm
 from dr_core.research.quality import build_evidence_matrix
 from dr_core.research.reporting import (
     claim_status_counts,
@@ -180,24 +181,49 @@ def parse_brief(ctx: ResearchContext):
 
 def plan_research(ctx: ResearchContext):
     def node(state: ResearchState) -> ResearchState:
-        with node_timeout(ctx.settings.research_node_timeout_seconds):
+        with node_timeout(_planning_node_timeout(ctx)):
             ctx.guard()
             brief = _brief(state)
             feedback_state = dict(state.get("feedback") or {})
             feedback_text = feedback_state.get("feedback")
             current_plan = _plan_or_none(state)
             version = 1 if current_plan is None else current_plan.version + 1
-            plan = build_plan(
-                brief,
-                version=version,
-                feedback=feedback_text,
+            planner = _llm_planner(ctx)
+            plan = (
+                build_plan_with_llm(
+                    brief,
+                    planner,
+                    version=version,
+                    feedback=feedback_text,
+                )
+                if planner is not None
+                else None
             )
+            used_planner = plan is not None
+            limitations = state.get("limitations") or []
+            if plan is None:
+                if planner is not None:
+                    limitations = _with_limitations(
+                        state,
+                        _text(
+                            brief,
+                            "研究计划模型输出未通过校验，研究问题改用确定性模板生成。",
+                            "The model plan failed validation, so research questions "
+                            "came from the deterministic template.",
+                        ),
+                    )
+                plan = build_plan(
+                    brief,
+                    version=version,
+                    feedback=feedback_text,
+                )
             plan = _sync_plan_questions(ctx, plan)
             ctx.emit(
                 RunEventType.PHASE_COMPLETED,
                 message="Research plan prepared",
                 payload={
                     "plan_version": plan.version,
+                    "planner": "llm" if used_planner else "template",
                     "question_ids": [
                         str(item.question_id) for item in plan.questions
                     ],
@@ -208,6 +234,7 @@ def plan_research(ctx: ResearchContext):
             return {
                 "plan": plan.model_dump(mode="json"),
                 "feedback": {},
+                "limitations": limitations,
                 "current_node": "plan_research",
             }
 
@@ -2597,22 +2624,25 @@ def _section_evidence(section, evidence: list) -> list:
     return list(evidence)
 
 
-def _llm_writer(ctx: ResearchContext):
-    if not ctx.settings.research_llm_writing_enabled:
+def _llm_provider(ctx: ResearchContext, enabled: bool):
+    if not enabled:
         return None
     llm = ctx.registry.llm
     if llm is None or getattr(llm, "name", "") == "mock-llm":
         return None
     return llm
+
+
+def _llm_planner(ctx: ResearchContext):
+    return _llm_provider(ctx, ctx.settings.research_llm_planning_enabled)
+
+
+def _llm_writer(ctx: ResearchContext):
+    return _llm_provider(ctx, ctx.settings.research_llm_writing_enabled)
 
 
 def _claim_reviewer(ctx: ResearchContext):
-    if not ctx.settings.research_claim_llm_review:
-        return None
-    llm = ctx.registry.llm
-    if llm is None or getattr(llm, "name", "") == "mock-llm":
-        return None
-    return llm
+    return _llm_provider(ctx, ctx.settings.research_claim_llm_review)
 
 
 def _llm_node_timeout(ctx: ResearchContext, calls: int) -> int:
@@ -2621,6 +2651,12 @@ def _llm_node_timeout(ctx: ResearchContext, calls: int) -> int:
     if calls <= 0:
         return base
     return base + calls * ctx.settings.llm_call_budget_seconds
+
+
+def _planning_node_timeout(ctx: ResearchContext) -> int:
+    if _llm_planner(ctx) is None:
+        return ctx.settings.research_node_timeout_seconds
+    return _llm_node_timeout(ctx, 1)
 
 
 def _writing_node_timeout(ctx: ResearchContext, state: ResearchState) -> int:
