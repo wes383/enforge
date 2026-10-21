@@ -396,8 +396,31 @@ def write_section(
                     f"{row.refute_count} refuting items; source quality should be weighed."
                 )
             )
+        citation_map: dict[str, str] = {}
+        used_ids: list[UUID] = []
+        question_ids = {row.question_id for row in rows}
+        refute_items = [
+            item
+            for item in evidence
+            if item.evidence_type is EvidenceType.REFUTATION
+            and item.research_question_id in question_ids
+        ][:3]
+        for item in refute_items:
+            marker_number = numbering.get(item.source_id)
+            if marker_number is None:
+                continue
+            marker = _marker(marker_number)
+            citation_map[marker] = str(item.source_id)
+            used_ids.append(item.id)
+            lines.append(
+                f"- 反方证据：{item.claim_summary[:400]} [{marker}]"
+                if language is ProjectLanguage.ZH
+                else (
+                    f"- Counter-evidence: {item.claim_summary[:400]} [{marker}]"
+                )
+            )
         lines.append("")
-        return "\n".join(lines), {}, []
+        return "\n".join(lines), citation_map, used_ids
 
     items = [
         item

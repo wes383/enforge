@@ -1,3 +1,4 @@
+import json
 import os
 import re
 import time
@@ -19,6 +20,7 @@ from dr_core.db.enums import (
 from dr_core.db.models import (
     Artifact,
     CitationAudit,
+    DocumentChunk,
     DraftSection,
     EvidenceItem,
     ResearchProject,
@@ -310,10 +312,25 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
                 )
             )
         )
+        evidence_items = list(
+            session.scalars(
+                select(EvidenceItem).where(
+                    EvidenceItem.run_id == UUID(run["id"])
+                )
+            )
+        )
+        chunks = list(
+            session.scalars(
+                select(DocumentChunk).where(
+                    DocumentChunk.project_id == UUID(project["id"])
+                )
+            )
+        )
     assert {item.artifact_type.value for item in artifacts} == {
         "research_report",
         "reference_list",
         "markdown_export",
+        "evidence_matrix",
     }
     assert sections
     assert all(
@@ -322,17 +339,54 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
     assert audits
     assert not any(item.status.value == "failed" for item in audits)
 
+    assert chunks
+    assert any(chunk.embedding is not None for chunk in chunks)
+    chunk_text = {chunk.id: chunk.text for chunk in chunks}
+    assert evidence_items
+    for item in evidence_items:
+        locator = item.locator or {}
+        assert locator.get("source_version_id") == str(item.source_version_id)
+        assert locator.get("kind")
+        assert locator.get("character_start") is not None
+        assert locator.get("character_end") is not None
+        assert item.context_before or item.context_after
+        assert item.verification_status.value == "verified"
+        if locator.get("chunk_id"):
+            source_text = chunk_text[UUID(locator["chunk_id"])]
+            assert " ".join(item.quoted_text.split()) in " ".join(
+                source_text.split()
+            )
+    assert any(item.locator.get("chunk_id") for item in evidence_items)
+
     report = next(
         item for item in artifacts if item.artifact_type.value == "research_report"
     )
     content = get_file_storage().read(report.storage_key).decode("utf-8")
     assert "Phase 5 workflow test" in content
+    assert "## Evidence Coverage" in content
     assert "## References" in content
     body, reference_block = content.split("## References", 1)
     cited = set(re.findall(r"\[S(\d+)\]", body))
     listed = set(re.findall(r"\[S(\d+)\]", reference_block))
     assert cited
     assert cited <= listed
+
+    matrix_artifact = next(
+        item for item in artifacts if item.artifact_type.value == "evidence_matrix"
+    )
+    matrix = json.loads(
+        get_file_storage().read(matrix_artifact.storage_key).decode("utf-8")
+    )
+    assert matrix["rows"]
+    assert matrix["total_evidence"] == len(evidence_items)
+    for row in matrix["rows"]:
+        assert row["conclusion"]
+        assert len(row["support_evidence_ids"]) == row["support_count"]
+        assert len(row["refute_evidence_ids"]) == row["refute_count"]
+        assert row["source_quality"]
+        assert row["evidence_quality"]
+        assert row["independent_source_count"] <= row["source_count"]
+        assert all(reason["reason"] for reason in row["source_quality"][0]["reasons"])
 
     duplicate = _decide(
         client,

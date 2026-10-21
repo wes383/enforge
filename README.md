@@ -1,6 +1,6 @@
 # Enforge · Deep Research Writing Agent
 
-阶段 5：LangGraph 研究循环、证据矩阵、审批与断点恢复。本阶段把阶段 4 的搜索、抓取和解析能力接入由证据缺口驱动的条件工作流：规划与提纲可人工审批，审批被拒绝或修改会改变后续行为；运行状态与 LangGraph checkpoint 一起持久化，Worker 重启后可继续；轮次、来源、抓取并发、token 与成本预算到达上限时生成带明确局限说明的报告，而不是静默失败。
+阶段 6：结构化证据层、证据矩阵与混合检索。本阶段把工作流的证据抽取从简单句子匹配升级为可追溯的结构化证据：每条证据保存来源版本、文本定位、上下文和核验状态；文档在写入时切分为带章节/页码/段落定位的切片，并通过 PostgreSQL 全文检索与 pgvector 向量检索合并召回。证据矩阵按研究问题给出支持/相反证据、独立来源数、来源质量与证据质量理由、未解决缺口，并作为独立 artifact 输出。
 
 ## 当前已实现
 
@@ -21,12 +21,17 @@
 - 研究计划与提纲人工审批：通过 LangGraph `interrupt` 暂停，`run_approvals` 表保存待审批版本；批准、拒绝和修改都通过 `Command(resume=...)` 恢复并实际改变后续工作流（拒绝重新规划/重新生成提纲，修改内容直接生效）。
 - 稳定线程 ID 与 PostgreSQL checkpoint：`research_runs.workflow_thread_id` 贯穿首次执行和审批恢复，`checkpoint_id` 同步到运行记录；Worker 重启、任务重试和重复投递都能从最近 checkpoint 继续，节点副作用通过数据库唯一约束保持幂等。
 - 预算与终止语义：最大检索轮次、每轮查询数、来源数、抓取数、抓取并发、证据数、单节点超时、token 预算和成本预算；预算停止写入局限说明并继续产出报告，暂时性错误进入 Celery 重试，永久性错误和超时耗尽明确进入 `failed`。
-- 报告导出：`research_report`、`reference_list`、`markdown_export` 三种 artifact；参考文献只从数据库来源元数据按 APA/IEEE/Chicago/MLA 生成，引用标记与参考文献一一对应，不编造文献。
-- 阶段 2 完整数据模型：16 张研究业务表（新增 `run_approvals`）、项目级外键、DOI/URL 去重、幂等唯一约束、相对存储键约束和 HNSW 向量索引。
+- 报告导出：`research_report`、`reference_list`、`markdown_export`、`evidence_matrix` 四种 artifact；报告包含证据覆盖章节，参考文献只从数据库来源元数据按 APA/IEEE/Chicago/MLA 生成，引用标记与参考文献一一对应，不编造文献。
+- 结构化证据：每条证据保存 `source_id`、`source_version_id`、证据类型、摘要、原文引用、前后上下文、`locator`、核验状态和创建时间；PDF 记录页码，HTML/Markdown 记录章节与段落，搜索结果摘要记录摘要来源。
+- 混合检索：`document_chunks` 保存章节/页码/段落与文本哈希，PostgreSQL `to_tsvector('simple', text)` GIN 索引提供关键词检索，pgvector HNSW 提供向量检索；结果按 RRF 合并，支持项目、来源类型、日期、来源和来源版本过滤，并返回原文、来源、定位和已关联证据 ID。
+- 向量降级：没有 Embedding Provider 或向量调用失败时，关键词检索继续工作；`vector` 模式也会自动降级为关键词检索，不会让研究任务崩溃。
+- 证据质量：区分来源质量（原始来源、作者/机构、时效、方法透明度、撤稿/更正状态）与证据质量（直接性、上下文一致性、独立性、相反证据、适用条件），每项判断保留具体理由；同一 DOI 或同一标题/年份的转述来源不计为独立来源。
+- 证据矩阵：按研究问题输出主要结论、支持/相反证据 ID、独立来源数、来源与证据质量理由、局限和未解决缺口；相反证据完整保留并进入报告，矩阵 JSON 作为 `evidence_matrix` artifact 持久化。
+- 阶段 2 完整数据模型：16 张研究业务表（新增 `run_approvals`）、项目级外键、DOI/URL 去重、幂等唯一约束、相对存储键约束、HNSW 向量索引和全文检索索引。
 - SQLAlchemy 2.0 仓储层，覆盖项目、运行、研究问题、检索、来源、切片、证据、主张、提纲、章节、引用核验、审批、事件和导出文件。
 - Alembic 从空数据库初始化、重复升级、降级/再升级和 `alembic check` 均通过；Compose 中的 `migrate` 服务在 `api`、`worker` 启动前完成迁移。
 - 文件记录与实际文件对账工具，能够报告缺失文件和孤儿文件。
-- 容器内单元测试和集成测试，当前 `188 passed`。
+- 容器内单元测试和集成测试，当前 `205 passed`。
 - 不包含 MinIO、S3 或任何对象存储服务。
 
 ## 服务拓扑
@@ -75,7 +80,7 @@ enforge/
 │       │   └── session.py          引擎与会话工厂
 │       ├── schemas/                Pydantic 输入校验
 │       ├── services/               运行状态机、取消/失败/重试、审批、来源入库、解析状态
-│       ├── research/               LangGraph 图、18 个节点、研究领域模型、文本与报告生成
+│       ├── research/               图与节点、领域模型、切片索引、混合检索、质量矩阵、报告生成
 │       ├── providers/              搜索/学术/抓取/解析接口、适配器、缓存、Mock
 │       ├── tasks/                  Celery 工厂、任务名与重试退避策略
 │       ├── maintenance/            文件对账与运维入口
@@ -428,6 +433,89 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
 
 报告正文与 Mock Provider 的内容生成是确定性的，但引用只能来自实际写入数据库的来源；当没有可引用证据时，章节会明确说明缺少证据，而不是编造引文。
 
+## 证据层与混合检索
+
+证据层代码位于 `packages/core/src/dr_core/research/`：
+
+| 模块 | 职责 |
+|---|---|
+| `indexing.py` | 将解析后的文档切成带章节/页码/段落定位的切片，批量生成 embedding，并幂等写入 `document_chunks` |
+| `retrieval.py` | 关键词检索、向量检索、元数据过滤、RRF 融合、证据 ID 关联与降级诊断 |
+| `quality.py` | 来源独立性判断、来源质量/证据质量评估、研究问题证据矩阵与主要结论 |
+
+### 文档切片与定位
+
+`parse_documents` 在解析完成后按 `RESEARCH_CHUNK_MAX_CHARS` 建立切片，已存在切片的来源版本会跳过，重复执行不会产生重复行：
+
+- PDF：按页建立切片，`page_start`/`page_end` 保留页码；页内长文本按句子边界拆分。
+- HTML/Markdown/纯文本：按章节标题和段落建立切片，保留 `section_title`、`paragraph_start`、`paragraph_end`，超长段落按句子边界拆分。
+- 搜索摘要：没有存储文件时，以摘要内容建立 `section_title="Search snippet"` 的切片，保证仅摘要来源也能被检索。
+- 每个切片保存 `text_hash`、token 数和可选 embedding；Embedding Provider 缺失、维度不匹配或调用失败时，切片仍会写入，只是没有向量，关键词检索继续可用。
+- 索引过程按 `(source_version_id, chunk_index)` 幂等；索引错误记录在事件和局限说明中，不会中断整个研究运行。
+
+### 混合检索
+
+`HybridRetriever` 在单个数据库会话内完成两路召回：
+
+1. **关键词检索**：`to_tsvector('simple', text)` 匹配 `websearch_to_tsquery`，GIN 表达式索引 `ix_document_chunks_text_fts` 加速；英文按词项匹配，中文等连续文本同时使用参数化 `ILIKE` 词项兜底。
+2. **向量检索**：通过 `EmbeddingProvider` 生成查询向量，使用 pgvector 余弦距离和 HNSW 索引召回。
+
+两路结果按 Reciprocal Rank Fusion（RRF，k=60）合并，融合排序不依赖未经校准的分数。支持以下过滤条件：
+
+- 项目（始终强制）；
+- 来源类型（`web_page`、`journal_article`、`report` 等）；
+- 出版日期起止；
+- 指定来源或来源版本 ID。
+
+每条 `RetrievalHit` 包含切片原文、关键词/向量原始排名与分数、来源标题、类型、日期、DOI、URL、作者、章节/页码/段落/chunk ID 定位，以及引用该切片已存在的证据 ID。`locator["chunk_id"]` 是检索与证据之间的稳定关联键。
+
+降级语义：
+
+- `RESEARCH_RETRIEVAL_MODE=hybrid`：默认；无 Embedding Provider 或向量调用失败时只返回关键词结果，并在 `degraded_reason` 中说明。
+- `keyword`：只使用全文检索。
+- `vector`：只使用向量检索；向量不可用时自动回退到关键词检索，而不是返回空结果。
+- 当前不接入外部重排序模型；RRF 融合结果按确定性的关键词分数和向量相似度做稳定排序。
+
+### 结构化证据
+
+`extract_evidence` 现在优先使用混合检索：
+
+- 针对每个研究问题召回当前运行来源中的切片，每个来源最多取一条证据，避免同一文档刷屏。
+- 在切片内按问题词项匹配句子，并保存精确字符区间、句子序号和切片定位。
+- 保存引用前后各 240 字符的上下文；`verification_status` 只有在引用能从切片原文重新定位时才标记为 `verified`，否则标记为 `unverified`。
+- `locator` 根据来源类型保存 `pdf`/`html`/`markdown`/`text`/`search_snippet`，以及 `section`、`page_start`、`page_end`、`paragraph_start`、`paragraph_end`、`chunk_index`、`chunk_id`、`character_start`、`character_end` 和检索分数。
+- 混合检索没有返回可用结果时，回退为扫描来源全文或摘要；回退证据同样保存字符区间、上下文和定位，不会丢失可追溯性。
+
+证据核验状态只表示“引用能在原始版本中定位”，不表示内容本身为真。
+
+### 证据矩阵与质量
+
+`analyze_evidence` 为每个研究问题生成一行矩阵，字段包括：
+
+- `conclusion`：基于独立支持来源和相反证据数量的谨慎结论；
+- `support_evidence_ids` / `refute_evidence_ids`：直接支持和相反证据的完整 ID 列表；
+- `source_count` 与 `independent_source_count`：前者是来源数，后者按 DOI 或规范化标题 + 年份合并转述来源后的独立来源数；
+- `source_quality`：每个来源的质量等级和逐项理由；
+- `evidence_quality`：每条证据的直接性、上下文一致性、独立性、相反证据和适用条件，以及等级和理由；
+- `limitations` 与 `gap`：独立来源不足、二手材料、缺少日期、未发现反证等局限和未解决缺口。
+
+覆盖规则：至少 2 条支持证据且来自至少 2 个独立来源才标记为 `covered`；有支持证据但独立性不足为 `partial`；没有支持证据为 `insufficient`。矩阵还会列出 `duplicate_source_groups` 和整体 `quality_notes`。
+
+质量判断不使用未解释的总分，而是保留维度与理由：
+
+| 对象 | 维度 |
+|---|---|
+| 来源质量 | 原始/学术来源、作者与机构、时效、方法/数据透明度、撤稿或更正状态 |
+| 证据质量 | 直接支持/反驳、上下文是否保留、来源是否独立、是否存在相反证据、适用条件是否明确 |
+
+相反证据不会被过滤：它会进入矩阵的 `refute_evidence_ids`、矛盾章节和引用核验，并在报告中明确标注。矩阵同时写入 `evidence_matrix` JSON artifact，报告正文包含 `## Evidence Coverage` 覆盖表；没有证据的问题会保留为缺口，而不是用常识补全。
+
+### 向量模型与离线运行
+
+- `EmbeddingProvider` 与具体模型解耦；Mock Provider 使用确定性词项哈希向量，离线测试可以验证 pgvector 写入、余弦检索和融合排序。
+- 当前未配置真实 Embedding 服务，`auto` 模式在只有真实搜索提供商而没有 Embedding Provider 时会退化为关键词检索；系统仍能完成研究、生成报告和证据矩阵。
+- 修改 `EMBEDDING_DIMENSION` 必须生成新迁移，否则切片写入会因维度不匹配被拒绝。
+
 ## 数据库与迁移
 
 ### 数据模型
@@ -472,6 +560,7 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
 - 写入和检索前会校验向量维度；不一致时抛出明确的 `EmbeddingDimensionMismatch`。
 - 没有 Embedding API Key 时，数据模型、迁移和测试仍可运行；向量字段允许为空，非向量业务不受影响。
 - 修改向量维度需要同时修改配置并生成新的 Alembic 迁移，不能直接改动已有数据库列。
+- `document_chunks` 同时建立 `to_tsvector('simple', text)` 的 GIN 全文索引 `ix_document_chunks_text_fts`，供混合检索的关键词路径使用；该表达式索引由手写迁移维护，Alembic autogenerate 通过 `include_object` 跳过比较。
 
 ### 常用命令
 
@@ -498,12 +587,12 @@ docker compose up -d --force-recreate migrate api worker
 
 Linux/macOS 将卷参数替换为 `-v "$PWD/migrations:/app/migrations"`，并去掉 `MSYS_NO_PATHCONV=1`。迁移文件已通过挂载进入 `api` 和 `migrate` 容器，因此修改迁移脚本后无需重建镜像；如果同时修改了模型代码，仍需重建 `api`、`worker` 和 `test` 镜像。
 
-当前迁移链：`c991dd5b285d`（阶段 2 完整架构）→ `4f6d1c8a2b90`（来源版本内容类型去重）→ `8d2a7c4e9f10`（运行取消时间与事件类型扩展）→ `c4e8f1a2b7d3`（增加 Mock 搜索提供商枚举值）→ `e5b9c3d7a1f2`（阶段 5 审批表）。阶段 5 已实际验证：
+当前迁移链：`c991dd5b285d`（阶段 2 完整架构）→ `4f6d1c8a2b90`（来源版本内容类型去重）→ `8d2a7c4e9f10`（运行取消时间与事件类型扩展）→ `c4e8f1a2b7d3`（增加 Mock 搜索提供商枚举值）→ `e5b9c3d7a1f2`（阶段 5 审批表）→ `a7d3e5f9c2b4`（阶段 6 切片全文索引）。阶段 6 已实际验证：
 
-- 在已有数据库上执行 `alembic upgrade head` 成功创建 `run_approvals`、枚举 CHECK 约束和索引。
-- `alembic check` 返回 `No new upgrade operations detected`；LangGraph 的四个 checkpoint 表被正确排除，不会被识别为待删除表。
-- 在全新空数据库上执行完整迁移链成功创建全部 16 张业务表，LangGraph checkpoint 表按需由 `PostgresSaver.setup()` 创建。
-- 在空库上执行 `e5b9c3d7a1f2 → c4e8f1a2b7d3` 降级和重新升级均成功。
+- 在已有数据库上执行 `alembic upgrade head` 成功创建 `ix_document_chunks_text_fts`。
+- `alembic check` 返回 `No new upgrade operations detected`；LangGraph checkpoint 表和手写全文表达式索引被正确排除。
+- 在全新空数据库上执行完整迁移链成功创建全部 16 张业务表、pgvector/HNSW 与全文索引，LangGraph checkpoint 表按需由 `PostgresSaver.setup()` 创建。
+- 在空库上执行 `a7d3e5f9c2b4 → e5b9c3d7a1f2` 降级和重新升级均成功。
 - `/ready` 的 `schema` 检查在迁移完成后返回 `ok`。
 
 ## 仓储层与文件对账
@@ -586,6 +675,9 @@ docker compose exec api python -m dr_core.maintenance
 | `RESEARCH_COST_BUDGET_USD` | `0` | 成本预算（美元）；0 表示不限制，与项目预算取较小正值 |
 | `RESEARCH_PLAN_APPROVAL_REQUIRED` | `true` | 是否在研究计划节点暂停等待人工审批 |
 | `RESEARCH_OUTLINE_APPROVAL_REQUIRED` | `true` | 是否在提纲节点暂停等待人工审批 |
+| `RESEARCH_RETRIEVAL_MODE` | `hybrid` | `hybrid`/`keyword`/`vector`；向量不可用时回退关键词 |
+| `RESEARCH_RETRIEVAL_LIMIT` | `10` | 每个研究问题召回并融合的切片数量上限 |
+| `RESEARCH_CHUNK_MAX_CHARS` | `1200` | 单个文档切片的最大字符数 |
 | `SSE_POLL_INTERVAL_SECONDS` | `1.0` | SSE 轮询数据库事件的间隔 |
 | `SSE_KEEPALIVE_SECONDS` | `15.0` | SSE 空闲保活注释间隔 |
 | `FILE_STORAGE_ROOT` | `/app/data/files` | 容器内文件根目录；Docker 环境下不要修改，否则会脱离共享卷 |
@@ -649,6 +741,18 @@ docker compose exec api python -m dr_core.maintenance
 docker compose --profile test run --build --rm test
 ```
 
+阶段 6 测试内容：
+
+- 文档切片：Markdown/HTML 章节与段落定位、PDF 页码定位、长文本按句子边界拆分、搜索摘要切片。
+- `document_chunks` 的全文 GIN 索引存在性，以及英文关键词检索和中文词项 `ILIKE` 兜底。
+- 混合检索：关键词独有、向量独有和两者重合的切片都能进入融合结果；返回来源、版本、定位、分数与已关联证据 ID。
+- 来源类型和出版日期过滤同时作用于关键词与向量路径；向量 Provider 缺失时关键词结果可用，`vector` 模式也会自动降级。
+- 来源独立性按 DOI 或标题 + 年份合并；重复来源不计为独立证据，矩阵保留重复分组和具体局限。
+- 来源质量（原始来源、署名、时效、方法透明度、撤稿）与证据质量（直接性、上下文、独立性、反证、适用条件）均输出理由。
+- 证据矩阵保留相反证据 ID、给出主要结论、独立来源数与缺口；空问题标记为证据不足而不是补写结论。
+- 工作流端到端：切片带 embedding、证据 locator 可回查切片原文、上下文和核验状态完整、`evidence_matrix` artifact 可解析、报告包含证据覆盖章节与四类 artifact（报告、参考文献、Markdown 导出、证据矩阵）。
+- 证据相关单元测试覆盖上下文窗口、质量等级和相反证据不被丢弃。
+
 阶段 5 测试内容：
 
 - 研究计划与提纲的 Pydantic 约束；深度感知的计划/提纲生成与反馈版本递增；条件路由在批准、拒绝、缺口与预算耗尽时的目标。
@@ -702,7 +806,7 @@ docker compose --profile test run --build --rm test
 - 缺失文件与孤儿文件识别。
 - 原有健康检查、CORS、文件跨容器往返和 Celery 测试任务。
 
-当前结果：`188 passed`（阶段 5 新增 12 项；测试全程不需要网络或真实 API Key）。
+当前结果：`205 passed`（阶段 6 新增 17 项；测试全程不需要网络或真实 API Key）。
 
 前端静态检查：
 
@@ -815,7 +919,10 @@ Linux/macOS 的恢复命令同样将第二个卷参数改为 `-v "$PWD/backups:/
 - 取消是协作式的，在每个节点边界、抓取/解析/证据循环内检查；已经发出的单个提供商 HTTP 请求不会被强制中断，但会受连接/读取超时约束，且其后续节点不会启动。
 - 节点超时使用 Unix 主线程的 `SIGALRM`；在非主线程或非 Unix 环境下退化为依赖提供商与数据库自身的超时。LangGraph checkpoint 的首次建表使用进程锁 + PostgreSQL advisory lock，避免多个 Worker 并发执行 `setup()`。
 - Celery revoke 是尽力而为，正确性由数据库取消标记保证；Redis 结果过期后仍可从运行与事件 API 读取业务状态。
-- 向量检索的仓储层与 `EmbeddingProvider` 接口/模拟实现已就绪，但尚未接入真实 Embedding 服务和 pgvector 相似度检索；当前证据抽取使用确定性的文本/问题匹配。计划在阶段 6 完成。
+- pgvector 写入、余弦检索、混合融合和降级路径已实现并测试，但尚未配置真实 Embedding 服务；离线使用确定性词项哈希向量，`auto` 模式在没有 Embedding Provider 时退化为关键词检索。真实语义召回质量取决于后续接入的模型。
+- 来源独立性使用 DOI 或规范化标题 + 年份的启发式判断；完全改写标题或缺少元数据的转述来源可能无法合并，质量理由中会明确说明这一局限。
+- 中文关键词路径依赖 PostgreSQL `simple` 配置与参数化 `ILIKE` 词项兜底，不是专用中文分词；超长查询只使用前 8 个词项。
+- 混合检索目前使用 RRF 确定性融合，尚未接入外部重排序模型；切片按字符上限和句子边界切分，不包含语义分段或表格专用切片。
 - token 与成本预算读取运行累计用量；Mock 提供商不上报真实费用，因此成本预算验证使用项目预算和已记录成本。真实提供商的费用统计精度取决于其结果中的 usage 字段。
 - 对账工具只读，不自动删除孤儿文件；上传失败会自动清理本次写入的文件。
 - PostgreSQL、Redis 不暴露宿主机端口；API 与前端端口默认暴露。
@@ -823,4 +930,4 @@ Linux/macOS 的恢复命令同样将第二个卷参数改为 `-v "$PWD/backups:/
 
 ## 下一阶段
 
-阶段 6 将补全真实 Embedding 服务与 pgvector 语义检索、深化证据抽取与缺口分析的召回质量，并在此基础上接入真实 LLM 长文写作与主张核验增强。在获得确认前不会提前实现后续阶段。
+阶段 7 将接入真实 LLM 长文写作与主张核验增强：在现有证据矩阵和引用审计之上生成更完整的长文，建立主张与证据关系，并扩展引用修正与质量评测。在获得确认前不会提前实现后续阶段。

@@ -78,6 +78,9 @@ class Settings(BaseSettings):
     research_cost_budget_usd: float = Field(default=0.0, ge=0)
     research_plan_approval_required: bool = True
     research_outline_approval_required: bool = True
+    research_retrieval_mode: Literal["hybrid", "keyword", "vector"] = "hybrid"
+    research_retrieval_limit: int = Field(default=10, ge=1, le=100)
+    research_chunk_max_chars: int = Field(default=1200, ge=200, le=10000)
 
     # pgvector's HNSW index supports at most 2000 dimensions. Changing this
     # value requires a new Alembic migration for document_chunks.embedding.

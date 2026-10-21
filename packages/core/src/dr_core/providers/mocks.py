@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import hashlib
+import math
+import re
 from datetime import UTC, date, datetime
 from typing import Sequence
 from urllib.parse import urlsplit
@@ -293,13 +295,22 @@ class MockEmbeddingProvider:
     def embed_texts(self, texts: Sequence[str]) -> list[list[float]]:
         vectors: list[list[float]] = []
         for text in texts:
-            digest = hashlib.sha256(text.encode("utf-8")).digest()
-            values = [
-                (digest[index % len(digest)] / 255.0) * 2 - 1
-                for index in range(self._dimension)
-            ]
-            vectors.append(values)
+            values = [0.0] * self._dimension
+            for token in _tokens(text):
+                digest = hashlib.sha256(token.encode("utf-8")).digest()
+                index = int.from_bytes(digest[:4], "big") % self._dimension
+                sign = 1.0 if digest[4] % 2 == 0 else -1.0
+                values[index] += sign
+            norm = math.sqrt(sum(value * value for value in values)) or 1.0
+            vectors.append([value / norm for value in values])
         return vectors
+
+
+_TOKEN_RE = re.compile(r"[0-9a-z]+|[\u3400-\u4dbf\u4e00-\u9fff]")
+
+
+def _tokens(text: str) -> list[str]:
+    return _TOKEN_RE.findall(text.casefold())
 
 
 class MockLLMProvider:

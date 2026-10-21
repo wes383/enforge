@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
@@ -66,12 +67,12 @@ from dr_core.research.generation import (
     source_numbering,
     write_section,
 )
+from dr_core.research.indexing import IndexResult, ensure_source_index
 from dr_core.research.models import (
     ApprovalDecision,
     CitationAudit,
     CitationIssue,
     EvidenceMatrix,
-    EvidenceRow,
     Outline,
     ResearchBrief,
     ResearchGap,
@@ -80,11 +81,15 @@ from dr_core.research.models import (
     SearchQuery as SearchQueryModel,
     SourceRecord,
 )
+from dr_core.research.quality import build_evidence_matrix
+from dr_core.research.retrieval import HybridRetriever, RetrievalFilters, RetrievalHit
 from dr_core.research.state import ResearchState
 from dr_core.research.text import (
-    best_sentences,
+    best_sentence_span,
     citation_markers,
+    context_window,
     format_reference,
+    sentence_spans,
 )
 from dr_core.schemas import (
     ArtifactCreate,
@@ -703,6 +708,9 @@ def parse_documents(ctx: ResearchContext):
             records = _source_records(state)
             updated: list[SourceRecord] = []
             failed = 0
+            indexed_chunks = 0
+            embedded_chunks = 0
+            index_errors = 0
             for record in records:
                 ctx.guard()
                 if not record.source_version_id:
@@ -718,6 +726,14 @@ def parse_documents(ctx: ResearchContext):
                     storage_key = version.storage_key
                     size_bytes = version.size_bytes
                     if parser_status is ParserStatus.PARSED:
+                        result = _index_source(
+                            ctx,
+                            record,
+                            parser=parser,
+                        )
+                        indexed_chunks += result.chunk_count
+                        embedded_chunks += int(result.embedded)
+                        index_errors += int(bool(result.error))
                         updated.append(
                             record.model_copy(
                                 update={"parser_status": parser_status.value}
@@ -725,6 +741,14 @@ def parse_documents(ctx: ResearchContext):
                         )
                         continue
                     if storage_key is None:
+                        result = _index_source(
+                            ctx,
+                            record,
+                            parser=parser,
+                        )
+                        indexed_chunks += result.chunk_count
+                        embedded_chunks += int(result.embedded)
+                        index_errors += int(bool(result.error))
                         updated.append(record)
                         continue
                 if parser is None:
@@ -754,6 +778,15 @@ def parse_documents(ctx: ResearchContext):
                         record.source_version_id,
                         parsed,
                     )
+                    result = _index_source(
+                        ctx,
+                        record,
+                        parser=parser,
+                        parsed=parsed,
+                    )
+                    indexed_chunks += result.chunk_count
+                    embedded_chunks += int(result.embedded)
+                    index_errors += int(bool(result.error))
                     updated.append(
                         record.model_copy(
                             update={"parser_status": ParserStatus.PARSED.value}
@@ -794,6 +827,14 @@ def parse_documents(ctx: ResearchContext):
                             update={"parser_status": ParserStatus.FAILED.value}
                         )
                     )
+                    result = _index_source(
+                        ctx,
+                        record,
+                        parser=parser,
+                    )
+                    indexed_chunks += result.chunk_count
+                    embedded_chunks += int(result.embedded)
+                    index_errors += int(bool(result.error))
                     ctx.emit(
                         RunEventType.SOURCE_PARSED,
                         message="Source parsing failed",
@@ -805,6 +846,18 @@ def parse_documents(ctx: ResearchContext):
                         stage=RunStatus.PROCESSING_SOURCES,
                     )
 
+            ctx.emit(
+                RunEventType.PROGRESS,
+                message="Source index updated",
+                payload={
+                    "round": state.get("round_index", 1),
+                    "chunks": indexed_chunks,
+                    "embedded": embedded_chunks,
+                    "index_errors": index_errors,
+                },
+                dedupe_key=f"sources:indexed:round:{state.get('round_index', 1)}",
+                stage=RunStatus.PROCESSING_SOURCES,
+            )
             limitations = _with_limitations(
                 state,
                 *(
@@ -819,6 +872,15 @@ def parse_documents(ctx: ResearchContext):
                     else []
                 ),
             )
+            if index_errors:
+                limitations = _with_limitations(
+                    {"limitations": limitations},
+                    _text(
+                        brief,
+                        f"{index_errors} 个来源未能建立完整文本索引，相关检索可能不完整。",
+                        f"{index_errors} sources could not be fully indexed; retrieval may be incomplete.",
+                    ),
+                )
             return {
                 "sources": [item.model_dump(mode="json") for item in updated],
                 "limitations": limitations,
@@ -854,59 +916,150 @@ def extract_evidence(ctx: ResearchContext):
                     "current_node": "extract_evidence",
                 }
 
+            records = _source_records(state)
             parser = next(iter(ctx.registry.parsers), None)
             created = 0
             skipped = 0
-            for record in _source_records(state):
-                ctx.guard()
-                if total_evidence >= brief.max_evidence:
-                    break
-                if not record.source_version_id:
-                    continue
-                primary = _source_text(ctx, record, parser)
-                texts = [primary] if primary else []
-                if record.snippet and record.snippet not in texts:
-                    texts.append(record.snippet)
-                if not texts:
-                    skipped += 1
-                    continue
-                source_questions = plan.questions
-                if record.question_ids:
-                    source_questions = [
-                        question
-                        for question in plan.questions
-                        if question.question_id in record.question_ids
-                    ]
-                for question in source_questions:
+            retrieval_hits = 0
+            retrieval_degraded: str | None = None
+            retrieved_questions: set[UUID | None] = set()
+            with ctx.database.session() as session:
+                existing = EvidenceRepository(session).list_for_run(
+                    ctx.project_id,
+                    ctx.run_id,
+                )
+                retrieved_questions.update(
+                    item.research_question_id for item in existing
+                )
+            source_version_ids = [
+                record.source_version_id
+                for record in records
+                if record.source_version_id is not None
+            ]
+            if source_version_ids:
+                filters = RetrievalFilters(source_version_ids=source_version_ids)
+                with ctx.database.session() as session:
+                    retriever = HybridRetriever(
+                        session,
+                        ctx.project_id,
+                        settings=ctx.settings,
+                        embedding=ctx.registry.embedding,
+                        run_id=ctx.run_id,
+                    )
+                    for question in plan.questions:
+                        if total_evidence >= brief.max_evidence:
+                            break
+                        result = retriever.search(
+                            question.question,
+                            filters=filters,
+                            limit=min(ctx.settings.research_retrieval_limit, 8),
+                        )
+                        retrieval_degraded = (
+                            retrieval_degraded or result.degraded_reason
+                        )
+                        retrieval_hits += len(result.hits)
+                        used_sources: set[UUID] = set()
+                        for hit in result.hits:
+                            if total_evidence >= brief.max_evidence:
+                                break
+                            if hit.source_id in used_sources:
+                                continue
+                            matches = best_sentence_span(
+                                hit.text,
+                                question.question,
+                                limit=1,
+                            )
+                            if not matches:
+                                continue
+                            sentence, _, start, end = matches[0]
+                            with ctx.database.session_scope() as session:
+                                item = EvidenceRepository(session).create(
+                                    ctx.project_id,
+                                    ctx.run_id,
+                                    _evidence_from_hit(
+                                        hit,
+                                        question,
+                                        sentence,
+                                        start,
+                                        end,
+                                    ),
+                                )
+                                if str(item.id) in evidence_ids:
+                                    continue
+                                evidence_ids.add(str(item.id))
+                            total_evidence += 1
+                            created += 1
+                            used_sources.add(hit.source_id)
+                            retrieved_questions.add(question.question_id)
+
+            uncovered = [
+                question
+                for question in plan.questions
+                if question.question_id not in retrieved_questions
+            ]
+            if uncovered and total_evidence < brief.max_evidence:
+                for record in records:
+                    ctx.guard()
                     if total_evidence >= brief.max_evidence:
                         break
-                    matches = []
-                    for text in texts:
-                        matches = best_sentences(
-                            text,
-                            question.question,
-                            limit=1,
-                        )
-                        if matches:
-                            break
-                    if not matches:
+                    if not record.source_version_id:
                         continue
-                    sentence, _ = matches[0]
-                    evidence_type = _evidence_type(sentence)
-                    with ctx.database.session_scope() as session:
-                        item = EvidenceRepository(session).create(
-                            ctx.project_id,
-                            ctx.run_id,
-                            _evidence_create(
-                                record,
-                                question,
-                                sentence,
-                                evidence_type,
-                            ),
-                        )
-                        evidence_ids.add(str(item.id))
-                    total_evidence += 1
-                    created += 1
+                    primary = _source_text(ctx, record, parser)
+                    texts = [primary] if primary else []
+                    if record.snippet and record.snippet not in texts:
+                        texts.append(record.snippet)
+                    if not texts:
+                        skipped += 1
+                        continue
+                    source_questions = uncovered
+                    if record.question_ids:
+                        source_questions = [
+                            question
+                            for question in uncovered
+                            if question.question_id in record.question_ids
+                        ]
+                    for question in source_questions:
+                        if total_evidence >= brief.max_evidence:
+                            break
+                        match = None
+                        matched_text = None
+                        for text in texts:
+                            matches = best_sentence_span(
+                                text,
+                                question.question,
+                                limit=1,
+                            )
+                            if matches:
+                                match = matches[0]
+                                matched_text = text
+                                break
+                        if match is None or matched_text is None:
+                            continue
+                        sentence, _, start, end = match
+                        with ctx.database.session_scope() as session:
+                            item = EvidenceRepository(session).create(
+                                ctx.project_id,
+                                ctx.run_id,
+                                _evidence_from_text(
+                                    record,
+                                    question,
+                                    matched_text,
+                                    sentence,
+                                    start,
+                                    end,
+                                ),
+                            )
+                            if str(item.id) in evidence_ids:
+                                continue
+                            evidence_ids.add(str(item.id))
+                        total_evidence += 1
+                        created += 1
+                        uncovered = [
+                            candidate
+                            for candidate in uncovered
+                            if candidate.question_id != question.question_id
+                        ]
+
             ctx.emit(
                 RunEventType.EVIDENCE_EXTRACTED,
                 message="Evidence extraction completed",
@@ -914,6 +1067,8 @@ def extract_evidence(ctx: ResearchContext):
                     "round": state.get("round_index", 1),
                     "new_evidence": created,
                     "total_evidence": total_evidence,
+                    "retrieval_hits": retrieval_hits,
+                    "retrieval_degraded": retrieval_degraded,
                 },
                 dedupe_key=(
                     f"evidence:extracted:round:{state.get('round_index', 1)}"
@@ -930,6 +1085,15 @@ def extract_evidence(ctx: ResearchContext):
                         "No traceable evidence could be extracted from the available sources.",
                     ),
                 )
+            elif retrieval_degraded:
+                limitations = _with_limitations(
+                    {"limitations": limitations},
+                    _text(
+                        brief,
+                        "语义检索不可用，证据检索已降级为关键词检索。",
+                        "Semantic retrieval was unavailable; evidence retrieval used keyword search.",
+                    ),
+                )
             return {
                 "evidence_ids": sorted(evidence_ids),
                 "limitations": limitations,
@@ -943,81 +1107,44 @@ def analyze_evidence(ctx: ResearchContext):
     def node(state: ResearchState) -> ResearchState:
         with node_timeout(ctx.settings.research_node_timeout_seconds):
             ctx.guard()
+            brief = _brief(state)
             plan = _plan(state)
             with ctx.database.session_scope() as session:
                 evidence = EvidenceRepository(session).list_for_run(
                     ctx.project_id,
                     ctx.run_id,
                 )
-                by_question: dict[UUID | None, list] = {}
-                for item in evidence:
-                    by_question.setdefault(item.research_question_id, []).append(item)
-                rows: list[EvidenceRow] = []
-                question_repo = ResearchQuestionRepository(session)
-                for question in plan.questions:
-                    items = by_question.get(question.question_id, [])
-                    support = sum(
-                        1
-                        for item in items
-                        if item.evidence_type is not EvidenceType.REFUTATION
+                sources = {
+                    source.id: source
+                    for source in SourceRepository(session).list_for_project(
+                        ctx.project_id,
+                        limit=500,
                     )
-                    refute = len(items) - support
-                    source_count = len({item.source_id for item in items})
-                    if support >= 2 and source_count >= 2:
-                        coverage = QuestionCoverageStatus.COVERED
-                    elif support >= 1:
-                        coverage = QuestionCoverageStatus.PARTIAL
-                    else:
-                        coverage = QuestionCoverageStatus.INSUFFICIENT
-                    if question.question_id is not None:
+                }
+                matrix = build_evidence_matrix(
+                    plan.questions,
+                    evidence,
+                    sources,
+                    language=brief.language,
+                )
+                question_repo = ResearchQuestionRepository(session)
+                for row in matrix.rows:
+                    if row.question_id is not None:
                         question_repo.update_coverage(
-                            question.question_id,
-                            coverage,
+                            row.question_id,
+                            row.coverage_status,
                             project_id=ctx.project_id,
                         )
-                    rows.append(
-                        EvidenceRow(
-                            question_id=question.question_id,
-                            question=question.question,
-                            support_count=support,
-                            refute_count=refute,
-                            source_count=source_count,
-                            coverage_status=coverage,
-                        )
-                    )
-                matrix = EvidenceMatrix(
-                    rows=rows,
-                    total_evidence=len(evidence),
-                    source_count=len({item.source_id for item in evidence}),
-                    contradiction_count=sum(
-                        1 for row in rows if row.support_count and row.refute_count
-                    ),
-                    coverage_ratio=round(
-                        (
-                            sum(
-                                1.0
-                                if row.coverage_status is QuestionCoverageStatus.COVERED
-                                else 0.5
-                                if row.coverage_status
-                                is QuestionCoverageStatus.PARTIAL
-                                else 0.0
-                                for row in rows
-                            )
-                            / len(rows)
-                        )
-                        if rows
-                        else 0.0,
-                        4,
-                    ),
-                )
             ctx.emit(
                 RunEventType.PROGRESS,
                 message="Evidence analysis completed",
                 payload={
                     "evidence": matrix.total_evidence,
                     "sources": matrix.source_count,
+                    "independent_sources": matrix.independent_source_count,
                     "coverage_ratio": matrix.coverage_ratio,
                     "contradictions": matrix.contradiction_count,
+                    "duplicate_groups": len(matrix.duplicate_source_groups),
                 },
                 dedupe_key=(
                     f"evidence:analyzed:round:{state.get('round_index', 1)}"
@@ -1048,7 +1175,8 @@ def analyze_gaps(ctx: ResearchContext):
                     ResearchGap(
                         question_id=row.question_id,
                         question=row.question,
-                        reason=_text(
+                        reason=row.gap
+                        or _text(
                             brief,
                             (
                                 "该问题缺少足够的支持证据。"
@@ -1635,11 +1763,22 @@ def finalize_report(ctx: ResearchContext):
                 reference_list = "\n".join(
                     [f"# {_text(brief, '参考文献', 'References')}", "", *references]
                 )
+                matrix_json = json.dumps(
+                    {
+                        "generated_at": datetime.now(tz=UTC).isoformat(),
+                        "coverage_ratio": matrix.coverage_ratio,
+                        **matrix.model_dump(mode="json"),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
                 artifacts = _persist_report_artifacts(
                     ctx,
                     session,
                     report,
                     reference_list,
+                    matrix_json,
                 )
                 artifact_payload = [
                     {
@@ -1995,6 +2134,36 @@ def _source_text(ctx: ResearchContext, record: SourceRecord, parser) -> str | No
     return str(snippet) if snippet else None
 
 
+def _index_source(
+    ctx: ResearchContext,
+    record: SourceRecord,
+    *,
+    parser,
+    parsed=None,
+) -> IndexResult:
+    try:
+        return ensure_source_index(
+            ctx,
+            record.source_version_id,
+            parser=parser,
+            parsed=parsed,
+            snippet=record.snippet,
+        )
+    except (RunCancelled, RunFinished, NodeTimeoutError):
+        raise
+    except Exception as exc:
+        logger.warning(
+            "Unable to index source %s: %s",
+            record.source_version_id,
+            exc,
+        )
+        return IndexResult(
+            chunk_count=0,
+            embedded=False,
+            error=f"{type(exc).__name__}: indexing failed",
+        )
+
+
 def _evidence_type(sentence: str) -> EvidenceType:
     lowered = sentence.casefold()
     refutation_terms = (
@@ -2015,24 +2184,98 @@ def _evidence_type(sentence: str) -> EvidenceType:
     return EvidenceType.DIRECT_SUPPORT
 
 
-def _evidence_create(record, question, sentence, evidence_type):
+def _evidence_from_hit(
+    hit: RetrievalHit,
+    question,
+    sentence: str,
+    start: int,
+    end: int,
+):
     from dr_core.schemas import EvidenceCreate
 
+    raw = hit.text[start:end]
+    verified = " ".join(raw.split()) == sentence
+    before, after = context_window(hit.text, start, end)
+    locator = {
+        **hit.locator,
+        "url": hit.url,
+        "source_title": hit.source_title,
+        "character_start": start,
+        "character_end": end,
+        "sentence_index": _sentence_index(hit.text, start),
+        "retrieval": {
+            "score": hit.score,
+            "keyword_score": hit.keyword_score,
+            "vector_score": hit.vector_score,
+            "keyword_rank": hit.keyword_rank,
+            "vector_rank": hit.vector_rank,
+        },
+    }
+    return EvidenceCreate(
+        source_id=hit.source_id,
+        source_version_id=hit.source_version_id,
+        research_question_id=question.question_id,
+        evidence_type=_evidence_type(sentence),
+        claim_summary=sentence[:1000],
+        quoted_text=sentence,
+        context_before=before or None,
+        context_after=after or None,
+        locator=locator,
+        verification_status=(
+            EvidenceVerificationStatus.VERIFIED
+            if verified
+            else EvidenceVerificationStatus.UNVERIFIED
+        ),
+    )
+
+
+def _evidence_from_text(
+    record: SourceRecord,
+    question,
+    text: str,
+    sentence: str,
+    start: int,
+    end: int,
+):
+    from dr_core.schemas import EvidenceCreate
+
+    raw = text[start:end]
+    verified = " ".join(raw.split()) == sentence
+    before, after = context_window(text, start, end)
+    locator = {
+        "kind": "search_snippet" if not record.has_full_text else "source_text",
+        "source_version_id": str(record.source_version_id),
+        "url": record.fetch_url or record.url,
+        "provider": record.provider,
+        "source_title": record.title,
+        "character_start": start,
+        "character_end": end,
+        "sentence_index": _sentence_index(text, start),
+        "text_length": len(text),
+    }
     return EvidenceCreate(
         source_id=record.source_id,
         source_version_id=record.source_version_id,
         research_question_id=question.question_id,
-        evidence_type=evidence_type,
+        evidence_type=_evidence_type(sentence),
         claim_summary=sentence[:1000],
         quoted_text=sentence,
-        locator={
-            "kind": "source_text",
-            "source_version_id": str(record.source_version_id),
-            "url": record.fetch_url or record.url,
-            "provider": record.provider,
-        },
-        verification_status=EvidenceVerificationStatus.VERIFIED,
+        context_before=before or None,
+        context_after=after or None,
+        locator=locator,
+        verification_status=(
+            EvidenceVerificationStatus.VERIFIED
+            if verified
+            else EvidenceVerificationStatus.UNVERIFIED
+        ),
     )
+
+
+def _sentence_index(text: str, start: int) -> int | None:
+    for index, (_, span_start, _) in enumerate(sentence_spans(text)):
+        if span_start == start:
+            return index
+    return None
 
 
 def _outline_create(outline: Outline, feedback: str | None) -> object:
@@ -2182,6 +2425,41 @@ def _report_markdown(
         ),
         "",
     ]
+    lines.extend(
+        [
+            _text(brief, "## 证据覆盖", "## Evidence Coverage"),
+            "",
+            _text(
+                brief,
+                "| 研究问题 | 覆盖状态 | 支持证据 | 相反证据 | 独立来源 |",
+                "| Question | Coverage | Supporting | Counter | Independent sources |",
+            ),
+            "| --- | --- | --- | --- | --- |",
+        ]
+    )
+    for row in matrix.rows:
+        question = row.question.replace("|", "\\|")[:500]
+        lines.append(
+            f"| {question} | {row.coverage_status.value} | "
+            f"{row.support_count} | {row.refute_count} | "
+            f"{row.independent_source_count} |"
+        )
+    if matrix.duplicate_source_groups:
+        lines.extend(
+            [
+                "",
+                _text(
+                    brief,
+                    "以下来源可能转述同一项原始工作，未按独立来源计数：",
+                    "The following sources appear to report the same original work "
+                    "and were not counted as independent:",
+                ),
+            ]
+        )
+        lines.extend(
+            f"- {group}" for group in matrix.duplicate_source_groups[:10]
+        )
+    lines.append("")
     for section in sections:
         lines.append(section.content_markdown.rstrip())
         lines.append("")
@@ -2225,6 +2503,7 @@ def _persist_report_artifacts(
     session,
     report: str,
     reference_list: str,
+    matrix_json: str,
 ) -> list:
     repo = ArtifactRepository(session)
     existing = {item.artifact_type: item for item in repo.list_for_run(
@@ -2232,10 +2511,29 @@ def _persist_report_artifacts(
         ctx.run_id,
     )}
     artifacts = []
-    for artifact_type, title, content in [
-        (ArtifactType.RESEARCH_REPORT, "Research report", report),
-        (ArtifactType.REFERENCE_LIST, "Reference list", reference_list),
-        (ArtifactType.MARKDOWN_EXPORT, "Markdown export", report),
+    for artifact_type, title, content, extension, mime_type in [
+        (ArtifactType.RESEARCH_REPORT, "Research report", report, "md", "text/markdown"),
+        (
+            ArtifactType.REFERENCE_LIST,
+            "Reference list",
+            reference_list,
+            "md",
+            "text/markdown",
+        ),
+        (
+            ArtifactType.MARKDOWN_EXPORT,
+            "Markdown export",
+            report,
+            "md",
+            "text/markdown",
+        ),
+        (
+            ArtifactType.EVIDENCE_MATRIX,
+            "Evidence matrix",
+            matrix_json,
+            "json",
+            "application/json",
+        ),
     ]:
         artifacts.append(
             _persist_artifact(
@@ -2246,6 +2544,8 @@ def _persist_report_artifacts(
                 artifact_type,
                 title,
                 content,
+                extension=extension,
+                mime_type=mime_type,
             )
         )
     return artifacts
@@ -2259,6 +2559,9 @@ def _persist_artifact(
     artifact_type: ArtifactType,
     title: str,
     content: str,
+    *,
+    extension: str = "md",
+    mime_type: str = "text/markdown",
 ):
     payload = content.encode("utf-8")
     content_hash = text_sha256(content)
@@ -2273,7 +2576,7 @@ def _persist_artifact(
     )
     key = (
         f"projects/{ctx.project_id}/runs/{ctx.run_id}/artifacts/"
-        f"{artifact_type.value}/v{version}.md"
+        f"{artifact_type.value}/v{version}.{extension}"
     )
     created_file = False
     if latest is None or latest.storage_key != key or not ctx.storage.exists(key):
@@ -2288,12 +2591,13 @@ def _persist_artifact(
                 title=title,
                 version=version,
                 storage_key=key,
-                mime_type="text/markdown",
+                mime_type=mime_type,
                 size_bytes=len(payload),
                 content_hash=content_hash,
                 metadata={
                     "sections": content.count("\n## "),
-                    "generated_by": "phase5-workflow",
+                    "format": extension,
+                    "generated_by": "phase6-workflow",
                 },
             ),
         )

@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import date
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.exc import IntegrityError
 
 from dr_core.config import get_settings
@@ -295,6 +296,12 @@ class ChunkMatch:
     distance: float
 
 
+@dataclass(frozen=True, slots=True)
+class KeywordMatch:
+    chunk: DocumentChunk
+    fts_rank: float
+
+
 class DocumentChunkRepository(Repository):
     def __init__(self, session, embedding_dimension: int | None = None) -> None:
         super().__init__(session)
@@ -367,17 +374,39 @@ class DocumentChunkRepository(Repository):
         *,
         limit: int = 10,
         source_version_id: UUID | None = None,
+        source_version_ids: list[UUID] | None = None,
+        source_ids: list[UUID] | None = None,
+        source_types: list[SourceType] | None = None,
+        published_from: date | None = None,
+        published_to: date | None = None,
     ) -> list[ChunkMatch]:
         vector = ensure_embedding_dimension(embedding, self.embedding_dimension)
         distance = DocumentChunk.embedding.cosine_distance(vector).label("distance")
-        statement = select(DocumentChunk, distance).where(
-            DocumentChunk.project_id == project_id,
-            DocumentChunk.embedding.is_not(None),
+        statement = (
+            select(DocumentChunk, distance)
+            .join(
+                SourceVersion,
+                SourceVersion.id == DocumentChunk.source_version_id,
+            )
+            .join(Source, Source.id == SourceVersion.source_id)
+            .where(
+                DocumentChunk.project_id == project_id,
+                DocumentChunk.embedding.is_not(None),
+            )
         )
         if source_version_id is not None:
             statement = statement.where(
                 DocumentChunk.source_version_id == source_version_id
             )
+        statement = statement.where(
+            *self._chunk_filters(
+                source_version_ids=source_version_ids,
+                source_ids=source_ids,
+                source_types=source_types,
+                published_from=published_from,
+                published_to=published_to,
+            )
+        )
         rows = self.session.execute(
             statement.order_by(distance).limit(min(max(limit, 1), 100))
         ).all()
@@ -385,6 +414,93 @@ class DocumentChunkRepository(Repository):
             ChunkMatch(chunk=row[0], distance=float(row[1]))
             for row in rows
         ]
+
+    def search_keyword(
+        self,
+        project_id: UUID,
+        query: str,
+        *,
+        terms: list[str] | None = None,
+        limit: int = 10,
+        source_version_ids: list[UUID] | None = None,
+        source_ids: list[UUID] | None = None,
+        source_types: list[SourceType] | None = None,
+        published_from: date | None = None,
+        published_to: date | None = None,
+    ) -> list[KeywordMatch]:
+        text = query.strip()
+        if not text:
+            return []
+        vector = func.to_tsvector("simple", DocumentChunk.text)
+        ts_query = func.websearch_to_tsquery("simple", text)
+        rank = func.ts_rank_cd(vector, ts_query).label("fts_rank")
+        conditions = [vector.op("@@")(ts_query)]
+        safe_terms = [
+            term.strip()
+            for term in (terms or [])
+            if 2 <= len(term.strip()) <= 64
+        ][:8]
+        if safe_terms:
+            conditions.append(
+                or_(
+                    *[
+                        DocumentChunk.text.icontains(term, autoescape=True)
+                        for term in safe_terms
+                    ]
+                )
+            )
+        statement = (
+            select(DocumentChunk, rank)
+            .join(
+                SourceVersion,
+                SourceVersion.id == DocumentChunk.source_version_id,
+            )
+            .join(Source, Source.id == SourceVersion.source_id)
+            .where(
+                DocumentChunk.project_id == project_id,
+                or_(*conditions),
+                *self._chunk_filters(
+                    source_version_ids=source_version_ids,
+                    source_ids=source_ids,
+                    source_types=source_types,
+                    published_from=published_from,
+                    published_to=published_to,
+                ),
+            )
+        )
+        rows = self.session.execute(
+            statement.order_by(rank.desc(), DocumentChunk.id).limit(
+                min(max(limit * 4, 1), 200)
+            )
+        ).all()
+        return [
+            KeywordMatch(chunk=row[0], fts_rank=float(row[1]))
+            for row in rows
+        ]
+
+    @staticmethod
+    def _chunk_filters(
+        *,
+        source_version_ids: list[UUID] | None,
+        source_ids: list[UUID] | None,
+        source_types: list[SourceType] | None,
+        published_from: date | None,
+        published_to: date | None,
+    ) -> list:
+        conditions = []
+        if source_version_ids:
+            conditions.append(
+                DocumentChunk.source_version_id.in_(source_version_ids)
+            )
+        if source_ids:
+            conditions.append(Source.id.in_(source_ids))
+        if source_types:
+            conditions.append(Source.source_type.in_(source_types))
+        if published_from is not None:
+            conditions.append(Source.published_at >= published_from)
+        if published_to is not None:
+            conditions.append(Source.published_at <= published_to)
+        return conditions
 
     def set_embedding(
         self,

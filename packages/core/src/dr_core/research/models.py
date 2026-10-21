@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal
-from typing import Literal
+from typing import Any, Literal
 from uuid import UUID
 
 from pydantic import Field, field_validator
@@ -14,6 +14,7 @@ from dr_core.db.enums import (
     CitationIssueType,
     CitationStyle,
     EvidenceType,
+    EvidenceVerificationStatus,
     ProjectLanguage,
     QuestionCoverageStatus,
     ResearchDepth,
@@ -110,6 +111,39 @@ class EvidenceRecord(SchemaModel):
     evidence_type: EvidenceType = EvidenceType.DIRECT_SUPPORT
     claim_summary: str = Field(min_length=1, max_length=20000)
     quoted_text: str = Field(min_length=1, max_length=100000)
+    context_before: str | None = Field(default=None, max_length=50000)
+    context_after: str | None = Field(default=None, max_length=50000)
+    locator: dict[str, Any] = Field(default_factory=dict)
+    verification_status: EvidenceVerificationStatus = (
+        EvidenceVerificationStatus.PENDING
+    )
+    created_at: datetime | None = None
+    independent_key: str | None = None
+
+
+class QualityReason(SchemaModel):
+    dimension: str = Field(min_length=1, max_length=64)
+    status: Literal["positive", "neutral", "concern", "unknown"]
+    reason: str = Field(min_length=1, max_length=2000)
+
+
+class SourceQuality(SchemaModel):
+    source_id: UUID
+    identity_key: str = Field(min_length=1, max_length=512)
+    level: Literal["high", "moderate", "low", "unknown"] = "unknown"
+    is_primary: bool = False
+    reasons: list[QualityReason] = Field(default_factory=list, max_length=20)
+
+
+class EvidenceQuality(SchemaModel):
+    evidence_id: UUID
+    level: Literal["high", "moderate", "low", "uncertain"] = "uncertain"
+    directness: Literal["direct", "indirect", "unclear"] = "unclear"
+    context_consistency: Literal["preserved", "quote_only", "unclear"] = "unclear"
+    independence: Literal["independent", "shared", "unknown"] = "unknown"
+    counter_evidence: Literal["present", "none_found"] = "none_found"
+    applicability: Literal["conditional", "not_explicit", "unknown"] = "unknown"
+    reasons: list[QualityReason] = Field(default_factory=list, max_length=20)
 
 
 class ResearchGap(SchemaModel):
@@ -126,15 +160,26 @@ class EvidenceRow(SchemaModel):
     support_count: int = Field(default=0, ge=0)
     refute_count: int = Field(default=0, ge=0)
     source_count: int = Field(default=0, ge=0)
+    independent_source_count: int = Field(default=0, ge=0)
     coverage_status: QuestionCoverageStatus = QuestionCoverageStatus.OPEN
+    conclusion: str = Field(default="", max_length=20000)
+    support_evidence_ids: list[UUID] = Field(default_factory=list)
+    refute_evidence_ids: list[UUID] = Field(default_factory=list)
+    source_quality: list[SourceQuality] = Field(default_factory=list)
+    evidence_quality: list[EvidenceQuality] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    gap: str | None = Field(default=None, max_length=20000)
 
 
 class EvidenceMatrix(SchemaModel):
     rows: list[EvidenceRow] = Field(default_factory=list)
     total_evidence: int = Field(default=0, ge=0)
     source_count: int = Field(default=0, ge=0)
+    independent_source_count: int = Field(default=0, ge=0)
     contradiction_count: int = Field(default=0, ge=0)
     coverage_ratio: float = Field(default=0.0, ge=0, le=1)
+    duplicate_source_groups: list[str] = Field(default_factory=list)
+    quality_notes: list[str] = Field(default_factory=list)
 
 
 class OutlineSection(SchemaModel):

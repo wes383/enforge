@@ -18,6 +18,7 @@ from sqlalchemy import (
     UniqueConstraint,
     func,
     text,
+    text as sa_text,
 )
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
@@ -233,5 +234,10 @@ class DocumentChunk(UUIDPrimaryKeyMixin, Base):
             postgresql_using="hnsw",
             postgresql_with={"m": 16, "ef_construction": 64},
             postgresql_ops={"embedding": "vector_cosine_ops"},
+        ),
+        Index(
+            "ix_document_chunks_text_fts",
+            sa_text("to_tsvector('simple', text)"),
+            postgresql_using="gin",
         ),
     )

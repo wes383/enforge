@@ -6,6 +6,7 @@ from collections.abc import Iterable
 _ASCII_WORD = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]+")
 _CJK_RUN = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]+")
 _SENTENCE_SPLIT = re.compile(r"(?<=[.!?。！？])\s*|\n+")
+_SENTENCE_SPAN = re.compile(r"[^.!?。！？\n]+[.!?。！？]?")
 _MARKDOWN_NOISE = re.compile(r"[`*_>#\[\]()]")
 _CITATION_MARKER = re.compile(r"\[S(\d+)\]")
 _STOPWORDS = frozenset(
@@ -93,6 +94,52 @@ def split_sentences(text: str) -> list[str]:
         if 20 <= len(sentence) <= 2000:
             sentences.append(sentence)
     return sentences
+
+
+def sentence_spans(text: str) -> list[tuple[str, int, int]]:
+    spans: list[tuple[str, int, int]] = []
+    for match in _SENTENCE_SPAN.finditer(text):
+        raw = match.group()
+        stripped = raw.strip()
+        if not stripped:
+            continue
+        cleaned = " ".join(stripped.split())
+        if not 20 <= len(cleaned) <= 2000:
+            continue
+        start = match.start() + (len(raw) - len(raw.lstrip()))
+        spans.append((cleaned, start, start + len(stripped)))
+    return spans
+
+
+def best_sentence_span(
+    text: str,
+    query: str,
+    *,
+    limit: int = 1,
+    minimum_score: int = 1,
+) -> list[tuple[str, int, int, int]]:
+    query_tokens = tokenize(query)
+    if not query_tokens:
+        return []
+    scored: list[tuple[str, int, int, int]] = []
+    for sentence, start, end in sentence_spans(text):
+        score = len(query_tokens & tokenize(sentence))
+        if score >= minimum_score:
+            scored.append((sentence, score, start, end))
+    scored.sort(key=lambda item: (-item[1], len(item[0]), item[2]))
+    return scored[: max(1, limit)]
+
+
+def context_window(
+    text: str,
+    start: int,
+    end: int,
+    *,
+    window: int = 240,
+) -> tuple[str, str]:
+    before = text[max(0, start - window) : start].strip()
+    after = text[end : end + window].strip()
+    return before or "", after or ""
 
 
 def split_paragraphs(text: str) -> list[str]:

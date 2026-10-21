@@ -39,8 +39,14 @@ _LANGGRAPH_TABLES = frozenset(
 )
 
 
+# Expression indexes are created by hand; Alembic cannot compare them reliably.
+_MANUAL_INDEXES = frozenset({"ix_document_chunks_text_fts"})
+
+
 def _include_object(obj, name, type_, reflected, compare_to):
     if type_ == "table" and name in _LANGGRAPH_TABLES:
+        return False
+    if type_ == "index" and name in _MANUAL_INDEXES:
         return False
     return True
 

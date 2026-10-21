@@ -67,7 +67,7 @@ def build_provider_registry(
             academic_search=[MockAcademicSearchProvider()],
             web_content=[MockWebContentProvider()],
             parsers=[MockDocumentParser()],
-            embedding=MockEmbeddingProvider(),
+            embedding=MockEmbeddingProvider(dimension=settings.embedding_dimension),
             llm=MockLLMProvider(),
         )
 
