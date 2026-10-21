@@ -98,6 +98,20 @@ class RunRepository(Repository):
             or 0
         )
 
+    def count_active_for_project(self, project_id: UUID) -> int:
+        self._require_project(project_id)
+        return int(
+            self.session.scalar(
+                select(func.count())
+                .select_from(ResearchRun)
+                .where(
+                    ResearchRun.project_id == project_id,
+                    ~ResearchRun.status.in_(list(TERMINAL_RUN_STATUSES)),
+                )
+            )
+            or 0
+        )
+
     def update_status(
         self,
         run_id: UUID,

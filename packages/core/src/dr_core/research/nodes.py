@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
@@ -380,7 +381,7 @@ def search_sources(ctx: ResearchContext):
                     _mark_query_failed(
                         ctx,
                         query_row.id,
-                        f"{exc.code}: {exc.message}",
+                        f"{exc.code}: {exc}",
                     )
                     failures.append(query.provider.value)
                     continue
@@ -643,7 +644,12 @@ def fetch_full_text(ctx: ResearchContext):
                 )
             ) as executor:
                 futures = {
-                    executor.submit(fetch_web_content, providers, url): (record, url)
+                    executor.submit(
+                        contextvars.copy_context().run,
+                        fetch_web_content,
+                        providers,
+                        url,
+                    ): (record, url)
                     for record, url in zip(eligible, urls)
                 }
                 for future in futures:

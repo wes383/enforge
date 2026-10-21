@@ -25,6 +25,7 @@ from dr_core.services.run_state import (
     is_terminal_status,
 )
 from dr_core.services.runs import (
+    ActiveRunLimitExceeded,
     CancelOutcome,
     create_run_with_event,
     fail_run,
@@ -37,6 +38,7 @@ from dr_core.services.runs import (
 
 __all__ = [
     "ALLOWED_RUN_TRANSITIONS",
+    "ActiveRunLimitExceeded",
     "ApprovalConflict",
     "CancelOutcome",
     "IngestedSource",

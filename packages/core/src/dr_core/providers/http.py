@@ -82,6 +82,7 @@ class JsonHttpClient:
             follow_redirects=False,
         )
         self._sleep = sleep
+        self.last_attempts = 0
 
     def __enter__(self) -> "JsonHttpClient":
         return self
@@ -114,6 +115,7 @@ class JsonHttpClient:
         last_transport_error: httpx.TransportError | None = None
 
         for attempt in range(1, attempts + 1):
+            self.last_attempts = attempt
             try:
                 response = self._client.request(
                     method,

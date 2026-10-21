@@ -19,6 +19,8 @@ from dr_core.db.enums import RunEventType, RunStatus
 from dr_core.db.models import ResearchRun
 from dr_core.db.repositories import RunApprovalRepository, RunRepository
 from dr_core.db.repositories.exceptions import EntityNotFound
+from dr_core.observability import build_tracer, instrument_registry
+from dr_core.observability.tracing import ResearchTracer
 from dr_core.providers.registry import ProviderRegistry, build_provider_registry
 from dr_core.research.context import (
     NodeTimeoutError,
@@ -70,27 +72,108 @@ class WorkflowOutcome:
     approval_id: UUID | None = None
 
 
+def _traced_node(ctx: ResearchContext, name: str, node):
+    def wrapped(state: ResearchState) -> ResearchState:
+        with ctx.tracer.span(
+            f"node.{name}",
+            metadata={
+                "node": name,
+                "run_id": str(ctx.run_id),
+                "round": (state or {}).get("round_index"),
+            },
+        ) as span:
+            result = node(state)
+            output: dict = {"current_node": (result or {}).get("current_node")}
+            evidence_ids = (result or {}).get("evidence_ids")
+            if evidence_ids is not None:
+                output["evidence_count"] = len(evidence_ids)
+            sections = (result or {}).get("sections")
+            if sections is not None:
+                output["section_count"] = len(sections)
+            span.update(output=output, metadata={"status": "ok"})
+            return result
+
+    return wrapped
+
+
 def build_research_graph(ctx: ResearchContext, checkpointer: PostgresSaver):
     builder = StateGraph(ResearchState)
-    builder.add_node("parse_brief", parse_brief(ctx))
-    builder.add_node("plan_research", plan_research(ctx))
-    builder.add_node("await_plan_approval", await_plan_approval(ctx))
-    builder.add_node("generate_queries", generate_queries(ctx))
-    builder.add_node("search_sources", search_sources(ctx))
-    builder.add_node("normalize_sources", normalize_sources(ctx))
-    builder.add_node("rank_sources", rank_sources(ctx))
-    builder.add_node("fetch_full_text", fetch_full_text(ctx))
-    builder.add_node("parse_documents", parse_documents(ctx))
-    builder.add_node("extract_evidence", extract_evidence(ctx))
-    builder.add_node("analyze_evidence", analyze_evidence(ctx))
-    builder.add_node("analyze_gaps", analyze_gaps(ctx))
-    builder.add_node("revise_search_plan", revise_search_plan(ctx))
-    builder.add_node("generate_outline", generate_outline(ctx))
-    builder.add_node("await_outline_approval", await_outline_approval(ctx))
-    builder.add_node("write_sections", write_sections(ctx))
-    builder.add_node("verify_claims", verify_claims(ctx))
-    builder.add_node("verify_citations", verify_citations(ctx))
-    builder.add_node("finalize_report", finalize_report(ctx))
+    builder.add_node(
+        "parse_brief",
+        _traced_node(ctx, "parse_brief", parse_brief(ctx)),
+    )
+    builder.add_node(
+        "plan_research",
+        _traced_node(ctx, "plan_research", plan_research(ctx)),
+    )
+    builder.add_node(
+        "await_plan_approval",
+        _traced_node(ctx, "await_plan_approval", await_plan_approval(ctx)),
+    )
+    builder.add_node(
+        "generate_queries",
+        _traced_node(ctx, "generate_queries", generate_queries(ctx)),
+    )
+    builder.add_node(
+        "search_sources",
+        _traced_node(ctx, "search_sources", search_sources(ctx)),
+    )
+    builder.add_node(
+        "normalize_sources",
+        _traced_node(ctx, "normalize_sources", normalize_sources(ctx)),
+    )
+    builder.add_node(
+        "rank_sources",
+        _traced_node(ctx, "rank_sources", rank_sources(ctx)),
+    )
+    builder.add_node(
+        "fetch_full_text",
+        _traced_node(ctx, "fetch_full_text", fetch_full_text(ctx)),
+    )
+    builder.add_node(
+        "parse_documents",
+        _traced_node(ctx, "parse_documents", parse_documents(ctx)),
+    )
+    builder.add_node(
+        "extract_evidence",
+        _traced_node(ctx, "extract_evidence", extract_evidence(ctx)),
+    )
+    builder.add_node(
+        "analyze_evidence",
+        _traced_node(ctx, "analyze_evidence", analyze_evidence(ctx)),
+    )
+    builder.add_node(
+        "analyze_gaps",
+        _traced_node(ctx, "analyze_gaps", analyze_gaps(ctx)),
+    )
+    builder.add_node(
+        "revise_search_plan",
+        _traced_node(ctx, "revise_search_plan", revise_search_plan(ctx)),
+    )
+    builder.add_node(
+        "generate_outline",
+        _traced_node(ctx, "generate_outline", generate_outline(ctx)),
+    )
+    builder.add_node(
+        "await_outline_approval",
+        _traced_node(ctx, "await_outline_approval", await_outline_approval(ctx)),
+    )
+    builder.add_node(
+        "write_sections",
+        _traced_node(ctx, "write_sections", write_sections(ctx)),
+    )
+    builder.add_node(
+        "verify_claims",
+        _traced_node(ctx, "verify_claims", verify_claims(ctx)),
+    )
+    builder.add_node(
+        "verify_citations",
+        _traced_node(ctx, "verify_citations", verify_citations(ctx)),
+    )
+    builder.add_node(
+        "finalize_report",
+        _traced_node(ctx, "finalize_report", finalize_report(ctx)),
+    )
 
     builder.add_edge(START, "parse_brief")
     builder.add_edge("parse_brief", "plan_research")
@@ -143,6 +226,9 @@ def run_research_workflow(
     *,
     resume: dict | None = None,
     settings: Settings | None = None,
+    registry: ProviderRegistry | None = None,
+    tracer: ResearchTracer | None = None,
+    interrupt_after: list[str] | None = None,
 ) -> WorkflowOutcome:
     if run_id is None or project_id is None:
         raise ValueError("run_id and project_id are required")
@@ -181,19 +267,34 @@ def run_research_workflow(
             resume = None
         thread_id = run.workflow_thread_id
 
-    registry = _registry_for_mode(settings)
+    workflow_registry = registry or _registry_for_mode(settings)
+    tracer = tracer or build_tracer(
+        run_id=run_id,
+        project_id=project_id,
+        settings=settings,
+    )
+    instrument_registry(workflow_registry, tracer)
+    tracer.start(
+        input_metadata={
+            "run_id": str(run_id),
+            "project_id": str(project_id),
+            "resumed": resume is not None,
+        }
+    )
     ctx = ResearchContext(
         database=database,
         settings=settings,
         project_id=project_id,
         run_id=run_id,
-        registry=registry,
+        registry=workflow_registry,
         storage=get_file_storage(),
+        tracer=tracer,
     )
     config = {
         "configurable": {"thread_id": thread_id},
         "recursion_limit": _RECURSION_LIMIT,
     }
+    trace_error: BaseException | None = None
     try:
         with _postgres_checkpointer(settings) as checkpointer:
             graph = build_research_graph(ctx, checkpointer)
@@ -214,6 +315,7 @@ def run_research_workflow(
                         "current_node": "start",
                     },
                     config,
+                    interrupt_after=interrupt_after,
                 )
             else:
                 graph.invoke(None, config)
@@ -241,13 +343,29 @@ def run_research_workflow(
     except RunFinished:
         pass
     except NodeTimeoutError as exc:
+        trace_error = exc
         raise TransientRunError(str(exc)) from exc
     except (StorageError, SQLAlchemyError) as exc:
+        trace_error = exc
         raise TransientRunError(
             f"{type(exc).__name__}: workflow storage or database failure"
         ) from exc
+    except Exception as exc:
+        trace_error = exc
+        raise
     finally:
-        registry.close()
+        workflow_registry.close()
+        with database.session() as session:
+            run = session.get(ResearchRun, run_id)
+            trace_status = run.status.value if run is not None else "unknown"
+        if trace_error is not None:
+            trace_status = "failed"
+        tracer.finish(
+            status=trace_status,
+            output={"run_id": str(run_id), "project_id": str(project_id)},
+            error=trace_error,
+        )
+        tracer.close()
 
     with database.session() as session:
         run = session.get(ResearchRun, run_id)

@@ -83,6 +83,17 @@ class Settings(BaseSettings):
     research_chunk_max_chars: int = Field(default=1200, ge=200, le=10000)
     research_llm_writing_enabled: bool = False
     research_claim_llm_review: bool = False
+    max_active_runs_per_project: int = Field(default=3, ge=0, le=100)
+
+    # Optional Langfuse ingestion. Disabled by default so the MVP runs fully
+    # offline; when enabled, trace metadata is sent without prompts, source
+    # text, or credentials unless observability_include_content is explicitly set.
+    langfuse_enabled: bool = False
+    langfuse_host: str = "https://cloud.langfuse.com"
+    langfuse_public_key: SecretStr | None = None
+    langfuse_secret_key: SecretStr | None = None
+    langfuse_timeout_seconds: float = Field(default=5.0, gt=0, le=60)
+    observability_include_content: bool = False
 
     # pgvector's HNSW index supports at most 2000 dimensions. Changing this
     # value requires a new Alembic migration for document_chunks.embedding.

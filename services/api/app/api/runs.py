@@ -33,6 +33,7 @@ from dr_core.db.repositories import (
 from dr_core.db.repositories.exceptions import EntityNotFound
 from dr_core.schemas import RunCreate
 from dr_core.services import (
+    ActiveRunLimitExceeded,
     create_run_with_event,
     fail_run,
     request_run_cancel,
@@ -102,11 +103,19 @@ def create_run(
 
     payload = body or RunCreate()
     effective_key = idempotency_key or payload.idempotency_key
-    run, created = create_run_with_event(
-        get_database(),
-        project_id,
-        RunCreate(idempotency_key=effective_key),
-    )
+    try:
+        run, created = create_run_with_event(
+            get_database(),
+            project_id,
+            RunCreate(idempotency_key=effective_key),
+            max_active_runs=get_settings().max_active_runs_per_project,
+        )
+    except ActiveRunLimitExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=str(exc),
+            headers={"Retry-After": "30"},
+        ) from exc
 
     if created:
         try:

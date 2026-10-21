@@ -3,10 +3,12 @@ from functools import lru_cache
 from celery import Celery
 
 from dr_core.config import get_settings
+from dr_core.observability import install_log_redaction
 
 
 def create_celery_app(include: list[str] | None = None) -> Celery:
     settings = get_settings()
+    install_log_redaction()
     app = Celery(
         "dr_worker",
         broker=settings.celery_broker_url,

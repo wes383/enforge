@@ -25,6 +25,10 @@ from dr_core.services.run_state import (
 _ERROR_SUMMARY_LIMIT = 4000
 
 
+class ActiveRunLimitExceeded(Exception):
+    pass
+
+
 @dataclass(frozen=True, slots=True)
 class CancelOutcome:
     run: ResearchRun
@@ -46,9 +50,26 @@ def create_run_with_event(
     database: Database,
     project_id: UUID,
     data: RunCreate,
+    *,
+    max_active_runs: int = 0,
 ) -> tuple[ResearchRun, bool]:
     with database.session_scope() as session:
-        run, created = RunRepository(session).create_or_get(project_id, data)
+        repository = RunRepository(session)
+        if data.idempotency_key:
+            existing = repository.find_by_idempotency_key(
+                project_id,
+                data.idempotency_key,
+            )
+            if existing is not None:
+                return existing, False
+        if (
+            max_active_runs > 0
+            and repository.count_active_for_project(project_id) >= max_active_runs
+        ):
+            raise ActiveRunLimitExceeded(
+                f"Project already has {max_active_runs} active research runs"
+            )
+        run, created = repository.create_or_get(project_id, data)
         if created:
             RunEventRepository(session).append(
                 run.project_id,

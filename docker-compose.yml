@@ -52,6 +52,13 @@ x-app-environment: &app-environment
   RESEARCH_CHUNK_MAX_CHARS: "${RESEARCH_CHUNK_MAX_CHARS:-1200}"
   RESEARCH_LLM_WRITING_ENABLED: "${RESEARCH_LLM_WRITING_ENABLED:-false}"
   RESEARCH_CLAIM_LLM_REVIEW: "${RESEARCH_CLAIM_LLM_REVIEW:-false}"
+  MAX_ACTIVE_RUNS_PER_PROJECT: "${MAX_ACTIVE_RUNS_PER_PROJECT:-3}"
+  LANGFUSE_ENABLED: "${LANGFUSE_ENABLED:-false}"
+  LANGFUSE_HOST: "${LANGFUSE_HOST:-https://cloud.langfuse.com}"
+  LANGFUSE_PUBLIC_KEY: "${LANGFUSE_PUBLIC_KEY:-}"
+  LANGFUSE_SECRET_KEY: "${LANGFUSE_SECRET_KEY:-}"
+  LANGFUSE_TIMEOUT_SECONDS: "${LANGFUSE_TIMEOUT_SECONDS:-5}"
+  OBSERVABILITY_INCLUDE_CONTENT: "${OBSERVABILITY_INCLUDE_CONTENT:-false}"
   PARSER_MAX_INPUT_BYTES: "${PARSER_MAX_INPUT_BYTES:-5242880}"
   PARSER_MAX_OUTPUT_CHARS: "${PARSER_MAX_OUTPUT_CHARS:-2000000}"
   PARSER_MAX_PDF_PAGES: "${PARSER_MAX_PDF_PAGES:-200}"
@@ -232,7 +239,7 @@ services:
       [
         "sh",
         "-c",
-        "alembic upgrade head && pytest -q tests/unit tests/integration",
+        "alembic upgrade head && pytest -q tests/unit tests/integration tests/evaluation",
       ]
     depends_on:
       migrate:

@@ -15,6 +15,7 @@ from dr_core.db.enums import RunEventType, RunStatus
 from dr_core.db.models import ResearchProject, ResearchRun
 from dr_core.db.repositories import RunEventRepository
 from dr_core.db.repositories.exceptions import EntityNotFound
+from dr_core.observability.tracing import ResearchTracer
 from dr_core.providers.registry import ProviderRegistry
 from dr_core.schemas import RunEventCreate
 from dr_core.services.runs import finalize_cancelled_run, lock_run, transition_run
@@ -41,6 +42,7 @@ class ResearchContext:
     run_id: UUID
     registry: ProviderRegistry
     storage: FileStorage
+    tracer: ResearchTracer
 
     def load_run(self, session) -> ResearchRun:
         run = session.get(ResearchRun, self.run_id)
