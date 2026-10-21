@@ -20,9 +20,12 @@ from dr_core.db.enums import (
 from dr_core.db.models import (
     Artifact,
     CitationAudit,
+    Claim,
+    ClaimEvidence,
     DocumentChunk,
     DraftSection,
     EvidenceItem,
+    Outline,
     ResearchProject,
     ResearchQuestion,
     ResearchRun,
@@ -142,6 +145,20 @@ def _wait_for_run(client, run_id, statuses, timeout=POLL_TIMEOUT_SECONDS):
     raise AssertionError(f"run {run_id} did not reach {statuses}; last: {last}")
 
 
+def _wait_for_checkpoint(client, run_id, *, exclude=None, timeout=POLL_TIMEOUT_SECONDS):
+    deadline = time.monotonic() + timeout
+    last = None
+    while time.monotonic() < deadline:
+        last = _get_run(client, run_id)
+        checkpoint_id = last.get("checkpoint_id")
+        if checkpoint_id and checkpoint_id != exclude:
+            return last
+        if last["status"] == "failed":
+            raise AssertionError(f"run failed: {last}")
+        time.sleep(POLL_INTERVAL_SECONDS)
+    raise AssertionError(f"run {run_id} did not persist a checkpoint; last: {last}")
+
+
 def _approvals(client, run_id, *, status=None):
     params = {"status": status} if status else {}
     response = client.get(f"{API}/runs/{run_id}/approvals", params=params)
@@ -208,7 +225,7 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
     assert plan["version"] == 1
     assert len(plan["payload"]["questions"]) >= 3
 
-    paused = _get_run(client, run["id"])
+    paused = _wait_for_checkpoint(client, run["id"])
     assert paused["status"] == "awaiting_approval"
     assert paused["checkpoint_id"]
 
@@ -234,10 +251,29 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
     assert approved.json()["status"] == "approved"
 
     outline = _wait_for_approval(client, run["id"], "outline", timeout=90)
-    paused_again = _get_run(client, run["id"])
+    paused_again = _wait_for_checkpoint(
+        client,
+        run["id"],
+        exclude=first_checkpoint,
+    )
     assert paused_again["status"] == "awaiting_approval"
     assert paused_again["checkpoint_id"]
     assert paused_again["checkpoint_id"] != first_checkpoint
+
+    outline_sections = outline["payload"]["outline"]["sections"]
+    assert outline_sections
+    for section in outline_sections:
+        assert section["purpose"]
+        assert section["target_words"] >= 50
+        assert section["status"] == "planned"
+        assert isinstance(section["key_claims"], list)
+        assert set(section["support_evidence_ids"]) <= set(
+            section["evidence_ids"]
+        )
+        assert set(section["refute_evidence_ids"]) <= set(
+            section["evidence_ids"]
+        )
+    assert any(section["key_claims"] for section in outline_sections)
 
     with database.session() as session:
         question_count = session.scalar(
@@ -326,11 +362,27 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
                 )
             )
         )
+        claims = list(
+            session.scalars(
+                select(Claim).where(Claim.run_id == UUID(run["id"]))
+            )
+        )
+        claim_links = list(
+            session.scalars(
+                select(ClaimEvidence).where(
+                    ClaimEvidence.project_id == UUID(project["id"])
+                )
+            )
+        )
+        outline_record = session.scalar(
+            select(Outline).where(Outline.run_id == UUID(run["id"]))
+        )
     assert {item.artifact_type.value for item in artifacts} == {
         "research_report",
         "reference_list",
         "markdown_export",
         "evidence_matrix",
+        "citation_audit",
     }
     assert sections
     assert all(
@@ -338,6 +390,39 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
     )
     assert audits
     assert not any(item.status.value == "failed" for item in audits)
+
+    assert outline_record is not None
+    assert all(
+        section["status"] == "verified"
+        for section in outline_record.content["sections"]
+    )
+    assert claims
+    assert claim_links
+    linked_claims = {link.claim_id for link in claim_links}
+    assert linked_claims <= {claim.id for claim in claims}
+    evidence_ids = {item.id for item in evidence_items}
+    assert all(link.evidence_id in evidence_ids for link in claim_links)
+    supported = [
+        claim
+        for claim in claims
+        if claim.verification_status.value == "SUPPORTED"
+    ]
+    link_reasons = {}
+    for link in claim_links:
+        link_reasons.setdefault(link.claim_id, []).append(link.rationale)
+    assert supported, [
+        (
+            claim.claim_text[:60],
+            claim.verification_status.value,
+            link_reasons.get(claim.id),
+        )
+        for claim in claims[:10]
+    ]
+    assert all(claim.id in linked_claims for claim in supported)
+    assert not any(
+        claim.verification_status.value == "SUPPORTED" and claim.id not in linked_claims
+        for claim in claims
+    )
 
     assert chunks
     assert any(chunk.embedding is not None for chunk in chunks)
@@ -365,11 +450,38 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
     assert "Phase 5 workflow test" in content
     assert "## Evidence Coverage" in content
     assert "## References" in content
+    assert "## Claim Verification" in content
+    assert "## Reference Audit" in content
     body, reference_block = content.split("## References", 1)
     cited = set(re.findall(r"\[S(\d+)\]", body))
     listed = set(re.findall(r"\[S(\d+)\]", reference_block))
     assert cited
     assert cited <= listed
+
+    verification_artifact = next(
+        item for item in artifacts if item.artifact_type.value == "citation_audit"
+    )
+    verification = json.loads(
+        get_file_storage().read(verification_artifact.storage_key).decode("utf-8")
+    )
+    assert verification["citation_audit"]["passed"] >= 1
+    assert verification["reference_audit"]["cited_source_ids"]
+    assert not verification["reference_audit"]["dangling_markers"]
+    assert verification["claims"]
+    assert verification["claim_summary"]["total"] == len(claims)
+    verified_claims = {
+        claim["claim_text"]: claim for claim in verification["claims"]
+    }
+    for claim in claims:
+        record = verified_claims[claim.claim_text]
+        assert record["status"] == claim.verification_status.value
+        if record["status"] != "SUPPORTED":
+            assert record["status"] in {
+                "PARTIAL",
+                "CONTRADICTED",
+                "UNSUPPORTED",
+                "UNVERIFIABLE",
+            }
 
     matrix_artifact = next(
         item for item in artifacts if item.artifact_type.value == "evidence_matrix"

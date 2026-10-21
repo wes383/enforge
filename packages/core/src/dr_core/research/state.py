@@ -22,7 +22,9 @@ class ResearchState(TypedDict, total=False):
     outline: dict[str, Any]
     outline_id: str
     sections: list[dict[str, Any]]
+    claims: list[dict[str, Any]]
     citation_audit: dict[str, Any]
+    reference_audit: dict[str, Any]
     artifacts: list[dict[str, Any]]
     feedback: dict[str, Any]
     limitations: list[str]

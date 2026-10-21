@@ -1,0 +1,658 @@
+import json
+from datetime import date
+from types import SimpleNamespace
+from uuid import uuid4
+
+from dr_core.db.enums import (
+    ClaimType,
+    ClaimVerificationStatus,
+    EvidenceRelation,
+    EvidenceType,
+    ProjectLanguage,
+    ResearchDepth,
+    SourceType,
+)
+from dr_core.research.claims import (
+    ClaimCandidate,
+    audit_references,
+    extract_claims,
+    merged_status,
+    review_claim_with_llm,
+    verify_claim,
+)
+from dr_core.research.generation import build_outline
+from dr_core.research.models import (
+    EvidenceMatrix,
+    EvidenceRow,
+    ResearchBrief,
+    ResearchGap,
+    ResearchPlan,
+    ResearchQuestion,
+)
+from dr_core.research.writing import compose_section, numeric_tokens
+
+
+def _brief(**overrides) -> ResearchBrief:
+    values = {
+        "project_id": uuid4(),
+        "run_id": uuid4(),
+        "title": "Research",
+        "topic": "AI regulation",
+        "language": ProjectLanguage.EN,
+        "research_depth": ResearchDepth.STANDARD,
+    }
+    values.update(overrides)
+    return ResearchBrief(**values)
+
+
+def _source(*, title="Regulatory study", **overrides):
+    values = {
+        "id": uuid4(),
+        "title": title,
+        "authors": ["Ada Lovelace"],
+        "published_at": date(2024, 5, 1),
+        "venue": "Journal of Tests",
+        "publisher": "Example Press",
+        "doi": "10.1234/study",
+        "canonical_url": "https://example.org/study",
+        "source_type": SourceType.JOURNAL_ARTICLE,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
+def _evidence(
+    question_id,
+    source_id,
+    *,
+    evidence_type=EvidenceType.DIRECT_SUPPORT,
+    claim_summary="Enforcement improves compliance in audited firms.",
+    quoted_text=(
+        "Enforcement improves compliance among audited firms, although costs increase."
+    ),
+    locator=None,
+):
+    return SimpleNamespace(
+        id=uuid4(),
+        research_question_id=question_id,
+        source_id=source_id,
+        source_version_id=uuid4(),
+        evidence_type=evidence_type,
+        claim_summary=claim_summary,
+        quoted_text=quoted_text,
+        context_before="The study reports the following result.",
+        context_after="The authors discuss limitations next.",
+        locator=locator if locator is not None else {"kind": "source_text"},
+    )
+
+
+def _section(
+    question_id,
+    *,
+    index=1,
+    title="Question",
+    key_claims=None,
+    next_title=None,
+    evidence=(),
+    matrix=None,
+    llm=None,
+    brief=None,
+    numbering=None,
+):
+    support, refute = [], []
+    for item in evidence:
+        (refute if item.evidence_type is EvidenceType.REFUTATION else support).append(
+            item
+        )
+    if matrix is None:
+        matrix = EvidenceMatrix(
+            rows=[
+                EvidenceRow(
+                    question_id=question_id,
+                    question=title,
+                    support_count=len(support),
+                    refute_count=len(refute),
+                    independent_source_count=2,
+                    conclusion="Evidence is mixed; the conclusion is provisional.",
+                    support_evidence_ids=[item.id for item in support],
+                    refute_evidence_ids=[item.id for item in refute],
+                )
+            ],
+            total_evidence=len(evidence),
+            source_count=2,
+            independent_source_count=2,
+            coverage_ratio=0.5,
+        )
+    sources = {}
+    for item in evidence:
+        sources.setdefault(
+            item.source_id,
+            _source(title=f"Source {len(sources) + 1}"),
+        )
+    if numbering is None:
+        numbering = {
+            source_id: position + 1
+            for position, source_id in enumerate(sources)
+        }
+    draft_section = SimpleNamespace(
+        index=index,
+        title=title,
+        purpose="Synthesize the evidence.",
+        question_id=question_id,
+        key_claims=key_claims or [],
+        target_words=400,
+        evidence_ids=[item.id for item in evidence],
+    )
+    draft = compose_section(
+        section=draft_section,
+        brief=brief or _brief(),
+        matrix=matrix,
+        gaps=[],
+        limitations=[],
+        evidence=list(evidence),
+        sources=sources,
+        numbering=numbering,
+        next_section_title=next_title,
+        llm=llm,
+    )
+    return draft, sources, numbering, matrix
+
+
+class _FakeLLM:
+    name = "fake-llm"
+
+    def __init__(self, payload):
+        self.text = payload if isinstance(payload, str) else json.dumps(payload)
+
+    def generate(self, prompt, *, system=None, max_tokens=None, temperature=0.0):
+        return SimpleNamespace(text=self.text)
+
+
+def test_outline_populates_claims_evidence_and_target_words():
+    question_id = uuid4()
+    source_a = _source(title="Support study")
+    source_b = _source(title="Refuting study")
+    support = _evidence(question_id, source_a.id)
+    refute = _evidence(
+        question_id,
+        source_b.id,
+        evidence_type=EvidenceType.REFUTATION,
+        claim_summary="Audits do not improve compliance in small firms.",
+        quoted_text="Audits do not improve compliance in small firms.",
+    )
+    plan = ResearchPlan(
+        summary="Plan",
+        questions=[
+            ResearchQuestion(question_id=question_id, question="Does enforcement work?")
+        ],
+    )
+    matrix = EvidenceMatrix(
+        rows=[
+            EvidenceRow(
+                question_id=question_id,
+                question="Does enforcement work?",
+                support_count=1,
+                refute_count=1,
+                independent_source_count=2,
+                conclusion="Evidence is mixed; the conclusion is provisional.",
+                support_evidence_ids=[support.id],
+                refute_evidence_ids=[refute.id],
+            )
+        ],
+        total_evidence=2,
+        source_count=2,
+        independent_source_count=2,
+        contradiction_count=1,
+        coverage_ratio=1.0,
+    )
+    outline = build_outline(
+        _brief(),
+        plan,
+        matrix,
+        [ResearchGap(question="Open question", reason="Missing data")],
+        version=1,
+        evidence_by_question={question_id: [support, refute]},
+    )
+
+    assert outline.sections[0].key_claims
+    assert outline.sections[0].support_evidence_ids
+    assert outline.sections[0].target_words >= 50
+    question_section = outline.sections[1]
+    assert question_section.question_id == question_id
+    assert question_section.support_evidence_ids == [support.id]
+    assert question_section.refute_evidence_ids == [refute.id]
+    assert question_section.evidence_ids == [support.id, refute.id]
+    assert question_section.key_claims[0].startswith("Enforcement improves")
+    assert question_section.status == "planned"
+    titles = [section.title for section in outline.sections]
+    assert "Contradictions and Counter-Evidence" in titles
+    assert "Limitations and Open Questions" in titles
+    assert outline.sections[-1].evidence_ids == [support.id, refute.id]
+
+    deep = build_outline(
+        _brief(research_depth=ResearchDepth.DEEP),
+        plan,
+        matrix,
+        [],
+        version=1,
+        evidence_by_question={question_id: [support, refute]},
+    )
+    quick = build_outline(
+        _brief(research_depth=ResearchDepth.QUICK),
+        plan,
+        matrix,
+        [],
+        version=1,
+        evidence_by_question={question_id: [support, refute]},
+    )
+    assert deep.sections[1].target_words > quick.sections[1].target_words
+
+
+def test_deterministic_section_cites_only_selected_evidence_and_transitions():
+    question_id = uuid4()
+    source_a = _source(title="Support study")
+    source_b = _source(title="Refuting study")
+    support = _evidence(question_id, source_a.id)
+    refute = _evidence(
+        question_id,
+        source_b.id,
+        evidence_type=EvidenceType.REFUTATION,
+        claim_summary="Audits do not improve compliance in small firms.",
+        quoted_text="Audits do not improve compliance in small firms.",
+    )
+    draft, sources, numbering, _ = _section(
+        question_id,
+        title="Does enforcement work?",
+        key_claims=[support.claim_summary],
+        next_title="Conclusion",
+        evidence=[support, refute],
+    )
+
+    assert draft.content.startswith("## Does enforcement work?")
+    assert "This section addresses:" in draft.content
+    assert support.claim_summary[:40] in draft.content
+    assert "Counter-evidence" not in draft.content
+    assert "Contrary evidence and competing views:" in draft.content
+    assert "The next section discusses: Conclusion." in draft.content
+    assert not draft.used_llm
+    assert set(draft.citation_map) == {
+        f"S{numbering[source_a.id]}",
+        f"S{numbering[source_b.id]}",
+    }
+    assert set(draft.citation_map.values()) == {str(source_a.id), str(source_b.id)}
+    assert set(draft.evidence_ids) == {support.id, refute.id}
+    for marker in draft.citation_map:
+        assert f"[{marker}]" in draft.content
+
+
+def test_section_without_evidence_does_not_assert_conclusions():
+    draft, _, _, _ = _section(uuid4(), title="Unanswered question", evidence=[])
+
+    assert "No evidence is available" in draft.content
+    assert not draft.citation_map
+    assert not draft.evidence_ids
+
+
+def test_llm_section_accepts_valid_markdown_with_only_supplied_markers():
+    question_id = uuid4()
+    support = _evidence(question_id, uuid4())
+    llm = _FakeLLM(
+        {"markdown": "## Question\n\nEnforcement improves compliance [S1]."}
+    )
+    draft, sources, numbering, matrix = _section(
+        question_id,
+        title="Does enforcement work?",
+        evidence=[support],
+        llm=llm,
+    )
+
+    assert draft.used_llm
+    assert draft.content.startswith("## Question")
+    assert draft.citation_map == {"S1": str(support.source_id)}
+    assert draft.evidence_ids == [support.id]
+
+
+def test_llm_section_falls_back_on_unsafe_output():
+    question_id = uuid4()
+    support = _evidence(question_id, uuid4())
+    source_id = support.source_id
+
+    unknown = _FakeLLM({"markdown": "## Q\n\nClaim [S7]."})
+    draft, _, _, _ = _section(
+        question_id, evidence=[support], llm=unknown
+    )
+    assert not draft.used_llm
+    assert "Claim [S7]" not in draft.content
+
+    invented_number = _FakeLLM(
+        {"markdown": "## Q\n\nEfficiency rose 87% [S1]."}
+    )
+    draft, _, _, _ = _section(
+        question_id, evidence=[support], llm=invented_number
+    )
+    assert not draft.used_llm
+    assert "87%" not in draft.content
+
+    reference_list = _FakeLLM(
+        {
+            "markdown": (
+                "## Q\n\nEnforcement works [S1].\n\n"
+                "## References\n\n[S1] Fabricated."
+            )
+        }
+    )
+    draft, _, _, _ = _section(
+        question_id, evidence=[support], llm=reference_list
+    )
+    assert not draft.used_llm
+    assert draft.citation_map == {"S1": str(source_id)}
+
+
+def test_llm_section_rejects_uncited_paragraphs():
+    question_id = uuid4()
+    support = _evidence(question_id, uuid4())
+    llm = _FakeLLM(
+        {"markdown": "## Q\n\nFirst claim [S1].\n\nSecond unsupported sentence."}
+    )
+    draft, _, _, _ = _section(question_id, evidence=[support], llm=llm)
+
+    assert not draft.used_llm
+
+
+def test_claim_extraction_flags_uncited_numeric_claims():
+    section = SimpleNamespace(
+        section_index=1,
+        title="Question",
+        content_markdown=(
+            "## Question\n\n"
+            "Enforcement improves compliance in audited firms [S1]. "
+            "Efficiency improved by 87 percent across all firms. "
+            "This section describes the evidence base. "
+            "Policymakers should publish enforcement statistics."
+        ),
+        citation_map={"S1": str(uuid4())},
+    )
+    claims = extract_claims(section)
+    texts = [claim.text for claim in claims]
+
+    assert any("Enforcement improves" in text for text in texts)
+    assert any("87 percent" in text for text in texts)
+    assert not any("describes the evidence base" in text for text in texts)
+    numeric = next(claim for claim in claims if "87 percent" in claim.text)
+    assert numeric.claim_type is ClaimType.QUANTITATIVE
+    assert not numeric.markers
+
+
+def test_claim_extraction_keeps_markers_after_quoted_questions():
+    section = SimpleNamespace(
+        section_index=0,
+        title="Introduction",
+        content_markdown=(
+            "## Introduction\n\n"
+            "Key findings include:\n"
+            "- Deterministic mock snippet 3 about What key evidence is available? [S1]\n"
+            "- Evidence from “Paper: What is covered?” states the result [S2].\n"
+        ),
+        citation_map={"S1": str(uuid4()), "S2": str(uuid4())},
+    )
+    claims = extract_claims(section)
+
+    assert all(claim.text != "Key findings include:" for claim in claims)
+    assert any(
+        "What key evidence is available?" in claim.text and claim.markers == ("S1",)
+        for claim in claims
+    )
+    assert any(
+        "Paper: What is covered?" in claim.text and claim.markers == ("S2",)
+        for claim in claims
+    )
+
+
+def _assessment(claim_text, *, markers, evidence=None, section_title="Q"):
+    question_id = uuid4()
+    source = _source()
+    item = _evidence(question_id, source.id)
+    if evidence is not None:
+        item = evidence
+        source = _source(id=item.source_id)
+    candidate = ClaimCandidate(
+        section_index=1,
+        text=claim_text,
+        claim_type=ClaimType.FACTUAL,
+        markers=markers,
+    )
+    section = SimpleNamespace(
+        title=section_title,
+        citation_map={"S1": str(source.id)},
+        evidence_ids=[item.id],
+    )
+    assessment = verify_claim(
+        candidate,
+        section=section,
+        sources_by_id={source.id: source},
+        evidence_by_id={item.id: item},
+        evidence_by_source={source.id: [item]},
+        traceable=lambda _: True,
+    )
+    return assessment, item
+
+
+def test_claim_verification_accepts_traceable_evidence():
+    assessment, item = _assessment(
+        "Enforcement improves compliance in audited firms.",
+        markers=("S1",),
+    )
+
+    assert assessment.status is ClaimVerificationStatus.SUPPORTED
+    assert assessment.evidence_ids == [item.id]
+    assert assessment.relations[item.id] is EvidenceRelation.SUPPORTS
+
+
+def test_claim_verification_downgrades_for_numeric_and_locator_mismatch():
+    question_id = uuid4()
+    source = _source()
+    item = _evidence(
+        question_id,
+        source.id,
+        quoted_text="Enforcement improves compliance in 40 percent of audited firms.",
+    )
+    candidate = ClaimCandidate(
+        section_index=1,
+        text="Enforcement improves compliance in 87 percent of audited firms.",
+        claim_type=ClaimType.QUANTITATIVE,
+        markers=("S1",),
+    )
+    section = SimpleNamespace(
+        title="Q",
+        citation_map={"S1": str(source.id)},
+        evidence_ids=[item.id],
+    )
+    assessment = verify_claim(
+        candidate,
+        section=section,
+        sources_by_id={source.id: source},
+        evidence_by_id={item.id: item},
+        evidence_by_source={source.id: [item]},
+        traceable=lambda _: False,
+    )
+
+    assert assessment.status is ClaimVerificationStatus.PARTIAL
+    assert any("87" in reason for reason in assessment.reasons)
+    assert any("relocated" in reason for reason in assessment.reasons)
+
+
+def test_claim_verification_treats_refutation_as_contradiction():
+    question_id = uuid4()
+    source = _source()
+    refute = _evidence(
+        question_id,
+        source.id,
+        evidence_type=EvidenceType.REFUTATION,
+        claim_summary="Audits fail to improve compliance in small firms.",
+        quoted_text="Audits fail to improve compliance in small firms.",
+    )
+    assessment, item = _assessment(
+        "Enforcement improves compliance in audited firms.",
+        markers=("S1",),
+        evidence=refute,
+        section_title="Question",
+    )
+
+    assert assessment.status is ClaimVerificationStatus.CONTRADICTED
+    assert assessment.relations[item.id] is EvidenceRelation.REFUTES
+
+
+def test_uncited_claims_are_unsupported_or_unverifiable():
+    factual = ClaimCandidate(
+        section_index=1,
+        text="Enforcement improves compliance in audited firms.",
+        claim_type=ClaimType.FACTUAL,
+        markers=(),
+    )
+    normative = ClaimCandidate(
+        section_index=1,
+        text="Policymakers should publish enforcement statistics.",
+        claim_type=ClaimType.NORMATIVE,
+        markers=(),
+        normative=True,
+    )
+    section = SimpleNamespace(title="Q", citation_map={}, evidence_ids=[])
+    for candidate, expected in (
+        (factual, ClaimVerificationStatus.UNSUPPORTED),
+        (normative, ClaimVerificationStatus.UNVERIFIABLE),
+    ):
+        assessment = verify_claim(
+            candidate,
+            section=section,
+            sources_by_id={},
+            evidence_by_id={},
+            evidence_by_source={},
+            traceable=lambda _: True,
+        )
+        assert assessment.status is expected
+
+
+def test_merged_status_never_upgrades_an_existing_failure():
+    assert (
+        merged_status(
+            ClaimVerificationStatus.UNSUPPORTED,
+            ClaimVerificationStatus.SUPPORTED,
+        )
+        is ClaimVerificationStatus.UNSUPPORTED
+    )
+    assert (
+        merged_status(
+            ClaimVerificationStatus.PARTIAL,
+            ClaimVerificationStatus.SUPPORTED,
+        )
+        is ClaimVerificationStatus.PARTIAL
+    )
+    assert (
+        merged_status(
+            ClaimVerificationStatus.SUPPORTED,
+            ClaimVerificationStatus.PARTIAL,
+        )
+        is ClaimVerificationStatus.PARTIAL
+    )
+    assert (
+        merged_status(None, ClaimVerificationStatus.SUPPORTED)
+        is ClaimVerificationStatus.SUPPORTED
+    )
+    assert (
+        merged_status(
+            ClaimVerificationStatus.PENDING,
+            ClaimVerificationStatus.SUPPORTED,
+        )
+        is ClaimVerificationStatus.SUPPORTED
+    )
+
+
+def test_llm_claim_review_only_downgrades():
+    assessment, _ = _assessment(
+        "Enforcement improves compliance in audited firms.",
+        markers=("S1",),
+    )
+    assessment.status = ClaimVerificationStatus.PARTIAL
+    upgraded = review_claim_with_llm(
+        _FakeLLM({"status": "SUPPORTED", "reason": "fine"}),
+        assessment,
+        [],
+    )
+    assert upgraded.status is ClaimVerificationStatus.PARTIAL
+
+    downgraded = review_claim_with_llm(
+        _FakeLLM({"status": "CONTRADICTED", "reason": "quote is conditional"}),
+        assessment,
+        [],
+    )
+    assert downgraded.status is ClaimVerificationStatus.PARTIAL
+
+
+def test_reference_audit_reports_dangling_unused_and_incomplete():
+    cited_source = _source(title="Cited study")
+    incomplete = _source(
+        title="Blog summary",
+        authors=[],
+        published_at=None,
+        venue=None,
+        publisher=None,
+        doi=None,
+        canonical_url=None,
+        source_type=SourceType.WEB_PAGE,
+    )
+    unused = _source(title="Unused study")
+    mapped_unused = _source(title="Mapped but unused")
+    sections = [
+        SimpleNamespace(
+            section_index=0,
+            content_markdown="Claim [S1] and incomplete [S2] and missing [S9].",
+            citation_map={
+                "S1": str(cited_source.id),
+                "S2": str(incomplete.id),
+                "S3": str(mapped_unused.id),
+            },
+        )
+    ]
+    audit = audit_references(
+        sections,
+        {
+            cited_source.id: cited_source,
+            incomplete.id: incomplete,
+            unused.id: unused,
+            mapped_unused.id: mapped_unused,
+        },
+        {
+            cited_source.id,
+            incomplete.id,
+            unused.id,
+            mapped_unused.id,
+        },
+    )
+
+    assert audit.cited_source_ids == sorted(
+        [cited_source.id, incomplete.id], key=str
+    )
+    assert audit.unused_source_ids == sorted([unused.id, mapped_unused.id], key=str)
+    assert audit.invalid_metadata_source_ids == [incomplete.id]
+    assert audit.dangling_markers == ["S9"]
+    assert any("S3" in issue and "not used in the body" in issue for issue in audit.issues)
+    assert any("incomplete" in issue for issue in audit.issues)
+
+
+def test_reference_audit_flags_unnormalized_identifiers():
+    source = _source(
+        doi="https://doi.org/10.1234/STUDY",
+        canonical_url="HTTPS://Example.org/Paper/?utm_source=newsletter",
+    )
+    sections = [
+        SimpleNamespace(
+            section_index=0,
+            content_markdown="Claim [S1].",
+            citation_map={"S1": str(source.id)},
+        )
+    ]
+    audit = audit_references(sections, {source.id: source}, {source.id})
+
+    assert audit.invalid_metadata_source_ids == [source.id]
+    assert any("DOI" in issue and "not normalized" in issue for issue in audit.issues)
+    assert any("URL" in issue and "not normalized" in issue for issue in audit.issues)

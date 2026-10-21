@@ -182,26 +182,45 @@ def build_outline(
     gaps: list[ResearchGap],
     *,
     version: int,
-    evidence_by_question: dict[UUID | None, list[UUID]],
+    evidence_by_question: dict[UUID | None, list],
     feedback: str | None = None,
 ) -> Outline:
     sections: list[OutlineSection] = []
+    all_items = [
+        item for items in evidence_by_question.values() for item in items
+    ]
+    contradiction_ids = [
+        evidence_id
+        for row in matrix.rows
+        if row.support_count and row.refute_count
+        for evidence_id in [*row.support_evidence_ids, *row.refute_evidence_ids]
+    ]
     if brief.language is ProjectLanguage.ZH:
         sections.append(
             OutlineSection(
                 index=0,
                 title="引言",
                 purpose="说明研究问题、范围与方法，并概述主要发现。",
+                key_claims=[item.claim_summary[:300] for item in all_items[:3]],
+                support_evidence_ids=[item.id for item in all_items[:3]],
+                evidence_ids=[item.id for item in all_items[:3]],
+                target_words=_target_words(brief, "intro"),
             )
         )
         for question in plan.questions:
+            items = evidence_by_question.get(question.question_id, [])
+            support, refute = _split_evidence(items)
             sections.append(
                 OutlineSection(
                     index=len(sections),
                     title=_short_title(question.question),
                     purpose="围绕子问题整理支持证据、反方证据与证据强度。",
                     question_id=question.question_id,
-                    evidence_ids=evidence_by_question.get(question.question_id, []),
+                    key_claims=[item.claim_summary[:300] for item in support[:3]],
+                    evidence_ids=[item.id for item in [*support, *refute]],
+                    support_evidence_ids=[item.id for item in support],
+                    refute_evidence_ids=[item.id for item in refute],
+                    target_words=_target_words(brief, "question"),
                 )
             )
         if matrix.contradiction_count:
@@ -210,6 +229,25 @@ def build_outline(
                     index=len(sections),
                     title="矛盾与反方证据",
                     purpose="对比相互冲突的证据并解释分歧来源。",
+                    key_claims=[
+                        row.conclusion
+                        for row in matrix.rows
+                        if row.support_count and row.refute_count
+                    ][:3],
+                    evidence_ids=contradiction_ids,
+                    support_evidence_ids=[
+                        evidence_id
+                        for row in matrix.rows
+                        if row.support_count and row.refute_count
+                        for evidence_id in row.support_evidence_ids
+                    ],
+                    refute_evidence_ids=[
+                        evidence_id
+                        for row in matrix.rows
+                        if row.support_count and row.refute_count
+                        for evidence_id in row.refute_evidence_ids
+                    ],
+                    target_words=_target_words(brief, "contradiction"),
                 )
             )
         if gaps:
@@ -218,6 +256,8 @@ def build_outline(
                     index=len(sections),
                     title="研究局限与未解决问题",
                     purpose="说明检索和证据覆盖的不足，不将空白包装成结论。",
+                    key_claims=[gap.reason[:300] for gap in gaps[:3]],
+                    target_words=_target_words(brief, "limitations"),
                 )
             )
         sections.append(
@@ -225,6 +265,19 @@ def build_outline(
                 index=len(sections),
                 title="结论",
                 purpose="综合证据回答主问题，并说明适用边界。",
+                key_claims=[row.conclusion for row in matrix.rows][:3],
+                evidence_ids=[item.id for item in all_items],
+                support_evidence_ids=[
+                    evidence_id
+                    for row in matrix.rows
+                    for evidence_id in row.support_evidence_ids
+                ],
+                refute_evidence_ids=[
+                    evidence_id
+                    for row in matrix.rows
+                    for evidence_id in row.refute_evidence_ids
+                ],
+                target_words=_target_words(brief, "conclusion"),
             )
         )
     else:
@@ -233,9 +286,15 @@ def build_outline(
                 index=0,
                 title="Introduction",
                 purpose="Frame the research question, scope, method, and key findings.",
+                key_claims=[item.claim_summary[:300] for item in all_items[:3]],
+                support_evidence_ids=[item.id for item in all_items[:3]],
+                evidence_ids=[item.id for item in all_items[:3]],
+                target_words=_target_words(brief, "intro"),
             )
         )
         for question in plan.questions:
+            items = evidence_by_question.get(question.question_id, [])
+            support, refute = _split_evidence(items)
             sections.append(
                 OutlineSection(
                     index=len(sections),
@@ -244,7 +303,11 @@ def build_outline(
                         "Synthesize supporting and opposing evidence and assess its strength."
                     ),
                     question_id=question.question_id,
-                    evidence_ids=evidence_by_question.get(question.question_id, []),
+                    key_claims=[item.claim_summary[:300] for item in support[:3]],
+                    evidence_ids=[item.id for item in [*support, *refute]],
+                    support_evidence_ids=[item.id for item in support],
+                    refute_evidence_ids=[item.id for item in refute],
+                    target_words=_target_words(brief, "question"),
                 )
             )
         if matrix.contradiction_count:
@@ -253,6 +316,25 @@ def build_outline(
                     index=len(sections),
                     title="Contradictions and Counter-Evidence",
                     purpose="Compare conflicting evidence and explain the disagreement.",
+                    key_claims=[
+                        row.conclusion
+                        for row in matrix.rows
+                        if row.support_count and row.refute_count
+                    ][:3],
+                    evidence_ids=contradiction_ids,
+                    support_evidence_ids=[
+                        evidence_id
+                        for row in matrix.rows
+                        if row.support_count and row.refute_count
+                        for evidence_id in row.support_evidence_ids
+                    ],
+                    refute_evidence_ids=[
+                        evidence_id
+                        for row in matrix.rows
+                        if row.support_count and row.refute_count
+                        for evidence_id in row.refute_evidence_ids
+                    ],
+                    target_words=_target_words(brief, "contradiction"),
                 )
             )
         if gaps:
@@ -261,6 +343,8 @@ def build_outline(
                     index=len(sections),
                     title="Limitations and Open Questions",
                     purpose="State evidence gaps without presenting them as conclusions.",
+                    key_claims=[gap.reason[:300] for gap in gaps[:3]],
+                    target_words=_target_words(brief, "limitations"),
                 )
             )
         sections.append(
@@ -268,6 +352,19 @@ def build_outline(
                 index=len(sections),
                 title="Conclusion",
                 purpose="Answer the main question and state boundary conditions.",
+                key_claims=[row.conclusion for row in matrix.rows][:3],
+                evidence_ids=[item.id for item in all_items],
+                support_evidence_ids=[
+                    evidence_id
+                    for row in matrix.rows
+                    for evidence_id in row.support_evidence_ids
+                ],
+                refute_evidence_ids=[
+                    evidence_id
+                    for row in matrix.rows
+                    for evidence_id in row.refute_evidence_ids
+                ],
+                target_words=_target_words(brief, "conclusion"),
             )
         )
 
@@ -322,158 +419,33 @@ def source_numbering(
     return {source_id: index + 1 for index, source_id in enumerate(source_ids)}
 
 
-def write_section(
-    *,
-    section: OutlineSection,
-    brief: ResearchBrief,
-    matrix: EvidenceMatrix,
-    gaps: list[ResearchGap],
-    limitations: list[str],
-    evidence: list,
-    numbering: dict[UUID, int],
-) -> tuple[str, dict[str, str], list[UUID]]:
-    language = brief.language
-    title = section.title
-    lines = [f"## {title}", ""]
-    section_id = section.question_id
-
-    if section.index == 0:
-        if language is ProjectLanguage.ZH:
-            lines.append(
-                f"本文围绕“{brief.topic}”展开，覆盖 {matrix.source_count} 个来源、"
-                f"{matrix.total_evidence} 条证据，整体证据覆盖率为 "
-                f"{matrix.coverage_ratio:.0%}。"
-            )
-        else:
-            lines.append(
-                f"This report examines “{brief.topic}” using {matrix.source_count} "
-                f"sources and {matrix.total_evidence} evidence items; overall "
-                f"question coverage is {matrix.coverage_ratio:.0%}."
-            )
-        if evidence:
-            marker = numbering.get(evidence[0].source_id)
-            if marker:
-                lines.append(
-                    f"主要发现来自可追溯来源 [{_marker(marker)}]。"
-                    if language is ProjectLanguage.ZH
-                    else f"The main findings are drawn from traceable sources [{_marker(marker)}]."
-                )
-        lines.append("")
-        return "\n".join(lines), _map_for_used(evidence[:1], numbering), [
-            evidence[0].id
-        ] if evidence else []
-
-    if section.title in {
-        "研究局限与未解决问题",
-        "Limitations and Open Questions",
-    }:
-        entries = list(dict.fromkeys([*limitations, *(gap.reason for gap in gaps)]))
-        if not entries:
-            entries = (
-                ["未发现需要单独列出的重大局限。"]
-                if language is ProjectLanguage.ZH
-                else ["No material limitations were identified."]
-            )
-        lines.extend(f"- {entry}" for entry in entries[:12])
-        lines.append("")
-        return "\n".join(lines), {}, []
-
-    if section.title in {"矛盾与反方证据", "Contradictions and Counter-Evidence"}:
-        rows = [row for row in matrix.rows if row.refute_count and row.support_count]
-        if not rows:
-            lines.append(
-                "当前证据中未发现明确的正反冲突。"
-                if language is ProjectLanguage.ZH
-                else "No explicit supporting-versus-refuting conflict was found."
-            )
-        for row in rows:
-            lines.append(
-                f"- “{row.question}”同时包含 {row.support_count} 条支持证据和 "
-                f"{row.refute_count} 条反向证据，需要结合来源质量判断。"
-                if language is ProjectLanguage.ZH
-                else (
-                    f"- “{row.question}” has {row.support_count} supporting and "
-                    f"{row.refute_count} refuting items; source quality should be weighed."
-                )
-            )
-        citation_map: dict[str, str] = {}
-        used_ids: list[UUID] = []
-        question_ids = {row.question_id for row in rows}
-        refute_items = [
-            item
-            for item in evidence
-            if item.evidence_type is EvidenceType.REFUTATION
-            and item.research_question_id in question_ids
-        ][:3]
-        for item in refute_items:
-            marker_number = numbering.get(item.source_id)
-            if marker_number is None:
-                continue
-            marker = _marker(marker_number)
-            citation_map[marker] = str(item.source_id)
-            used_ids.append(item.id)
-            lines.append(
-                f"- 反方证据：{item.claim_summary[:400]} [{marker}]"
-                if language is ProjectLanguage.ZH
-                else (
-                    f"- Counter-evidence: {item.claim_summary[:400]} [{marker}]"
-                )
-            )
-        lines.append("")
-        return "\n".join(lines), citation_map, used_ids
-
-    items = [
-        item
-        for item in evidence
-        if section_id is not None and item.research_question_id == section_id
+def _split_evidence(items: list) -> tuple[list, list]:
+    support = [
+        item for item in items if item.evidence_type is not EvidenceType.REFUTATION
     ]
-    if not items:
-        items = evidence[:2]
-    if not items:
-        lines.append(
-            "该部分尚缺少可引用的原始证据，因此不生成结论性陈述。"
-            if language is ProjectLanguage.ZH
-            else "No source-backed evidence is available for this section, so no conclusion is asserted."
-        )
-        lines.append("")
-        return "\n".join(lines), {}, []
-
-    citation_map: dict[str, str] = {}
-    used_ids: list[UUID] = []
-    for item in items[:5]:
-        marker_number = numbering.get(item.source_id)
-        if marker_number is None:
-            continue
-        marker = _marker(marker_number)
-        citation_map[marker] = str(item.source_id)
-        used_ids.append(item.id)
-        stance = ""
-        if item.evidence_type is EvidenceType.REFUTATION:
-            stance = "（反向证据）" if language is ProjectLanguage.ZH else " (counter-evidence)"
-        elif item.evidence_type is EvidenceType.STATISTIC:
-            stance = "（统计证据）" if language is ProjectLanguage.ZH else " (statistical evidence)"
-        lines.append(f"- {item.claim_summary}{stance} [{marker}]")
-    if section.title in {"结论", "Conclusion"} and len(items) > 5:
-        lines.append(
-            f"- 另有 {len(items) - 5} 条证据支持上述综合判断。"
-            if language is ProjectLanguage.ZH
-            else f"- {len(items) - 5} additional evidence items support this synthesis."
-        )
-    lines.append("")
-    return "\n".join(lines), citation_map, used_ids
+    refute = [
+        item for item in items if item.evidence_type is EvidenceType.REFUTATION
+    ]
+    return support, refute
 
 
-def _map_for_used(evidence: list, numbering: dict[UUID, int]) -> dict[str, str]:
-    mapping: dict[str, str] = {}
-    for item in evidence:
-        number = numbering.get(item.source_id)
-        if number is not None:
-            mapping[_marker(number)] = str(item.source_id)
-    return mapping
+_DEPTH_WORD_SCALE = {
+    ResearchDepth.QUICK: 0.75,
+    ResearchDepth.STANDARD: 1.0,
+    ResearchDepth.DEEP: 1.35,
+}
+_BASE_WORDS = {
+    "intro": 260,
+    "question": 520,
+    "contradiction": 420,
+    "limitations": 260,
+    "conclusion": 360,
+}
 
 
-def _marker(number: int) -> str:
-    return f"S{number}"
+def _target_words(brief: ResearchBrief, kind: str) -> int:
+    scale = _DEPTH_WORD_SCALE[brief.research_depth]
+    return max(50, min(5000, round(_BASE_WORDS[kind] * scale)))
 
 
 def _short_title(question: str) -> str:

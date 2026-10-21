@@ -1,6 +1,6 @@
 # Enforge · Deep Research Writing Agent
 
-阶段 6：结构化证据层、证据矩阵与混合检索。本阶段把工作流的证据抽取从简单句子匹配升级为可追溯的结构化证据：每条证据保存来源版本、文本定位、上下文和核验状态；文档在写入时切分为带章节/页码/段落定位的切片，并通过 PostgreSQL 全文检索与 pgvector 向量检索合并召回。证据矩阵按研究问题给出支持/相反证据、独立来源数、来源质量与证据质量理由、未解决缺口，并作为独立 artifact 输出。
+阶段 7：长文写作、引用生成与主张核验。本阶段把提纲扩展为带有写作目的、研究问题、关键主张、支持/反对证据、预期字数和状态的论证结构；分章节写作只读取与该节相关的数据库证据，保存章节版本和实际使用的证据 ID；正文被拆解为事实性主张，按引用存在性、元数据、原文定位、数字/年份一致性、限制条件和反驳证据逐项核验；参考文献、未匹配引用、未使用文献和不完整元数据均由数据库记录与正文自动审计，模型不能生成参考文献。
 
 ## 当前已实现
 
@@ -16,22 +16,28 @@
 - Celery 独立入口与任务：任务 ID 等于运行 ID，重试采用指数退避，永久失败与暂时性失败分类处理，`research` 与 `parse` 队列隔离；文档解析任务只传递项目 ID 和来源版本 ID。
 - 协作式取消：排队和待审批运行立即终止；执行中的任务通过数据库取消标记在安全检查点停止。Celery revoke 仅作加速，不承担正确性。
 - 持久化事件系统：阶段开始/完成/失败、取消请求、重试调度和待审批事件写入 `run_events`，SSE 以数据库事件为唯一真相来源。
-- LangGraph 研究工作流：16 个业务节点加 2 个审批节点，覆盖解析研究简报、规划、检索、规范化、排序、正文获取、文档解析、证据抽取、证据分析、缺口分析、补充检索、提纲、写作、引用核验和报告定稿。
+- LangGraph 研究工作流：17 个业务节点加 2 个审批节点，覆盖解析研究简报、规划、检索、规范化、排序、正文获取、文档解析、证据抽取、证据分析、缺口分析、补充检索、提纲、写作、主张核验、引用核验和报告定稿。
 - 缺口驱动的条件循环：`analyze_gaps` 根据研究问题覆盖率、证据数量与反方证据缺口决定是否进入 `revise_search_plan` 并开始下一轮检索，轮次或预算耗尽后继续生成提纲，而不是固定线性执行。
 - 研究计划与提纲人工审批：通过 LangGraph `interrupt` 暂停，`run_approvals` 表保存待审批版本；批准、拒绝和修改都通过 `Command(resume=...)` 恢复并实际改变后续工作流（拒绝重新规划/重新生成提纲，修改内容直接生效）。
 - 稳定线程 ID 与 PostgreSQL checkpoint：`research_runs.workflow_thread_id` 贯穿首次执行和审批恢复，`checkpoint_id` 同步到运行记录；Worker 重启、任务重试和重复投递都能从最近 checkpoint 继续，节点副作用通过数据库唯一约束保持幂等。
 - 预算与终止语义：最大检索轮次、每轮查询数、来源数、抓取数、抓取并发、证据数、单节点超时、token 预算和成本预算；预算停止写入局限说明并继续产出报告，暂时性错误进入 Celery 重试，永久性错误和超时耗尽明确进入 `failed`。
-- 报告导出：`research_report`、`reference_list`、`markdown_export`、`evidence_matrix` 四种 artifact；报告包含证据覆盖章节，参考文献只从数据库来源元数据按 APA/IEEE/Chicago/MLA 生成，引用标记与参考文献一一对应，不编造文献。
+- 报告导出：`research_report`、`reference_list`、`markdown_export`、`evidence_matrix`、`citation_audit` 五种 artifact；报告包含证据覆盖、主张核验和参考文献审计章节，参考文献只从数据库来源元数据按 APA/IEEE/Chicago/MLA 生成，引用标记与参考文献一一对应，不编造文献。
 - 结构化证据：每条证据保存 `source_id`、`source_version_id`、证据类型、摘要、原文引用、前后上下文、`locator`、核验状态和创建时间；PDF 记录页码，HTML/Markdown 记录章节与段落，搜索结果摘要记录摘要来源。
 - 混合检索：`document_chunks` 保存章节/页码/段落与文本哈希，PostgreSQL `to_tsvector('simple', text)` GIN 索引提供关键词检索，pgvector HNSW 提供向量检索；结果按 RRF 合并，支持项目、来源类型、日期、来源和来源版本过滤，并返回原文、来源、定位和已关联证据 ID。
 - 向量降级：没有 Embedding Provider 或向量调用失败时，关键词检索继续工作；`vector` 模式也会自动降级为关键词检索，不会让研究任务崩溃。
 - 证据质量：区分来源质量（原始来源、作者/机构、时效、方法透明度、撤稿/更正状态）与证据质量（直接性、上下文一致性、独立性、相反证据、适用条件），每项判断保留具体理由；同一 DOI 或同一标题/年份的转述来源不计为独立来源。
 - 证据矩阵：按研究问题输出主要结论、支持/相反证据 ID、独立来源数、来源与证据质量理由、局限和未解决缺口；相反证据完整保留并进入报告，矩阵 JSON 作为 `evidence_matrix` artifact 持久化。
+- 论证型提纲：每个章节保存标题、写作目的、关联研究问题、关键主张、支持证据 ID、反对证据 ID、预期字数和 `planned/drafted/verified` 状态；提纲审批通过后，写作和核验阶段会回写章节状态。
+- 分章节长文写作：写作节点按章节选择数据库证据，正文包含本节问题、核心判断、证据、反方观点、局限和下一节衔接；章节保存 `citation_map`、使用过的证据 ID 和版本，内容变化时自动生成新版本。
+- 可选的模型写作：只有显式配置真实 LLM Provider 且 `RESEARCH_LLM_WRITING_ENABLED=true` 时才启用；输出必须是 JSON，且通过引用标记、段落引用、数字和参考文献禁令校验，否则自动回退到确定性写作。
+- 主张核验：从正文抽取带引用和缺少引用的事实性、量化、因果、比较、规范与预测主张；确定性规则检查引用映射、来源存在性、原文定位、数字/年份一致性、词项支持、绝对化措辞和反驳证据，状态为 `SUPPORTED`/`PARTIAL`/`CONTRADICTED`/`UNSUPPORTED`/`UNVERIFIABLE`，失败的核验结果不会被自动升级。
+- 参考文献审计：正文引用标记映射、悬空标记、映射但未使用、证据来源未被引用、标题/作者/年份/出版方/DOI 或 URL 缺失均由程序检查；审计结果写入报告与核验 artifact。
+- 核验交付物：`citation_audit` JSON artifact 包含引用核验、参考文献审计、逐条主张核验、证据关系和理由；报告包含 `## Claim Verification` 与 `## Reference Audit`，并保留研究局限与未解决问题。
 - 阶段 2 完整数据模型：16 张研究业务表（新增 `run_approvals`）、项目级外键、DOI/URL 去重、幂等唯一约束、相对存储键约束、HNSW 向量索引和全文检索索引。
 - SQLAlchemy 2.0 仓储层，覆盖项目、运行、研究问题、检索、来源、切片、证据、主张、提纲、章节、引用核验、审批、事件和导出文件。
 - Alembic 从空数据库初始化、重复升级、降级/再升级和 `alembic check` 均通过；Compose 中的 `migrate` 服务在 `api`、`worker` 启动前完成迁移。
 - 文件记录与实际文件对账工具，能够报告缺失文件和孤儿文件。
-- 容器内单元测试和集成测试，当前 `205 passed`。
+- 容器内单元测试和集成测试，当前 `221 passed`。
 - 不包含 MinIO、S3 或任何对象存储服务。
 
 ## 服务拓扑
@@ -330,16 +336,18 @@ SSE 使用数据库轮询，每页最多 500 条，按事件 `id` 严格递增�
 | 模块 | 职责 |
 |---|---|
 | `models.py` | `ResearchBrief`、`ResearchPlan`、`ResearchQuestion`、`SearchQuery`、`SourceRecord`、`EvidenceRecord`、`ResearchGap`、`EvidenceMatrix`、`Outline`、`CitationAudit` 等领域模型及约束 |
-| `state.py` | LangGraph 状态：简报、计划、查询、轮次、来源、证据 ID、矩阵、缺口、提纲、章节、引用核验、artifact、反馈与局限 |
+| `state.py` | LangGraph 状态：简报、计划、查询、轮次、来源、证据 ID、矩阵、缺口、提纲、章节、主张、引用核验、参考文献审计、artifact、反馈与局限 |
 | `context.py` | 数据库/存储/提供商上下文、取消与终态检查、节点超时、预算读取、事件写入 |
 | `nodes.py` | 全部节点、条件路由和报告/参考文献生成 |
 | `graph.py` | 图构建、PostgreSQL checkpointer、首次执行/恢复/重试入口 |
-| `generation.py` | 确定性的计划、查询、缺口查询、提纲与章节生成 |
+| `generation.py` | 确定性的计划、查询、缺口查询与论证型提纲生成 |
+| `writing.py` | 分章节长文组织、逐节证据选择、引用映射、可选 LLM 写作及严格校验 |
+| `claims.py` | 主张抽取、确定性核验、保守的模型复核、参考文献审计 |
 | `text.py` | 中英文分句/停用词、证据句提取、引用标记解析和 APA/IEEE/Chicago/MLA 参考文献格式化 |
 
 ### 节点与条件路由
 
-规范中的 16 个研究节点全部实现，并额外提供两个显式审批节点：
+规范中的研究节点全部实现，并额外提供两个显式审批节点：
 
 | 节点 | 行为 |
 |---|---|
@@ -358,9 +366,10 @@ SSE 使用数据库轮询，每页最多 500 条，按事件 `id` 严格递增�
 | `revise_search_plan` | 轮次加一，记录补充检索原因；达到最大轮次或预算上限时停止循环 |
 | `generate_outline` | 生成结构化提纲；被拒绝后根据反馈生成新版本并加入反馈章节 |
 | `await_outline_approval` | 写入待审批记录并 `interrupt`；批准进入写作，拒绝重新生成提纲，修改后提纲生效 |
-| `write_sections` | 按提纲和证据矩阵逐节生成正文，只引用数据库中已有证据，并记录引用映射 |
-| `verify_citations` | 校验正文引用标记、来源存在性和引用映射，写入 `citation_audits` 记录 |
-| `finalize_report` | 生成报告、参考文献列表与 Markdown artifact，写入完成事件并终止运行 |
+| `write_sections` | 按提纲逐节选择数据库证据并生成正文，写入含引用映射、使用证据 ID 和版本的章节；可选 LLM 输出必须通过严格校验 |
+| `verify_claims` | 抽取事实性主张，检查引用映射、原文定位、数字/年份、措辞和反驳证据，写入 `claims` 与 `claim_evidence` |
+| `verify_citations` | 校验正文引用标记、来源存在性和引用映射，写入 `citation_audits` 记录，并审计参考文献与未使用来源 |
+| `finalize_report` | 生成报告、参考文献列表、证据矩阵、证据与主张核验 artifact，写入完成事件并终止运行 |
 
 关键条件边：
 
@@ -516,6 +525,54 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
 - 当前未配置真实 Embedding 服务，`auto` 模式在只有真实搜索提供商而没有 Embedding Provider 时会退化为关键词检索；系统仍能完成研究、生成报告和证据矩阵。
 - 修改 `EMBEDDING_DIMENSION` 必须生成新迁移，否则切片写入会因维度不匹配被拒绝。
 
+## 长文写作、主张核验与参考文献
+
+写作与核验代码位于 `packages/core/src/dr_core/research/`：
+
+| 模块 | 职责 |
+|---|---|
+| `writing.py` | 逐节组织问题、核心判断、证据、反方观点、局限和衔接；构建引用映射；可选的严格校验 LLM 写作 |
+| `claims.py` | 分句与主张抽取、确定性核验、保守的 LLM 复核、参考文献审计 |
+| `generation.py` | 论证型提纲生成，填充关键主张、支持/反对证据、预期字数和章节状态 |
+| `nodes.py` | `write_sections`、`verify_claims`、`verify_citations`、`finalize_report` 与交付物写入 |
+
+### 提纲与章节写作
+
+提纲中的每个章节保存 `title`、`purpose`、`question_id`（写作目的是回答哪个研究问题）、`key_claims`、`support_evidence_ids`、`refute_evidence_ids`、`evidence_ids`、`target_words` 和 `status`。状态随流程从 `planned` 变为 `drafted`，引用核验通过后变为 `verified`；未通过的章节保留 `drafted` 并记录审计失败。
+
+`write_sections` 按章节读取数据库证据，而不是把整个研究库交给模型：
+
+- 问题章节优先使用提纲中该问题的支持/反对证据；引言、矛盾、局限与结论章节使用各自相应的证据集合。
+- 正文包含本节回答的问题、核心判断、逐条证据、反方观点或“未发现反例”的说明、该问题的证据局限，以及与下一节的衔接。
+- 每个引用标记都写入章节的 `citation_map`（标记 → 来源 UUID）并保存实际使用的证据 ID；相同内容重跑保持幂等，内容变化时创建新的 `draft_sections` 版本。
+- 没有证据的章节明确说明“不生成结论性陈述”，不会补充常识、统计数字或虚构引用。
+
+可选模型写作由 `RESEARCH_LLM_WRITING_ENABLED` 控制，默认关闭。只有在 `ProviderRegistry` 中存在真实 `LLMProvider` 时才会调用；Mock Provider 会被跳过。模型输出必须是 `{"markdown": ...}` JSON，且每个正文段落都要有引用标记、不能出现未提供的标记、不能包含参考文献章节，正文中的数字/年份必须能在所给证据中找到；任一校验失败都会回退到确定性写作。
+
+### 主张核验
+
+`verify_claims` 使用能识别引号内问号的保守分句器，把正文拆成事实性主张，并优先使用确定性规则：
+
+1. 引用标记是否存在于该章节的 `citation_map`，来源是否属于当前项目。
+2. 引用的证据是否属于当前运行，原文能否在切片或来源版本中重新定位。
+3. 主张中的数字与年份是否能在引用证据或来源出版年份中找到。
+4. 主张与证据摘要/原文是否有词项重叠。
+5. 主张是否使用绝对化措辞，而引用证据是条件性表述。
+6. 引用证据是否为反驳类型；在非矛盾章节中正面引用反驳证据会标记为 `CONTRADICTED`，明确以“某来源指出/argues”报告反方观点时视为支持性描述。
+7. 来源是否缺少标题、作者等元数据；缺失会写入核验理由。
+
+状态为 `SUPPORTED`、`PARTIAL`、`CONTRADICTED`、`UNSUPPORTED`、`UNVERIFIABLE`。每次核验都通过 `claim_fingerprint` 幂等写入 `claims`，并把证据关系写入 `claim_evidence`（`supports`/`refutes`）。`merged_status` 只允许保留或降低已有结论：历史失败状态不会被后续核验自动升级为 `SUPPORTED`，只有明确的重新核验通过才会改变。
+
+`RESEARCH_CLAIM_LLM_REVIEW=true` 且存在真实 Provider 时，可对确定性核验未通过的主张做一次语义复核；模型只能指出问题或进一步降级，不能把状态升级为 `SUPPORTED`。核验未通过的主张会保留原状态、链接证据理由，并在报告中列出、在局限中提示，不会自动改写为通过。
+
+### 参考文献与核验交付物
+
+- 参考文献只从 `sources` 的标题、作者、年份、期刊/出版方、DOI 与规范 URL 生成；DOI/URL 在来源入库时已规范化，格式化器支持 APA、IEEE、Chicago、MLA。
+- 章节的 `citation_map` 决定正文标记与参考文献的对应关系；参考文献列表为独立的 `reference_list` artifact，正文中的每个 `[S#]` 都能映射到数据库来源。
+- 参考文献审计检查：正文标记未映射（悬空引用）、映射但正文未使用、证据来源从未被引用、标题/作者/年份/出版方/DOI 或 URL 缺失。审计问题写入报告并进入 `citation_audit` artifact；不完整的元数据只提示，不会用模型补写。
+- `citation_audit` artifact 同时包含引用核验汇总、参考文献审计和逐条主张（状态、类型、引用标记、证据关系、理由）。
+- 报告 Markdown 包含证据覆盖、正文、参考文献、引用核验、事实核验、参考文献审计和研究局限章节；局限与未解决问题来自证据缺口、预算/检索限制和核验警告。
+
 ## 数据库与迁移
 
 ### 数据模型
@@ -532,14 +589,14 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
 | `source_versions` | 搜索摘要、全文或用户上传文档的版本、内容哈希、抓取 URL、可选的相对存储键、解析状态 |
 | `document_chunks` | 章节、页码、段落、文本哈希与 `vector(1536)` 向量字段 |
 | `evidence_items` | 证据摘要、原文引用、上下文、定位信息、核验状态；强制关联来源与具体来源版本 |
-| `claims` | 待核验的事实/论证主张及核验状态 |
-| `claim_evidence` | 主张与证据的多对多关系：支持、反驳、部分支持、相关 |
+| `claims` | 待核验的事实/论证主张、类型及核验状态；按运行 + 主张指纹幂等 |
+| `claim_evidence` | 主张与证据的多对多关系：支持、反驳、部分支持、相关，并保存核验理由 |
 | `outlines` | 提纲 JSON、版本、审批状态和审批时间 |
 | `draft_sections` | 章节正文、引用映射、使用过的证据 ID、版本与生成状态 |
 | `citation_audits` | 引用核验结果、问题类型、审查方式、修正说明与修正版本 |
 | `run_events` | 持久化进度/阶段/审批事件，单调递增 `id` 可直接作为 SSE `Last-Event-ID` 游标 |
 | `run_approvals` | 计划/提纲审批的版本、状态、快照、反馈、修改后内容和决定时间；`(run_id, kind, version)` 唯一 |
-| `artifacts` | 研究报告、参考文献、证据矩阵、Markdown/PDF/DOCX 导出的相对存储键、MIME、大小、哈希与版本 |
+| `artifacts` | 研究报告、参考文献、证据矩阵、证据与主张核验记录、Markdown/PDF/DOCX 导出的相对存储键、MIME、大小、哈希与版本 |
 
 关键约束和行为：
 
@@ -594,6 +651,8 @@ Linux/macOS 将卷参数替换为 `-v "$PWD/migrations:/app/migrations"`，并�
 - 在全新空数据库上执行完整迁移链成功创建全部 16 张业务表、pgvector/HNSW 与全文索引，LangGraph checkpoint 表按需由 `PostgresSaver.setup()` 创建。
 - 在空库上执行 `a7d3e5f9c2b4 → e5b9c3d7a1f2` 降级和重新升级均成功。
 - `/ready` 的 `schema` 检查在迁移完成后返回 `ok`。
+
+阶段 7 复用已有的 `claims`、`claim_evidence`、`draft_sections`、`citation_audits` 与 `artifacts` 表，没有新增迁移；阶段 7 验收时 `alembic check` 仍返回 `No new upgrade operations detected`。
 
 ## 仓储层与文件对账
 
@@ -678,6 +737,8 @@ docker compose exec api python -m dr_core.maintenance
 | `RESEARCH_RETRIEVAL_MODE` | `hybrid` | `hybrid`/`keyword`/`vector`；向量不可用时回退关键词 |
 | `RESEARCH_RETRIEVAL_LIMIT` | `10` | 每个研究问题召回并融合的切片数量上限 |
 | `RESEARCH_CHUNK_MAX_CHARS` | `1200` | 单个文档切片的最大字符数 |
+| `RESEARCH_LLM_WRITING_ENABLED` | `false` | 是否允许真实 LLM 参与章节写作；必须同时存在真实 Provider，校验失败自动回退确定性写作 |
+| `RESEARCH_CLAIM_LLM_REVIEW` | `false` | 是否允许真实 LLM 复核未通过的主张；只能降级或补充理由，不能升级为 `SUPPORTED` |
 | `SSE_POLL_INTERVAL_SECONDS` | `1.0` | SSE 轮询数据库事件的间隔 |
 | `SSE_KEEPALIVE_SECONDS` | `15.0` | SSE 空闲保活注释间隔 |
 | `FILE_STORAGE_ROOT` | `/app/data/files` | 容器内文件根目录；Docker 环境下不要修改，否则会脱离共享卷 |
@@ -740,6 +801,16 @@ docker compose exec api python -m dr_core.maintenance
 ```bash
 docker compose --profile test run --build --rm test
 ```
+
+阶段 7 测试内容：
+
+- 论证型提纲：章节包含写作目的、问题、关键主张、支持/反对证据、预期字数和状态；深度越深目标字数越高。
+- 分章节写作：问题、核心判断、证据、反例、局限和下一节衔接均出现；引用标记全部映射到所选证据，没有证据时不生成结论。
+- LLM 写作校验：合法 JSON 与标记被接受；未知标记、编造数字、参考文献章节和未引用段落都会被拒绝并回退到确定性写作。
+- 主张抽取：引号内问号之后的引用标记不会丢失；无引用量化主张被标记、方法性句子和列表引导句不会误报。
+- 主张核验：可定位证据为 `SUPPORTED`；数字不一致或定位失败为 `PARTIAL`；正面主张引用反驳证据为 `CONTRADICTED`；无引用事实主张为 `UNSUPPORTED`，规范陈述为 `UNVERIFIABLE`；`merged_status` 不会把失败状态升级。
+- 模型复核只能降级；参考文献审计报告悬空标记、映射未使用、未引用来源和不完整元数据。
+- 工作流端到端：提纲字段与状态、章节版本与证据 ID、`claims`/`claim_evidence` 持久化、`citation_audit` artifact 的引用/参考文献/主张记录、报告中的事实核验与参考文献审计章节，以及五类 artifact。
 
 阶段 6 测试内容：
 
@@ -806,7 +877,7 @@ docker compose --profile test run --build --rm test
 - 缺失文件与孤儿文件识别。
 - 原有健康检查、CORS、文件跨容器往返和 Celery 测试任务。
 
-当前结果：`205 passed`（阶段 6 新增 17 项；测试全程不需要网络或真实 API Key）。
+当前结果：`221 passed`（阶段 7 新增 16 项；测试全程不需要网络或真实 API Key）。
 
 前端静态检查：
 
@@ -909,7 +980,7 @@ Linux/macOS 的恢复命令同样将第二个卷参数改为 `-v "$PWD/backups:/
 
 - 当前为单用户本地开发骨架，没有用户登录和项目级用户权限；“权限检查”目前指项目存在且未软删除。多用户访问控制将在后续阶段实现。
 - Phase 1 冒烟接口和 `POST /dev/runs/{run_id}/fail` 仅用于验收，必须在非本地环境设置 `ENABLE_DEV_ENDPOINTS=false`。
-- 阶段 5 的计划、提纲和章节正文由确定性生成器基于数据库中的研究问题与证据组织，尚未接入真实 LLM 改写与长文润色；这保证离线可测和引用可追溯，但行文风格和论证深度有限。
+- 阶段 7 的提纲与章节正文默认由确定性生成器基于数据库中的研究问题与证据组织，保证离线可测、引用可追溯；可选的真实 LLM 写作/主张复核开关默认关闭，仓库未内置真实 LLM 适配器，缺少真实 `LLMProvider` 时不会调用模型，因此行文风格和论证深度仍受确定性模板限制。
 - 阶段 4 的提供商默认全部关闭；只有同时设置 `*_ENABLED=true` 和后端密钥才会启用。启用但缺少密钥时会记录警告并跳过，不影响服务启动。未配置任何第三方 API Key 时，系统仍可迁移、启动并通过全部测试（测试使用 Mock 提供商，不访问网络）。
 - Tavily、Exa、Firecrawl、Crossref、Semantic Scholar 均在后端调用，密钥不会下发浏览器；错误信息、日志和缓存键不包含密钥。Firecrawl 只接受通过 SSRF 校验的 HTTP/HTTPS 公网地址，并在重定向后再次校验最终 URL。
 - 网页全文依赖 Firecrawl；未启用时来源只保留搜索摘要。付费墙、仅摘要、屏蔽和超限响应会记录为不同抓取状态，不会当作全文入库；Crossref 不提供被引列表，因此不伪造引用关系。
@@ -924,10 +995,13 @@ Linux/macOS 的恢复命令同样将第二个卷参数改为 `-v "$PWD/backups:/
 - 中文关键词路径依赖 PostgreSQL `simple` 配置与参数化 `ILIKE` 词项兜底，不是专用中文分词；超长查询只使用前 8 个词项。
 - 混合检索目前使用 RRF 确定性融合，尚未接入外部重排序模型；切片按字符上限和句子边界切分，不包含语义分段或表格专用切片。
 - token 与成本预算读取运行累计用量；Mock 提供商不上报真实费用，因此成本预算验证使用项目预算和已记录成本。真实提供商的费用统计精度取决于其结果中的 usage 字段。
+- 主张核验优先使用确定性规则，语义判断是保守的启发式：词项重叠不足或定位缺失会产生 `PARTIAL`/`UNVERIFIABLE`，可能存在假阴性；系统不会为了“通过”而放宽核验。模型复核只能降级，不参与自动升级。当前不会自动发起修订或补充研究循环，未通过的主张保留状态、理由和局限说明。
+- 参考文献的“元数据准确性”以数据库来源记录为准：检查标题、作者、年份、出版方、DOI/URL 是否完整以及正文标记是否可映射，不会访问外部数据库重新核验文献。没有证据支持的章节会明确说明，不会补写引用。
+- 同一运行的最终 artifact 按内容哈希幂等：相同内容重复生成返回同一版本，内容变化（如提纲修订后重新写作）会创建新的 `draft_sections` 与 artifact 版本。当前没有独立的“重新导出”API，导出由工作流定稿节点产生。
 - 对账工具只读，不自动删除孤儿文件；上传失败会自动清理本次写入的文件。
 - PostgreSQL、Redis 不暴露宿主机端口；API 与前端端口默认暴露。
 - 本地开发密码仅用于开发环境，生产部署必须更换并保管在未提交的 `.env` 中。
 
 ## 下一阶段
 
-阶段 7 将接入真实 LLM 长文写作与主张核验增强：在现有证据矩阵和引用审计之上生成更完整的长文，建立主张与证据关系，并扩展引用修正与质量评测。在获得确认前不会提前实现后续阶段。
+阶段 8 将开发前端研究工作台：在现有 API 之上提供项目创建、研究运行、审批、事件进度、来源/证据、章节与核验记录、artifact 下载等可操作界面。在获得确认前不会提前实现后续阶段。

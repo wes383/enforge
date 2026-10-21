@@ -5,6 +5,7 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from decimal import Decimal
+from types import SimpleNamespace
 from uuid import UUID
 
 from langgraph.types import interrupt
@@ -31,6 +32,7 @@ from dr_core.db.enums import (
     SourceVersionKind,
 )
 from dr_core.db.models import (
+    DocumentChunk,
     ResearchQuestion,
     ResearchRun,
     Source,
@@ -39,6 +41,8 @@ from dr_core.db.models import (
 from dr_core.db.repositories import (
     ArtifactRepository,
     CitationAuditRepository,
+    ClaimEvidenceRepository,
+    ClaimRepository,
     DraftSectionRepository,
     EvidenceRepository,
     OutlineRepository,
@@ -48,10 +52,22 @@ from dr_core.db.repositories import (
     SourceRepository,
     SourceVersionRepository,
 )
-from dr_core.normalization import normalize_doi, normalize_url, text_sha256
+from dr_core.normalization import (
+    claim_fingerprint,
+    normalize_doi,
+    normalize_url,
+    text_sha256,
+)
 from dr_core.providers.errors import ProviderError
 from dr_core.providers.models import FetchStatus
 from dr_core.providers.orchestration import fetch_web_content
+from dr_core.research.claims import (
+    audit_references,
+    extract_claims,
+    merged_status,
+    review_claim_with_llm,
+    verify_claim,
+)
 from dr_core.research.context import (
     NodeTimeoutError,
     ResearchContext,
@@ -65,15 +81,16 @@ from dr_core.research.generation import (
     build_plan,
     build_queries,
     source_numbering,
-    write_section,
 )
 from dr_core.research.indexing import IndexResult, ensure_source_index
 from dr_core.research.models import (
     ApprovalDecision,
     CitationAudit,
     CitationIssue,
+    ClaimVerification,
     EvidenceMatrix,
     Outline,
+    ReferenceAudit,
     ResearchBrief,
     ResearchGap,
     ResearchPlan,
@@ -91,9 +108,12 @@ from dr_core.research.text import (
     format_reference,
     sentence_spans,
 )
+from dr_core.research.writing import compose_section
 from dr_core.schemas import (
     ArtifactCreate,
     CitationAuditCreate,
+    ClaimCreate,
+    ClaimEvidenceCreate,
     DraftSectionCreate,
     ResearchQuestionCreate,
     RunEventCreate,
@@ -1374,12 +1394,12 @@ def generate_outline(ctx: ResearchContext):
                     ctx.project_id,
                     ctx.run_id,
                 )
-                by_question: dict[UUID | None, list[UUID]] = {}
+                by_question: dict[UUID | None, list] = {}
                 for item in evidence:
                     by_question.setdefault(
                         item.research_question_id,
                         [],
-                    ).append(item.id)
+                    ).append(item)
                 repo = OutlineRepository(session)
                 latest = repo.latest(ctx.project_id, ctx.run_id)
                 candidate = build_outline(
@@ -1512,11 +1532,12 @@ def write_sections(ctx: ResearchContext):
             outline = Outline.model_validate(state.get("outline") or {})
             outline_id = _outline_id(state)
             _approve_outline(ctx, outline_id)
-            with ctx.database.session() as session:
+            with ctx.database.session_scope() as session:
                 evidence = EvidenceRepository(session).list_for_run(
                     ctx.project_id,
                     ctx.run_id,
                 )
+                sources = _source_views(session, ctx.project_id)
             numbering = source_numbering(evidence)
             matrix = _matrix(state)
             gaps = [
@@ -1524,18 +1545,28 @@ def write_sections(ctx: ResearchContext):
                 for value in state.get("gaps", [])
             ]
             limitations = list(state.get("limitations") or [])
+            llm = _llm_writer(ctx)
             sections_state: list[dict] = []
-            for section in outline.sections:
+            for position, section in enumerate(outline.sections):
                 ctx.guard()
-                content, citation_map, evidence_ids = write_section(
+                next_title = (
+                    outline.sections[position + 1].title
+                    if position + 1 < len(outline.sections)
+                    else None
+                )
+                draft = compose_section(
                     section=section,
                     brief=brief,
                     matrix=matrix,
                     gaps=gaps,
                     limitations=limitations,
-                    evidence=evidence,
+                    evidence=_section_evidence(section, evidence),
+                    sources=sources,
                     numbering=numbering,
+                    next_section_title=next_title,
+                    llm=llm,
                 )
+                content = draft.content
                 content_hash = text_sha256(content)
                 with ctx.database.session_scope() as session:
                     repo = DraftSectionRepository(session)
@@ -1549,10 +1580,10 @@ def write_sections(ctx: ResearchContext):
                         and latest.content_hash == content_hash
                         and latest.title == section.title
                     ):
-                        draft = latest
+                        persisted = latest
                         created = False
                     else:
-                        draft = repo.create_version(
+                        persisted = repo.create_version(
                             ctx.project_id,
                             ctx.run_id,
                             DraftSectionCreate(
@@ -1560,14 +1591,14 @@ def write_sections(ctx: ResearchContext):
                                 section_index=section.index,
                                 title=section.title,
                                 content_markdown=content,
-                                citation_map=citation_map,
-                                evidence_ids=evidence_ids,
+                                citation_map=draft.citation_map,
+                                evidence_ids=draft.evidence_ids,
                                 generation_status=DraftSectionStatus.DRAFTED,
                             ),
                         )
                         created = True
-                    draft_id = draft.id
-                    draft_version = draft.version
+                    draft_id = persisted.id
+                    draft_version = persisted.version
                 if created:
                     ctx.emit(
                         RunEventType.SECTION_GENERATED,
@@ -1575,7 +1606,8 @@ def write_sections(ctx: ResearchContext):
                         payload={
                             "section_index": section.index,
                             "version": draft_version,
-                            "citations": len(citation_map),
+                            "citations": len(draft.citation_map),
+                            "used_llm": draft.used_llm,
                         },
                         dedupe_key=(
                             f"section:{section.index}:generated:{draft_version}"
@@ -1590,9 +1622,109 @@ def write_sections(ctx: ResearchContext):
                         "version": draft_version,
                     }
                 )
+            if outline_id is not None:
+                with ctx.database.session_scope() as session:
+                    OutlineRepository(session).update_section_statuses(
+                        outline_id,
+                        {section.index: "drafted" for section in outline.sections},
+                        project_id=ctx.project_id,
+                    )
+            outline_payload = outline.model_dump(mode="json")
+            for item in outline_payload["sections"]:
+                item["status"] = "drafted"
             return {
                 "sections": sections_state,
+                "outline": outline_payload,
                 "current_node": "write_sections",
+            }
+
+    return node
+
+
+def verify_claims(ctx: ResearchContext):
+    def node(state: ResearchState) -> ResearchState:
+        with node_timeout(ctx.settings.research_node_timeout_seconds):
+            ctx.guard()
+            ctx.ensure_status(
+                RunStatus.VERIFYING,
+                event_type=RunEventType.PHASE_STARTED,
+                message="Verifying factual claims",
+                dedupe_key="phase:verifying:claims",
+            )
+            with ctx.database.session_scope() as session:
+                sections = DraftSectionRepository(session).list_latest_for_run(
+                    ctx.project_id,
+                    ctx.run_id,
+                )
+                evidence = EvidenceRepository(session).list_for_run(
+                    ctx.project_id,
+                    ctx.run_id,
+                )
+                sources = _source_views(session, ctx.project_id)
+            evidence_by_id = {item.id: item for item in evidence}
+            evidence_by_source: dict[UUID, list] = {}
+            for item in evidence:
+                evidence_by_source.setdefault(item.source_id, []).append(item)
+            traceable = _traceability_checker(ctx)
+            reviewer = _claim_reviewer(ctx)
+            claims_state: list[dict] = []
+            llm_reviewed = 0
+            for section in sections:
+                ctx.guard()
+                for candidate in extract_claims(section):
+                    assessment = verify_claim(
+                        candidate,
+                        section=section,
+                        sources_by_id=sources,
+                        evidence_by_id=evidence_by_id,
+                        evidence_by_source=evidence_by_source,
+                        traceable=traceable,
+                    )
+                    if reviewer is not None:
+                        cited = [
+                            evidence_by_id[evidence_id]
+                            for evidence_id in assessment.evidence_ids
+                            if evidence_id in evidence_by_id
+                        ]
+                        before = assessment.status
+                        assessment = review_claim_with_llm(
+                            reviewer,
+                            assessment,
+                            cited,
+                        )
+                        if assessment.status is not before:
+                            llm_reviewed += 1
+                    model = _persist_claim(ctx, section, assessment)
+                    claims_state.append(model.model_dump(mode="json"))
+            summary = _claim_summary(claims_state)
+            ctx.emit(
+                RunEventType.PROGRESS,
+                message="Factual claims verified",
+                payload={
+                    **summary,
+                    "llm_reviewed": llm_reviewed,
+                },
+                dedupe_key="claims:verified",
+                stage=RunStatus.VERIFYING,
+            )
+            limitations = list(state.get("limitations") or [])
+            unsupported = summary.get("unsupported", 0) + summary.get(
+                "unverifiable",
+                0,
+            )
+            if unsupported:
+                limitations = _with_limitations(
+                    {"limitations": limitations},
+                    _text(
+                        _brief(state),
+                        f"有 {unsupported} 条事实主张缺少充分证据支持，已在核验记录中标出。",
+                        f"{unsupported} claims lacked sufficient support and are flagged in the verification record.",
+                    ),
+                )
+            return {
+                "claims": claims_state,
+                "limitations": limitations,
+                "current_node": "verify_claims",
             }
 
     return node
@@ -1702,6 +1834,24 @@ def verify_citations(ctx: ResearchContext):
                 warnings=warnings,
                 failed=failed,
             )
+            with ctx.database.session_scope() as session:
+                sections = DraftSectionRepository(session).list_latest_for_run(
+                    ctx.project_id,
+                    ctx.run_id,
+                )
+                sources = _source_views(session, ctx.project_id)
+                evidence_source_ids = {
+                    item.source_id
+                    for item in EvidenceRepository(session).list_for_run(
+                        ctx.project_id,
+                        ctx.run_id,
+                    )
+                }
+            reference_audit = audit_references(
+                sections,
+                sources,
+                evidence_source_ids,
+            )
             limitations = list(state.get("limitations") or [])
             if failed:
                 limitations = _with_limitations(
@@ -1712,8 +1862,68 @@ def verify_citations(ctx: ResearchContext):
                         f"{failed} sections failed citation verification; audit records were preserved.",
                     ),
                 )
+            if reference_audit.dangling_markers:
+                limitations = _with_limitations(
+                    {"limitations": limitations},
+                    _text(
+                        brief,
+                        "报告中存在无法映射到来源的引用标记："
+                        + ", ".join(reference_audit.dangling_markers[:10]),
+                        "The report contains citation markers without a source mapping: "
+                        + ", ".join(reference_audit.dangling_markers[:10]),
+                    ),
+                )
+            if reference_audit.invalid_metadata_source_ids:
+                limitations = _with_limitations(
+                    {"limitations": limitations},
+                    _text(
+                        brief,
+                        f"有 {len(reference_audit.invalid_metadata_source_ids)} 条参考文献元数据不完整，"
+                        "已保留警告而未补写信息。",
+                        f"{len(reference_audit.invalid_metadata_source_ids)} references have "
+                        "incomplete metadata; warnings were recorded instead of inventing fields.",
+                    ),
+                )
+            if reference_audit.unused_source_ids:
+                limitations = _with_limitations(
+                    {"limitations": limitations},
+                    _text(
+                        brief,
+                        f"有 {len(reference_audit.unused_source_ids)} 个证据来源未在正文中引用。",
+                        f"{len(reference_audit.unused_source_ids)} evidence sources were not cited in the report.",
+                    ),
+                )
+            outline_id = _outline_id(state)
+            if outline_id is not None:
+                statuses = {
+                    section.section_index: (
+                        "verified"
+                        if section.generation_status is DraftSectionStatus.VERIFIED
+                        else "drafted"
+                    )
+                    for section in sections
+                }
+                with ctx.database.session_scope() as session:
+                    OutlineRepository(session).update_section_statuses(
+                        outline_id,
+                        statuses,
+                        project_id=ctx.project_id,
+                    )
+                outline_payload = dict(state.get("outline") or {})
+                outline_sections = [
+                    dict(item) for item in outline_payload.get("sections", [])
+                ]
+                for item in outline_sections:
+                    status = statuses.get(int(item.get("index", -1)))
+                    if status is not None:
+                        item["status"] = status
+                outline_payload["sections"] = outline_sections
+            else:
+                outline_payload = dict(state.get("outline") or {})
             return {
                 "citation_audit": audit.model_dump(mode="json"),
+                "reference_audit": reference_audit.model_dump(mode="json"),
+                "outline": outline_payload,
                 "limitations": limitations,
                 "current_node": "verify_citations",
             }
@@ -1730,7 +1940,14 @@ def finalize_report(ctx: ResearchContext):
             audit = CitationAudit.model_validate(
                 state.get("citation_audit") or {}
             )
+            reference_audit = ReferenceAudit.model_validate(
+                state.get("reference_audit") or {}
+            )
             limitations = list(state.get("limitations") or [])
+            claim_state = {
+                str(item.get("claim_id")): item
+                for item in state.get("claims") or []
+            }
             with ctx.database.session_scope() as session:
                 sections = DraftSectionRepository(session).list_latest_for_run(
                     ctx.project_id,
@@ -1740,6 +1957,42 @@ def finalize_report(ctx: ResearchContext):
                     ctx.project_id,
                     ctx.run_id,
                 )
+                claims = ClaimRepository(session).list_for_run(
+                    ctx.project_id,
+                    ctx.run_id,
+                )
+                links = ClaimEvidenceRepository(session)
+                claim_records = [
+                    {
+                        "claim_id": str(claim.id),
+                        "section_index": claim_state.get(str(claim.id), {}).get(
+                            "section_index"
+                        ),
+                        "claim_text": claim.claim_text,
+                        "claim_type": claim.claim_type.value,
+                        "status": claim.verification_status.value,
+                        "citation_markers": claim_state.get(str(claim.id), {}).get(
+                            "citation_markers",
+                            [],
+                        ),
+                        "reasons": claim_state.get(str(claim.id), {}).get(
+                            "reasons",
+                            [],
+                        ),
+                        "evidence": [
+                            {
+                                "evidence_id": str(link.evidence_id),
+                                "relation": link.relation.value,
+                                "rationale": link.rationale,
+                            }
+                            for link in links.list_for_claim(
+                                ctx.project_id,
+                                claim.id,
+                            )
+                        ],
+                    }
+                    for claim in claims
+                ]
                 sources = {
                     source.id: source
                     for source in SourceRepository(session).list_for_project(
@@ -1759,6 +2012,8 @@ def finalize_report(ctx: ResearchContext):
                     references,
                     citations,
                     limitations,
+                    claims=claim_records,
+                    reference_audit=reference_audit,
                 )
                 reference_list = "\n".join(
                     [f"# {_text(brief, '参考文献', 'References')}", "", *references]
@@ -1773,12 +2028,25 @@ def finalize_report(ctx: ResearchContext):
                     indent=2,
                     sort_keys=True,
                 )
+                verification_json = json.dumps(
+                    {
+                        "generated_at": datetime.now(tz=UTC).isoformat(),
+                        "citation_audit": audit.model_dump(mode="json"),
+                        "reference_audit": reference_audit.model_dump(mode="json"),
+                        "claims": claim_records,
+                        "claim_summary": _claim_status_counts(claim_records),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                    sort_keys=True,
+                )
                 artifacts = _persist_report_artifacts(
                     ctx,
                     session,
                     report,
                     reference_list,
                     matrix_json,
+                    verification_json,
                 )
                 artifact_payload = [
                     {
@@ -1805,6 +2073,8 @@ def finalize_report(ctx: ResearchContext):
                             "artifacts": artifact_payload,
                             "sections": len(sections),
                             "citations": len(citations),
+                            "claims": len(claim_records),
+                            "claim_summary": _claim_status_counts(claim_records),
                             "coverage_ratio": matrix.coverage_ratio,
                         },
                         dedupe_key="run:completed",
@@ -2307,6 +2577,225 @@ def _outline_id(state: ResearchState) -> UUID | None:
     return UUID(value) if value else None
 
 
+def _source_views(session, project_id: UUID) -> dict[UUID, SimpleNamespace]:
+    views: dict[UUID, SimpleNamespace] = {}
+    for source in SourceRepository(session).list_for_project(project_id, limit=500):
+        views[source.id] = SimpleNamespace(
+            id=source.id,
+            title=source.title,
+            authors=list(source.authors or []),
+            published_at=source.published_at,
+            venue=source.venue,
+            publisher=source.publisher,
+            doi=source.doi,
+            canonical_url=source.canonical_url,
+            source_type=source.source_type,
+        )
+    return views
+
+
+def _section_evidence(section, evidence: list) -> list:
+    by_id = {item.id: item for item in evidence}
+    selected = [
+        by_id[evidence_id]
+        for evidence_id in section.evidence_ids
+        if evidence_id in by_id
+    ]
+    if section.question_id is not None:
+        selected_ids = {item.id for item in selected}
+        selected.extend(
+            item
+            for item in evidence
+            if item.research_question_id == section.question_id
+            and item.id not in selected_ids
+        )
+    if selected:
+        return selected
+    if section.question_id is not None:
+        matching = [
+            item
+            for item in evidence
+            if item.research_question_id == section.question_id
+        ]
+        if matching:
+            return matching
+    return list(evidence)
+
+
+def _llm_writer(ctx: ResearchContext):
+    if not ctx.settings.research_llm_writing_enabled:
+        return None
+    llm = ctx.registry.llm
+    if llm is None or getattr(llm, "name", "") == "mock-llm":
+        return None
+    return llm
+
+
+def _claim_reviewer(ctx: ResearchContext):
+    if not ctx.settings.research_claim_llm_review:
+        return None
+    llm = ctx.registry.llm
+    if llm is None or getattr(llm, "name", "") == "mock-llm":
+        return None
+    return llm
+
+
+def _traceability_checker(ctx: ResearchContext):
+    text_cache: dict[UUID, str | None] = {}
+    chunk_cache: dict[UUID, str | None] = {}
+
+    def normalized(value: str | None) -> str | None:
+        if not value:
+            return None
+        return " ".join(value.split())
+
+    def checker(item) -> bool:
+        quote = normalized(item.quoted_text)
+        if not quote:
+            return False
+        locator = dict(item.locator or {})
+        chunk_value = locator.get("chunk_id")
+        if chunk_value:
+            try:
+                chunk_id = UUID(str(chunk_value))
+            except ValueError:
+                chunk_id = None
+            if chunk_id is not None:
+                if chunk_id not in chunk_cache:
+                    with ctx.database.session() as session:
+                        chunk = session.get(DocumentChunk, chunk_id)
+                        chunk_cache[chunk_id] = (
+                            chunk.text
+                            if chunk is not None
+                            and chunk.project_id == ctx.project_id
+                            else None
+                        )
+                chunk_text = normalized(chunk_cache[chunk_id])
+                if chunk_text is not None:
+                    if quote in chunk_text:
+                        return True
+                    chunk_cache[chunk_id] = chunk_text
+        version_id = item.source_version_id
+        if version_id not in text_cache:
+            text_cache[version_id] = _read_version_text(ctx, version_id)
+        version_text = text_cache[version_id]
+        return bool(version_text and quote in version_text)
+
+    return checker
+
+
+def _read_version_text(ctx: ResearchContext, version_id: UUID) -> str | None:
+    with ctx.database.session() as session:
+        version = session.get(SourceVersion, version_id)
+        if version is None or version.project_id != ctx.project_id:
+            return None
+        storage_key = version.storage_key
+        mime_type = version.mime_type
+        metadata = dict(version.version_metadata)
+        parser_status = version.parser_status
+    if storage_key and parser_status is not ParserStatus.FAILED:
+        try:
+            content = ctx.storage.read(storage_key)
+        except Exception:
+            content = None
+        if content is not None:
+            if mime_type in {"text/markdown", "text/plain"}:
+                try:
+                    return " ".join(
+                        content.decode("utf-8-sig")[
+                            : ctx.settings.parser_max_output_chars
+                        ].split()
+                    )
+                except UnicodeDecodeError:
+                    pass
+            elif ctx.registry.parsers:
+                try:
+                    parsed = ctx.registry.parsers[0].parse(
+                        content,
+                        mime_type=mime_type or "application/octet-stream",
+                        filename=storage_key,
+                    )
+                    return " ".join(
+                        parsed.text[: ctx.settings.parser_max_output_chars].split()
+                    )
+                except Exception:
+                    logger.warning(
+                        "Unable to re-read source version %s for claim tracing",
+                        version_id,
+                    )
+    snippet = metadata.get("snippet")
+    return " ".join(str(snippet).split()) if snippet else None
+
+
+def _persist_claim(
+    ctx: ResearchContext,
+    section,
+    assessment,
+) -> ClaimVerification:
+    candidate = assessment.candidate
+    rationale = "; ".join(assessment.reasons)[:2000] or None
+    with ctx.database.session_scope() as session:
+        repo = ClaimRepository(session)
+        existing = repo.find_by_fingerprint(
+            ctx.run_id,
+            claim_fingerprint(candidate.text),
+        )
+        status = merged_status(
+            existing.verification_status if existing is not None else None,
+            assessment.status,
+        )
+        claim = repo.create(
+            ctx.project_id,
+            ctx.run_id,
+            ClaimCreate(
+                claim_text=candidate.text,
+                claim_type=candidate.claim_type,
+                verification_status=status,
+            ),
+        )
+        if claim.verification_status is not status:
+            claim = repo.update_verification(
+                claim.id,
+                status,
+                project_id=ctx.project_id,
+            )
+        links = ClaimEvidenceRepository(session)
+        for evidence_id, relation in assessment.relations.items():
+            links.link(
+                ctx.project_id,
+                claim.id,
+                ClaimEvidenceCreate(
+                    evidence_id=evidence_id,
+                    relation=relation,
+                    rationale=rationale,
+                ),
+            )
+        claim_id = claim.id
+    return ClaimVerification(
+        claim_id=claim_id,
+        section_id=section.id,
+        section_index=section.section_index,
+        claim_text=candidate.text,
+        claim_type=candidate.claim_type,
+        status=status,
+        citation_markers=list(candidate.markers),
+        evidence_ids=assessment.evidence_ids,
+        reasons=assessment.reasons,
+    )
+
+
+def _claim_summary(claims: list[dict]) -> dict[str, int]:
+    summary = {"total": len(claims)}
+    for claim in claims:
+        key = str(claim.get("status", "")).lower()
+        summary[key] = summary.get(key, 0) + 1
+    return summary
+
+
+def _claim_status_counts(claims: list[dict]) -> dict[str, int]:
+    return _claim_summary(claims)
+
+
 def _audit_section(ctx: ResearchContext, section) -> CitationAuditCreate:
     markers = citation_markers(section.content_markdown)
     citation_map = dict(section.citation_map or {})
@@ -2398,6 +2887,9 @@ def _report_markdown(
     references: list[str],
     citations,
     limitations: list[str],
+    *,
+    claims: list[dict] | None = None,
+    reference_audit: ReferenceAudit | None = None,
 ) -> str:
     lines = [
         f"# {brief.title}",
@@ -2487,6 +2979,63 @@ def _report_markdown(
             f"{len(citations)} audit records: {failed} failed, {warnings} warnings.",
         )
     )
+    if claims:
+        counts = _claim_status_counts(claims)
+        lines.extend(["", _text(brief, "## 事实核验", "## Claim Verification"), ""])
+        lines.append(
+            _text(
+                brief,
+                f"共抽取 {counts.get('total', 0)} 条事实主张："
+                f"有支持 {counts.get('supported', 0)}，部分支持 {counts.get('partial', 0)}，"
+                f"矛盾 {counts.get('contradicted', 0)}，无支持 {counts.get('unsupported', 0)}，"
+                f"无法核验 {counts.get('unverifiable', 0)}。",
+                f"{counts.get('total', 0)} claims extracted: "
+                f"{counts.get('supported', 0)} supported, "
+                f"{counts.get('partial', 0)} partial, "
+                f"{counts.get('contradicted', 0)} contradicted, "
+                f"{counts.get('unsupported', 0)} unsupported, "
+                f"{counts.get('unverifiable', 0)} unverifiable.",
+            )
+        )
+        flagged = [
+            claim
+            for claim in claims
+            if claim.get("status") not in {"SUPPORTED"}
+        ]
+        if flagged:
+            lines.extend(
+                [
+                    "",
+                    _text(
+                        brief,
+                        "未完全通过核验的主张：",
+                        "Claims that did not fully pass verification:",
+                    ),
+                ]
+            )
+            for claim in flagged[:10]:
+                lines.append(
+                    f"- [{claim.get('status')}] {claim.get('claim_text', '')[:300]}"
+                )
+    if reference_audit is not None:
+        lines.extend(["", _text(brief, "## 参考文献审计", "## Reference Audit"), ""])
+        lines.append(
+            _text(
+                brief,
+                f"正文引用来源 {len(reference_audit.cited_source_ids)} 个，"
+                f"未引用证据来源 {len(reference_audit.unused_source_ids)} 个，"
+                f"元数据不完整 {len(reference_audit.invalid_metadata_source_ids)} 个，"
+                f"悬空标记 {len(reference_audit.dangling_markers)} 个。",
+                f"{len(reference_audit.cited_source_ids)} sources cited, "
+                f"{len(reference_audit.unused_source_ids)} evidence sources unused, "
+                f"{len(reference_audit.invalid_metadata_source_ids)} with incomplete metadata, "
+                f"{len(reference_audit.dangling_markers)} dangling markers.",
+            )
+        )
+        if reference_audit.issues:
+            lines.extend(
+                f"- {issue}" for issue in reference_audit.issues[:10]
+            )
     lines.extend(["", _text(brief, "## 研究局限", "## Limitations"), ""])
     if limitations:
         lines.extend(f"- {item}" for item in list(dict.fromkeys(limitations)))
@@ -2504,6 +3053,7 @@ def _persist_report_artifacts(
     report: str,
     reference_list: str,
     matrix_json: str,
+    verification_json: str,
 ) -> list:
     repo = ArtifactRepository(session)
     existing = {item.artifact_type: item for item in repo.list_for_run(
@@ -2531,6 +3081,13 @@ def _persist_report_artifacts(
             ArtifactType.EVIDENCE_MATRIX,
             "Evidence matrix",
             matrix_json,
+            "json",
+            "application/json",
+        ),
+        (
+            ArtifactType.CITATION_AUDIT,
+            "Evidence and claim verification",
+            verification_json,
             "json",
             "application/json",
         ),
@@ -2597,7 +3154,7 @@ def _persist_artifact(
                 metadata={
                     "sections": content.count("\n## "),
                     "format": extension,
-                    "generated_by": "phase6-workflow",
+                    "generated_by": "phase7-workflow",
                 },
             ),
         )

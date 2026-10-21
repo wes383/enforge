@@ -47,6 +47,7 @@ from dr_core.research.nodes import (
     route_after_plan_approval,
     search_sources,
     verify_citations,
+    verify_claims,
     write_sections,
 )
 from dr_core.research.state import ResearchState
@@ -87,6 +88,7 @@ def build_research_graph(ctx: ResearchContext, checkpointer: PostgresSaver):
     builder.add_node("generate_outline", generate_outline(ctx))
     builder.add_node("await_outline_approval", await_outline_approval(ctx))
     builder.add_node("write_sections", write_sections(ctx))
+    builder.add_node("verify_claims", verify_claims(ctx))
     builder.add_node("verify_citations", verify_citations(ctx))
     builder.add_node("finalize_report", finalize_report(ctx))
 
@@ -127,7 +129,8 @@ def build_research_graph(ctx: ResearchContext, checkpointer: PostgresSaver):
             "write_sections": "write_sections",
         },
     )
-    builder.add_edge("write_sections", "verify_citations")
+    builder.add_edge("write_sections", "verify_claims")
+    builder.add_edge("verify_claims", "verify_citations")
     builder.add_edge("verify_citations", "finalize_report")
     builder.add_edge("finalize_report", END)
     return builder.compile(checkpointer=checkpointer)

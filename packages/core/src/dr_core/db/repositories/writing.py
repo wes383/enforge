@@ -119,6 +119,25 @@ class OutlineRepository(Repository):
         self.session.flush()
         return outline
 
+    def update_section_statuses(
+        self,
+        outline_id: UUID,
+        statuses: dict[int, str],
+        *,
+        project_id: UUID,
+    ) -> Outline:
+        outline = self.get(outline_id, project_id=project_id)
+        content = dict(outline.content)
+        sections = [dict(item) for item in content.get("sections", [])]
+        for item in sections:
+            status = statuses.get(int(item.get("index", -1)))
+            if status is not None:
+                item["status"] = status
+        content["sections"] = sections
+        outline.content = content
+        self.session.flush()
+        return outline
+
 
 class DraftSectionRepository(Repository):
     def create_version(

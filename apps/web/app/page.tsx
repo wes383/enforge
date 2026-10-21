@@ -61,7 +61,7 @@ type SystemState = {
 const COPY = {
   zh: {
     brandSubtitle: "Deep Research Writing Agent",
-    phase: "阶段 06",
+    phase: "阶段 07",
     title: "系统状态",
     refresh: "刷新",
     docs: "API 文档",
@@ -92,7 +92,7 @@ const COPY = {
   },
   en: {
     brandSubtitle: "Deep Research Writing Agent",
-    phase: "Phase 06",
+    phase: "Phase 07",
     title: "System status",
     refresh: "Refresh",
     docs: "API docs",

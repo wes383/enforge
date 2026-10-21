@@ -13,6 +13,8 @@ from dr_core.db.enums import (
     CitationAuditStatus,
     CitationIssueType,
     CitationStyle,
+    ClaimType,
+    ClaimVerificationStatus,
     EvidenceType,
     EvidenceVerificationStatus,
     ProjectLanguage,
@@ -187,7 +189,12 @@ class OutlineSection(SchemaModel):
     title: str = Field(min_length=1, max_length=1000)
     purpose: str = Field(min_length=1, max_length=5000)
     question_id: UUID | None = None
+    key_claims: list[str] = Field(default_factory=list, max_length=10)
     evidence_ids: list[UUID] = Field(default_factory=list)
+    support_evidence_ids: list[UUID] = Field(default_factory=list)
+    refute_evidence_ids: list[UUID] = Field(default_factory=list)
+    target_words: int = Field(default=400, ge=50, le=5000)
+    status: Literal["planned", "drafted", "verified"] = "planned"
 
 
 class Outline(SchemaModel):
@@ -220,6 +227,26 @@ class CitationAudit(SchemaModel):
     passed: int = Field(default=0, ge=0)
     warnings: int = Field(default=0, ge=0)
     failed: int = Field(default=0, ge=0)
+
+
+class ClaimVerification(SchemaModel):
+    claim_id: UUID | None = None
+    section_id: UUID | None = None
+    section_index: int = Field(ge=0)
+    claim_text: str = Field(min_length=1, max_length=50000)
+    claim_type: ClaimType = ClaimType.FACTUAL
+    status: ClaimVerificationStatus = ClaimVerificationStatus.UNSUPPORTED
+    citation_markers: list[str] = Field(default_factory=list, max_length=50)
+    evidence_ids: list[UUID] = Field(default_factory=list, max_length=50)
+    reasons: list[str] = Field(default_factory=list, max_length=20)
+
+
+class ReferenceAudit(SchemaModel):
+    cited_source_ids: list[UUID] = Field(default_factory=list)
+    unused_source_ids: list[UUID] = Field(default_factory=list)
+    invalid_metadata_source_ids: list[UUID] = Field(default_factory=list)
+    dangling_markers: list[str] = Field(default_factory=list)
+    issues: list[str] = Field(default_factory=list)
 
 
 class ApprovalRequest(SchemaModel):

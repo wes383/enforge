@@ -81,6 +81,8 @@ class Settings(BaseSettings):
     research_retrieval_mode: Literal["hybrid", "keyword", "vector"] = "hybrid"
     research_retrieval_limit: int = Field(default=10, ge=1, le=100)
     research_chunk_max_chars: int = Field(default=1200, ge=200, le=10000)
+    research_llm_writing_enabled: bool = False
+    research_claim_llm_review: bool = False
 
     # pgvector's HNSW index supports at most 2000 dimensions. Changing this
     # value requires a new Alembic migration for document_chunks.embedding.
