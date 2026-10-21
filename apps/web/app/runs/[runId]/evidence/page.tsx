@@ -377,7 +377,7 @@ export default function EvidencePage() {
                     ) : null}
                   </div>
 
-                  <div className="mt-auto flex items-end justify-between gap-3 border-t border-border pt-3">
+                  <div className="mt-auto flex items-end justify-between gap-3 pt-4">
                     <div className="min-w-0 text-[11px] text-foreground-subtle">
                       <p className="truncate font-medium text-foreground-muted">
                         {item.source_title}

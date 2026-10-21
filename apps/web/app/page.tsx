@@ -185,7 +185,7 @@ export default function ProjectsPage() {
                     </span>
                   </div>
 
-                  <div className="mt-auto flex items-end justify-between gap-3 border-t border-border pt-4">
+                  <div className="mt-auto flex items-end justify-between gap-3 pt-5">
                     <div className="min-w-0 text-xs text-foreground-subtle">
                       {active ? (
                         <span>

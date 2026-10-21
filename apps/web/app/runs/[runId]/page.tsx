@@ -647,11 +647,7 @@ export default function RunOverviewPage() {
         </div>
 
         <div className="flex min-w-0 flex-col gap-4">
-          <RunEventFeed
-            events={events}
-            status={stream.status}
-            className="xl:sticky xl:top-24"
-          />
+          <RunEventFeed events={events} status={stream.status} />
           <Card className="p-5">
             <div className="flex items-center justify-between gap-2">
               <h2 className="font-display text-sm font-semibold tracking-tight">

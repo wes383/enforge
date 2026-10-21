@@ -28,18 +28,16 @@ export function RunEventFeed({
   events,
   status,
   limit = 40,
-  className,
 }: {
   events: RunEvent[];
   status: StreamStatus;
   limit?: number;
-  className?: string;
 }) {
   const locale = useLocale();
   const rows = events.slice(-limit).reverse();
 
   return (
-    <Card className={cn("flex flex-col", className)}>
+    <Card className="flex flex-col">
       <div className="flex items-center justify-between gap-3 border-b border-border px-5 py-3.5">
         <h2 className="font-display text-sm font-semibold tracking-tight">
           {pick(locale, "运行事件", "Run events")}
@@ -54,7 +52,7 @@ export function RunEventFeed({
           {pick(locale, "暂无事件", "No events yet")}
         </p>
       ) : (
-        <ol className="max-h-[460px] divide-y divide-border overflow-y-auto">
+        <ol className="divide-y divide-border">
           {rows.map((event) => (
             <li key={event.id} className="flex gap-3 px-5 py-3">
               <CircleDot className="mt-0.5 h-3.5 w-3.5 shrink-0 text-foreground-faint" />

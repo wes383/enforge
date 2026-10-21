@@ -338,6 +338,9 @@
   html {
     background: var(--background);
     -webkit-text-size-adjust: 100%;
+    /* Reserve the scrollbar gutter so route/tab switches that change page height
+       do not shift the centered layout horizontally. */
+    scrollbar-gutter: stable;
   }
 
   body {
