@@ -52,7 +52,7 @@ export function RunEventFeed({
           {pick(locale, "暂无事件", "No events yet")}
         </p>
       ) : (
-        <ol className="divide-y divide-border">
+        <ol className="max-h-[460px] divide-y divide-border overflow-y-auto">
           {rows.map((event) => (
             <li key={event.id} className="flex gap-3 px-5 py-3">
               <CircleDot className="mt-0.5 h-3.5 w-3.5 shrink-0 text-foreground-faint" />
