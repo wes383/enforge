@@ -252,6 +252,11 @@ export default function RunOverviewPage() {
   }, []);
 
   const planInfo = useMemo(() => latestPlan(approvals), [approvals]);
+  const coverageById = useMemo(
+    () =>
+      new Map((overview?.questions ?? []).map((item) => [item.id, item])),
+    [overview?.questions],
+  );
   const events = useMemo(
     () =>
       stream.events.length > 0
@@ -274,6 +279,29 @@ export default function RunOverviewPage() {
   const search = overview.search_status;
   const pending = overview.pending_approval;
   const gaps = overview.gaps;
+  // The latest approved plan version lists the questions this run actually
+  // researches; coverage comes from the database rows linked by question id.
+  const planQuestions = planInfo
+    ? planInfo.plan.questions.map((question) => {
+        const row = question.question_id
+          ? coverageById.get(question.question_id)
+          : undefined;
+        return {
+          id: row?.id ?? question.question_id ?? question.question,
+          evidenceId: row?.id ?? question.question_id ?? null,
+          question: question.question,
+          priority: row?.priority ?? question.priority,
+          coverage:
+            row?.coverage_status ?? question.coverage_status ?? "open",
+        };
+      })
+    : overview.questions.map((item) => ({
+        id: item.id,
+        evidenceId: item.id,
+        question: item.question,
+        priority: item.priority,
+        coverage: item.coverage_status,
+      }));
 
   return (
     <div className="flex flex-col gap-4">
@@ -502,7 +530,7 @@ export default function RunOverviewPage() {
           <Card className="p-5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-display text-sm font-semibold tracking-tight">
-                {pick(locale, "研究计划", "Research plan")}
+                {pick(locale, "研究计划与问题覆盖", "Research plan & coverage")}
               </h2>
               {planInfo ? (
                 <div className="flex items-center gap-2">
@@ -526,6 +554,11 @@ export default function RunOverviewPage() {
                         : pick(locale, "待审批", "Pending")}
                   </Badge>
                 </div>
+              ) : planQuestions.length > 0 ? (
+                <span className="text-[11px] text-foreground-subtle">
+                  {planQuestions.length}{" "}
+                  {pick(locale, "个问题", "questions")}
+                </span>
               ) : null}
             </div>
             {planInfo ? (
@@ -538,75 +571,56 @@ export default function RunOverviewPage() {
                     {planInfo.plan.scope_notes}
                   </p>
                 ) : null}
-                <ol className="mt-4 divide-y divide-border">
-                  {planInfo.plan.questions.map((question, index) => (
-                    <li
-                      key={`${question.question}-${index}`}
-                      className="flex gap-3 py-2.5"
-                    >
-                      <span className="font-mono text-[11px] text-foreground-faint">
-                        {String(index + 1).padStart(2, "0")}
-                      </span>
-                      <span className="text-sm leading-relaxed">
-                        {question.question}
-                      </span>
-                      <span className="ml-auto shrink-0 font-mono text-[10px] text-foreground-faint">
-                        P{question.priority}
-                      </span>
-                    </li>
-                  ))}
-                </ol>
               </>
-            ) : approvalError ? (
-              <p className="mt-3 text-xs text-red-fg">{approvalError}</p>
+            ) : null}
+            {planQuestions.length === 0 ? (
+              approvalError ? (
+                <p className="mt-3 text-xs text-red-fg">{approvalError}</p>
+              ) : (
+                <p className="mt-3 text-sm text-foreground-subtle">
+                  {pick(
+                    locale,
+                    "研究计划与问题尚未生成。",
+                    "The research plan and its questions have not been generated yet.",
+                  )}
+                </p>
+              )
             ) : (
-              <p className="mt-3 text-sm text-foreground-subtle">
-                {pick(
-                  locale,
-                  "研究计划尚未生成。",
-                  "The research plan has not been generated yet.",
+              <ol
+                className={cn(
+                  "divide-y divide-border",
+                  planInfo ? "mt-4" : "mt-3",
                 )}
-              </p>
-            )}
-          </Card>
-
-          <Card className="p-5">
-            <div className="flex items-center justify-between gap-2">
-              <h2 className="font-display text-sm font-semibold tracking-tight">
-                {pick(locale, "研究问题与覆盖", "Questions & coverage")}
-              </h2>
-              <span className="text-[11px] text-foreground-subtle">
-                {overview.questions.length}{" "}
-                {pick(locale, "个问题", "questions")}
-              </span>
-            </div>
-            {overview.questions.length === 0 ? (
-              <p className="mt-3 text-sm text-foreground-subtle">
-                {pick(
-                  locale,
-                  "计划批准后会生成研究问题。",
-                  "Research questions appear after the plan is approved.",
-                )}
-              </p>
-            ) : (
-              <ol className="mt-3 divide-y divide-border">
-                {overview.questions.map((question) => (
-                  <li key={question.id} className="py-2.5">
-                    <div className="flex items-start justify-between gap-3">
+              >
+                {planQuestions.map((item, index) => (
+                  <li key={item.id} className="flex items-start gap-3 py-2.5">
+                    <span className="mt-0.5 w-6 shrink-0 font-mono text-[11px] text-foreground-faint">
+                      {String(index + 1).padStart(2, "0")}
+                    </span>
+                    {item.evidenceId ? (
                       <Link
-                        href={`/runs/${runId}/evidence?question=${question.id}`}
-                        className="text-sm leading-relaxed transition-colors hover:text-foreground-muted"
+                        href={`/runs/${runId}/evidence?question=${item.evidenceId}`}
+                        className="min-w-0 flex-1 text-sm leading-relaxed transition-colors hover:text-foreground-muted"
                       >
-                        {question.question}
+                        {item.question}
                       </Link>
-                      <Badge
-                        variant={COVERAGE[question.coverage_status]?.variant ?? "secondary"}
-                        size="xs"
-                        className="shrink-0"
-                      >
-                        {coverageLabel(question.coverage_status, locale)}
-                      </Badge>
-                    </div>
+                    ) : (
+                      <span className="min-w-0 flex-1 text-sm leading-relaxed">
+                        {item.question}
+                      </span>
+                    )}
+                    <Badge
+                      variant={
+                        COVERAGE[item.coverage]?.variant ?? "secondary"
+                      }
+                      size="xs"
+                      className="shrink-0"
+                    >
+                      {coverageLabel(item.coverage, locale)}
+                    </Badge>
+                    <span className="mt-0.5 shrink-0 font-mono text-[10px] text-foreground-faint">
+                      P{item.priority}
+                    </span>
                   </li>
                 ))}
               </ol>
