@@ -1,0 +1,215 @@
+name: enforge
+
+x-app-environment: &app-environment
+  APP_NAME: "${APP_NAME:-Deep Research Writing Agent}"
+  APP_VERSION: "${APP_VERSION:-0.1.0}"
+  ENVIRONMENT: "${ENVIRONMENT:-development}"
+  DATABASE_URL: "postgresql://${POSTGRES_USER:-enforge}:${POSTGRES_PASSWORD:-enforge_dev_password}@postgres:5432/${POSTGRES_DB:-enforge}"
+  REDIS_URL: "${REDIS_URL:-redis://redis:6379/0}"
+  CELERY_BROKER_URL: "${CELERY_BROKER_URL:-redis://redis:6379/1}"
+  CELERY_RESULT_BACKEND: "${CELERY_RESULT_BACKEND:-redis://redis:6379/2}"
+  CELERY_TASK_DEFAULT_QUEUE: "${CELERY_TASK_DEFAULT_QUEUE:-research}"
+  CELERY_PARSE_QUEUE: "${CELERY_PARSE_QUEUE:-parse}"
+  RUN_PHASE_PAUSE_SECONDS: "${RUN_PHASE_PAUSE_SECONDS:-0.35}"
+  RUN_TASK_MAX_RETRIES: "${RUN_TASK_MAX_RETRIES:-3}"
+  RUN_TASK_SOFT_TIME_LIMIT_SECONDS: "${RUN_TASK_SOFT_TIME_LIMIT_SECONDS:-300}"
+  RUN_TASK_HARD_TIME_LIMIT_SECONDS: "${RUN_TASK_HARD_TIME_LIMIT_SECONDS:-360}"
+  SSE_POLL_INTERVAL_SECONDS: "${SSE_POLL_INTERVAL_SECONDS:-1.0}"
+  SSE_KEEPALIVE_SECONDS: "${SSE_KEEPALIVE_SECONDS:-15.0}"
+  FILE_STORAGE_ROOT: "${FILE_STORAGE_ROOT:-/app/data/files}"
+  MAX_UPLOAD_BYTES: "${MAX_UPLOAD_BYTES:-5242880}"
+  EMBEDDING_DIMENSION: "${EMBEDDING_DIMENSION:-1536}"
+  CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000}"
+  ENABLE_DEV_ENDPOINTS: "${ENABLE_DEV_ENDPOINTS:-true}"
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    environment:
+      POSTGRES_USER: "${POSTGRES_USER:-enforge}"
+      POSTGRES_PASSWORD: "${POSTGRES_PASSWORD:-enforge_dev_password}"
+      POSTGRES_DB: "${POSTGRES_DB:-enforge}"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./docker/postgres/init/01_extensions.sql:/docker-entrypoint-initdb.d/01_extensions.sql:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d $${POSTGRES_DB}"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes"]
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 5s
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  migrate:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment: *app-environment
+    volumes:
+      - ./migrations:/app/migrations:ro
+      - ./alembic.ini:/app/alembic.ini:ro
+    command: ["alembic", "upgrade", "head"]
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    networks:
+      - app_net
+
+  api:
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment: *app-environment
+    volumes:
+      - research_files:/app/data/files
+      - ./migrations:/app/migrations:ro
+      - ./alembic.ini:/app/alembic.ini:ro
+    ports:
+      - "${API_PORT:-8000}:8000"
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/ready', timeout=3)",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  worker:
+    build:
+      context: .
+      dockerfile: docker/worker.Dockerfile
+    environment: *app-environment
+    volumes:
+      - research_files:/app/data/files
+    command:
+      [
+        "celery",
+        "-A",
+        "app.celery_app:celery_app",
+        "worker",
+        "--loglevel=INFO",
+        "--concurrency=2",
+        "-Q",
+        "research,parse",
+      ]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-m", "app.healthcheck"]
+      interval: 15s
+      timeout: 10s
+      retries: 5
+      start_period: 20s
+    stop_grace_period: 30s
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  web:
+    build:
+      context: .
+      dockerfile: docker/web.Dockerfile
+      args:
+        NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}"
+    environment:
+      NEXT_PUBLIC_API_BASE_URL: "${NEXT_PUBLIC_API_BASE_URL:-http://localhost:8000}"
+    ports:
+      - "${WEB_PORT:-3000}:3000"
+    depends_on:
+      api:
+        condition: service_healthy
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000').then((r) => process.exit(r.ok ? 0 : 1)).catch(() => process.exit(1))",
+        ]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    restart: unless-stopped
+    networks:
+      - app_net
+
+  test:
+    profiles: ["test"]
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+      args:
+        INSTALL_DEV: "true"
+    environment:
+      <<: *app-environment
+      FILE_STORAGE_ROOT: "/app/data/files"
+      API_BASE_URL: "http://api:8000"
+    volumes:
+      - research_files:/app/data/files
+      - ./tests:/app/tests:ro
+      - ./pytest.ini:/app/pytest.ini:ro
+      - ./migrations:/app/migrations:ro
+      - ./alembic.ini:/app/alembic.ini:ro
+    command:
+      [
+        "sh",
+        "-c",
+        "alembic upgrade head && pytest -q tests/unit tests/integration",
+      ]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_healthy
+      worker:
+        condition: service_healthy
+    networks:
+      - app_net
+
+volumes:
+  research_files:
+  postgres_data:
+  redis_data:
+
+networks:
+  app_net:
+    driver: bridge

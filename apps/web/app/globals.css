@@ -1,0 +1,445 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+/* Orkest UI — Design Tokens
+   Warm minimal aesthetic · Light / Dark / High Contrast modes */
+
+@layer base {
+  :root {
+    /* ── Surfaces ─────────────────────────────────────────────── */
+    --background: #fcfbfa;
+    --surface: #ffffff;
+    --sidebar: #fafaf9;
+    --muted: #f3f4f6;
+
+    /* ── Foreground (text) ───────────────────────────────────── */
+    --foreground: #25242a;
+    --foreground-muted: #6d6770;
+    --foreground-subtle: #9f99a3;
+    --foreground-faint: #b0a9b2;
+    --foreground-on-accent: #ffffff;
+
+    /* ── Borders ─────────────────────────────────────────────── */
+    --border: rgba(0, 0, 0, 0.08);
+    --border-strong: rgba(0, 0, 0, 0.22);
+    --ring: rgba(0, 0, 0, 0.22);
+
+    /* ── Hover states ────────────────────────────────────────── */
+    --hover-bg: rgba(0, 0, 0, 0.035);
+    --hover-bg-strong: rgba(0, 0, 0, 0.06);
+    --overlay: rgba(0, 0, 0, 0.18);
+
+    /* ── Accent (primary action color) ───────────────────────── */
+    --accent: #25242a;
+    --accent-hover: #000000;
+    --accent-fg: #ffffff;
+    --accent-muted: rgba(37, 36, 42, 0.08);
+
+    /* ── Semantic colors ─────────────────────────────────────── */
+    --blue: #2563eb;
+    --blue-fg: #1d4ed8;
+    --blue-soft: #eff6ff;
+    --blue-border: #bfdbfe;
+
+    --orange: #ea580c;
+    --orange-fg: #c2410c;
+    --orange-soft: #fff7ed;
+    --orange-border: #fed7aa;
+
+    --red: #dc2626;
+    --red-fg: #b91c1c;
+    --red-soft: #fef2f2;
+    --red-border: #fecaca;
+
+    /* Filled danger surfaces (destructive buttons). Deliberately separate from
+       --red: in dark mode --red is a pale tint sized for text and icons, which
+       cannot carry white text as a background. */
+    --red-solid: #dc2626;
+    --red-solid-hover: #b91c1c;
+    --red-solid-fg: #ffffff;
+
+    --green: #16a34a;
+    --green-fg: #15803d;
+    --green-soft: #f0fdf4;
+    --green-border: #bbf7d0;
+
+    --yellow: #ca8a04;
+    --yellow-fg: #a16207;
+    --yellow-soft: #fefce8;
+    --yellow-border: #fde68a;
+
+    /* ── Project palette (19 colors, warm-shifted & desaturated) ── */
+    --color-red: #c8585a;
+    --color-orange: #cc7344;
+    --color-amber: #c89248;
+    --color-yellow: #bba348;
+    --color-lime: #7d9a48;
+    --color-green: #5d9a5d;
+    --color-emerald: #549770;
+    --color-teal: #4d9088;
+    --color-cyan: #4d8fa8;
+    --color-sky: #5e93b8;
+    --color-blue: #5d83bb;
+    --color-indigo: #7373b3;
+    --color-violet: #8974b3;
+    --color-purple: #9c77ab;
+    --color-fuchsia: #a96fa0;
+    --color-pink: #b8758a;
+    --color-rose: #b56874;
+    --color-gray: #847a7e;
+    --color-slate: #787e85;
+
+    /* ── Radius scale ────────────────────────────────────────── */
+    --radius-sm: 8px;
+    --radius-md: 12px;
+    --radius-lg: 16px;
+    --radius-xl: 24px;
+    --radius-2xl: 32px;
+    --radius-full: 9999px;
+
+    /* ── Elevation / Shadows ─────────────────────────────────── */
+    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.04);
+    --shadow-md: 0 4px 12px rgba(28, 24, 35, 0.06);
+    --shadow-pop: 0 20px 45px rgba(28, 24, 35, 0.10);
+    --shadow-dialog: 0 28px 80px rgba(28, 24, 35, 0.14);
+    --shadow-fab: 0 18px 45px rgba(37, 36, 42, 0.22);
+
+    /* ── Typography (uses next/font variables when available) ── */
+    /* CJK glyphs uniformly fall back to Source Han Sans (Noto Sans SC),
+       loaded via next/font in app/layout.tsx as --font-noto-sans-sc. */
+    --font-sans: var(--font-inter, 'Inter'), var(--font-noto-sans-sc, 'Noto Sans SC'), 'Noto Sans JP', ui-sans-serif, system-ui, sans-serif;
+    --font-display: var(--font-plus-jakarta-sans, 'Plus Jakarta Sans'), var(--font-noto-sans-sc, 'Noto Sans SC'), ui-sans-serif, system-ui, sans-serif;
+    --font-mono: var(--font-jetbrains-mono, 'JetBrains Mono'), var(--font-noto-sans-sc, 'Noto Sans SC'), ui-monospace, 'SFMono-Regular', Menlo, monospace;
+
+    --text-xs: 12px;
+    --text-sm: 13px;
+    --text-base: 15px;
+    --text-lg: 18px;
+    --text-xl: 20px;
+    --text-2xl: 24px;
+    --text-3xl: 28px;
+    --text-4xl: 32px;
+    --text-5xl: 40px;
+
+    --leading-tight: 1.1;
+    --leading-snug: 1.3;
+    --leading-normal: 1.5;
+    --leading-relaxed: 1.75;
+
+    --tracking-tight: -0.02em;
+    --tracking-normal: 0;
+    --tracking-wide: 0.04em;
+
+    /* ── Spacing scale (4/8 base) ────────────────────────────── */
+    --space-0: 0;
+    --space-1: 4px;
+    --space-2: 8px;
+    --space-3: 12px;
+    --space-4: 16px;
+    --space-5: 20px;
+    --space-6: 24px;
+    --space-8: 32px;
+    --space-10: 40px;
+    --space-12: 48px;
+    --space-16: 64px;
+    --space-20: 80px;
+    --space-24: 96px;
+
+    /* ── Motion ──────────────────────────────────────────────── */
+    --duration-fast: 0.1s;
+    --duration-base: 0.15s;
+    --duration-slow: 0.2s;
+    --duration-slower: 0.3s;
+    --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+    --ease-in-out: cubic-bezier(0.4, 0, 0.2, 1);
+    --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+
+    /* ── Z-Index ─────────────────────────────────────────────── */
+    --z-base: 0;
+    --z-sticky: 30;
+    --z-dropdown: 40;
+    --z-tooltip: 40;
+    --z-popover: 50;
+    --z-modal: 60;
+    --z-toast: 70;
+
+    /* ── Breakpoints (for reference, used via Tailwind) ──────── */
+    --bp-sm: 640px;
+    --bp-md: 768px;
+    --bp-lg: 1024px;
+    --bp-xl: 1280px;
+    --bp-2xl: 1536px;
+
+    color-scheme: light;
+  }
+
+  html.dark {
+    /* ── Surfaces ─────────────────────────────────────────────── */
+    --background: #101010;
+    --surface: #181818;
+    --sidebar: #181818;
+    --muted: rgba(255, 255, 255, 0.06);
+
+    /* ── Foreground (text) ───────────────────────────────────── */
+    --foreground: #f5f5f5;
+    --foreground-muted: #a3a3a3;
+    --foreground-subtle: #737373;
+    --foreground-faint: #6a6570;
+    --foreground-on-accent: #111111;
+
+    /* ── Borders ─────────────────────────────────────────────── */
+    --border: rgba(255, 255, 255, 0.10);
+    --border-strong: rgba(255, 255, 255, 0.25);
+    --ring: rgba(255, 255, 255, 0.30);
+
+    /* ── Hover states ────────────────────────────────────────── */
+    --hover-bg: rgba(255, 255, 255, 0.06);
+    --hover-bg-strong: rgba(255, 255, 255, 0.10);
+    --overlay: rgba(0, 0, 0, 0.55);
+
+    /* ── Accent ───────────────────────────────────────────────── */
+    --accent: #f5f5f5;
+    --accent-hover: #ffffff;
+    --accent-fg: #111111;
+    --accent-muted: rgba(245, 245, 245, 0.10);
+
+    /* ── Semantic colors ─────────────────────────────────────── */
+    --blue: #93c5fd;
+    --blue-fg: #60a5fa;
+    --blue-soft: rgba(59, 130, 246, 0.12);
+    --blue-border: rgba(96, 165, 250, 0.45);
+
+    --orange: #fdba74;
+    --orange-fg: #fb923c;
+    --orange-soft: rgba(249, 115, 22, 0.12);
+    --orange-border: rgba(251, 146, 60, 0.45);
+
+    --red: #fca5a5;
+    --red-fg: #f87171;
+    --red-soft: rgba(239, 68, 68, 0.12);
+    --red-border: rgba(248, 113, 113, 0.45);
+
+    /* Not inverted like --accent: a danger fill has to stay a saturated red so
+       white text keeps its contrast. #dc2626 is a vivid red on a near-black
+       canvas instead of the fluorescent slab a pale tint would give. */
+    --red-solid: #dc2626;
+    --red-solid-hover: #b91c1c;
+    --red-solid-fg: #ffffff;
+
+    --green: #86efac;
+    --green-fg: #4ade80;
+    --green-soft: rgba(34, 197, 94, 0.16);
+    --green-border: rgba(74, 222, 128, 0.45);
+
+    --yellow: #fde047;
+    --yellow-fg: #facc15;
+    --yellow-soft: rgba(234, 179, 8, 0.14);
+    --yellow-border: rgba(250, 204, 21, 0.45);
+
+    /* ── Shadows (deeper in dark mode) ───────────────────────── */
+    --shadow-xs: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+    --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.4);
+    --shadow-pop: 0 20px 45px rgba(0, 0, 0, 0.45);
+    --shadow-dialog: 0 28px 80px rgba(0, 0, 0, 0.55);
+    --shadow-fab: 0 18px 45px rgba(0, 0, 0, 0.55);
+
+    color-scheme: dark;
+  }
+
+  /* High Contrast mode — stronger borders, pure colors */
+  html.high-contrast {
+    --background: #ffffff;
+    --surface: #ffffff;
+    --sidebar: #ffffff;
+    --foreground: #000000;
+    --foreground-muted: #1a1a1a;
+    --foreground-subtle: #333333;
+    --foreground-faint: #4d4d4d;
+
+    --border: #000000;
+    --border-strong: #000000;
+    --ring: #000000;
+
+    --hover-bg: #f0f0f0;
+    --hover-bg-strong: #e0e0e0;
+    --overlay: rgba(0, 0, 0, 0.6);
+
+    --accent: #000000;
+    --accent-hover: #000000;
+    --accent-fg: #ffffff;
+
+    --blue: #0000ee;
+    --red: #cc0000;
+    --red-solid: #cc0000;
+    --red-solid-hover: #990000;
+    --red-solid-fg: #ffffff;
+    --green: #006400;
+    --orange: #cc5500;
+
+    --shadow-sm: 0 0 0 1px #000000;
+    --shadow-pop: 0 0 0 2px #000000, 0 8px 24px rgba(0, 0, 0, 0.3);
+    --shadow-dialog: 0 0 0 2px #000000, 0 16px 48px rgba(0, 0, 0, 0.4);
+  }
+
+  html.dark.high-contrast {
+    --background: #000000;
+    --surface: #000000;
+    --sidebar: #000000;
+    --foreground: #ffffff;
+    --foreground-muted: #f0f0f0;
+    --foreground-subtle: #cccccc;
+    --foreground-faint: #b3b3b3;
+
+    --border: #ffffff;
+    --border-strong: #ffffff;
+    --ring: #ffffff;
+
+    --hover-bg: rgba(255, 255, 255, 0.15);
+    --hover-bg-strong: rgba(255, 255, 255, 0.25);
+    --overlay: rgba(0, 0, 0, 0.8);
+
+    --accent: #ffffff;
+    --accent-hover: #ffffff;
+    --accent-fg: #000000;
+
+    --blue: #6ba3ff;
+    --red: #ff6b6b;
+    --red-solid: #cc0000;
+    --red-solid-hover: #990000;
+    --red-solid-fg: #ffffff;
+    --green: #66d97a;
+    --orange: #ff9b3d;
+
+    --shadow-sm: 0 0 0 1px #ffffff;
+    --shadow-pop: 0 0 0 2px #ffffff, 0 8px 24px rgba(0, 0, 0, 0.6);
+    --shadow-dialog: 0 0 0 2px #ffffff, 0 16px 48px rgba(0, 0, 0, 0.7);
+  }
+
+  /* ── Reduced motion ──────────────────────────────────────── */
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after {
+      animation-duration: 0.01ms !important;
+      animation-iteration-count: 1 !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+/* Base element styles */
+@layer base {
+  * {
+    border-color: var(--border);
+  }
+
+  html {
+    background: var(--background);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    background: var(--background);
+    color: var(--foreground);
+    font-family: var(--font-sans);
+    font-size: var(--text-base);
+    line-height: var(--leading-normal);
+    text-rendering: geometricPrecision;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    transition: background-color var(--duration-slow) var(--ease-out),
+                color var(--duration-slow) var(--ease-out);
+  }
+
+  ::selection {
+    background: var(--accent);
+    color: var(--accent-fg);
+  }
+
+  /* Focus ring — accessible, visible only on keyboard nav */
+  :focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  /* Custom scrollbar — WebKit (Chrome / Safari / Edge) */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--hover-bg-strong);
+    border-radius: var(--radius-full);
+    border: 2px solid transparent;
+    background-clip: content-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--foreground-faint);
+    background-clip: content-box;
+  }
+
+  /* Custom scrollbar — Firefox (standard `scrollbar-*` properties) */
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--hover-bg-strong) transparent;
+  }
+}
+
+/* Utility classes (Orkest-specific, beyond Tailwind defaults) */
+@layer utilities {
+  .font-display { font-family: var(--font-display); }
+  .font-mono { font-family: var(--font-mono); }
+
+  .text-balance { text-wrap: balance; }
+  .text-pretty { text-wrap: pretty; }
+
+  .scrollbar-none {
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+  }
+  .scrollbar-none::-webkit-scrollbar { display: none; }
+
+  [dir="rtl"] { direction: rtl; }
+  [dir="ltr"] { direction: ltr; }
+
+  @media print {
+    .no-print { display: none !important; }
+    body { background: #fff !important; color: #000 !important; }
+  }
+}
+
+/* Animations
+   General animations (fade / scale / slide / accordion) are managed
+   centrally via `keyframes` + `animation` in tailwind.config.ts to avoid
+   dual-source conflicts.
+
+   Only utility classes that tailwind.config cannot express live here:
+   - .animate-shimmer: requires a background gradient, not describable with pure tailwind utilities
+   - .animate-spin-slow / .animate-pulse-soft: depend on non-tokenized durations (1.2s / 2s) */
+@layer utilities {
+  @keyframes orkest-spin {
+    to { transform: rotate(360deg); }
+  }
+  @keyframes orkest-shimmer {
+    0% { background-position: -1000px 0; }
+    100% { background-position: 1000px 0; }
+  }
+  @keyframes orkest-pulse {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.5; }
+  }
+
+  .animate-spin-slow { animation: orkest-spin 1.2s linear infinite; }
+  .animate-shimmer {
+    background: linear-gradient(90deg, var(--hover-bg-strong) 0%, var(--hover-bg) 50%, var(--hover-bg-strong) 100%);
+    background-size: 1000px 100%;
+    animation: orkest-shimmer 2s infinite linear;
+  }
+  .animate-pulse-soft { animation: orkest-pulse 2s var(--ease-in-out) infinite; }
+}
