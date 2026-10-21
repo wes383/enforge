@@ -327,9 +327,12 @@ export default function EvidencePage() {
                   <blockquote className="mt-3 break-words border-l-2 border-border-strong pl-3 text-sm leading-relaxed text-foreground">
                     “{item.quoted_text}”
                   </blockquote>
-                  <p className="mt-2 text-xs leading-relaxed text-foreground-muted">
-                    {item.claim_summary}
-                  </p>
+                  {item.claim_summary.trim() &&
+                  item.claim_summary.trim() !== item.quoted_text.trim() ? (
+                    <p className="mt-2 text-xs leading-relaxed text-foreground-muted">
+                      {item.claim_summary}
+                    </p>
+                  ) : null}
 
                   {item.context_before || item.context_after ? (
                     <details className="group mt-3">
