@@ -1,12 +1,13 @@
 # Enforge · Deep Research Writing Agent
 
-阶段 7：长文写作、引用生成与主张核验。本阶段把提纲扩展为带有写作目的、研究问题、关键主张、支持/反对证据、预期字数和状态的论证结构；分章节写作只读取与该节相关的数据库证据，保存章节版本和实际使用的证据 ID；正文被拆解为事实性主张，按引用存在性、元数据、原文定位、数字/年份一致性、限制条件和反驳证据逐项核验；参考文献、未匹配引用、未使用文献和不完整元数据均由数据库记录与正文自动审计，模型不能生成参考文献。
+阶段 8：研究工作台。本阶段在既有研究 API 之上提供可操作的前端工作台：创建项目并配置语言、研究深度、目标字数、时间范围和引用格式；启动研究并实时查看阶段、检索、来源、证据与成本；审批或修改研究计划与提纲；浏览来源版本、证据原文和页码/章节/字符定位；按章节编辑长文并保存新版本，点击引用标记回查证据；检查引用与主张核验状态，重新生成最终报告并下载 Markdown 与参考文献。
 
 ## 当前已实现
 
-- Next.js 16.4 + React 19 + TypeScript + Tailwind CSS 3，按 Orkest UI 设计体系搭建的状态首页，支持中英文与明暗主题切换。
+- Next.js 16.4 + React 19 + TypeScript + Tailwind CSS 3 研究工作台，按 Orkest UI 设计体系实现项目列表/创建/编辑、运行历史、实时进度、计划与提纲审批、来源与证据浏览器、长文编辑、核验面板和导出下载；支持中英文与明暗主题切换。
 - FastAPI 健康检查：`/health`、`/ready`、`/api/v1/health`；`/ready` 同时检查 PostgreSQL、数据库迁移版本、Redis 和共享文件卷。
-- 项目 API：创建、分页列表、详情、更新和软删除；软删除项目及其运行、文件对外立即不可见。
+- 项目 API：创建、分页列表、详情、更新和软删除；支持研究语言、深度、目标字数、时间范围、目标读者、引用格式和预算；软删除项目及其运行、文件对外立即不可见。
+- 研究工作台 API：项目运行历史、运行汇总（含检索/来源状态与用量）、研究问题、来源及版本、证据筛选分页、当前提纲、章节版本、主张核验、artifact 列表与受控下载、核验汇总，以及同步重新核验并导出的接口。
 - 研究运行 API：快速返回 `run_id` 的创建接口、状态查询、取消、事件历史和 SSE 实时事件流；SSE 支持 `Last-Event-ID` 与 `after` 游标重连。
 - 文件 API：项目级上传、类型/大小/内容校验、受控下载和解析状态查询；存储键由服务端生成，响应不暴露宿主机路径。上传成功后自动投递 `documents.parse` 任务。
 - 外部研究工具层：`SearchProvider`、`AcademicSearchProvider`、`WebContentProvider`、`DocumentParserProvider`、`EmbeddingProvider`、`LLMProvider` 协议；Tavily、Exa、Crossref、Semantic Scholar、Firecrawl 适配器及离线 Mock Provider。
@@ -22,6 +23,8 @@
 - 稳定线程 ID 与 PostgreSQL checkpoint：`research_runs.workflow_thread_id` 贯穿首次执行和审批恢复，`checkpoint_id` 同步到运行记录；Worker 重启、任务重试和重复投递都能从最近 checkpoint 继续，节点副作用通过数据库唯一约束保持幂等。
 - 预算与终止语义：最大检索轮次、每轮查询数、来源数、抓取数、抓取并发、证据数、单节点超时、token 预算和成本预算；预算停止写入局限说明并继续产出报告，暂时性错误进入 Celery 重试，永久性错误和超时耗尽明确进入 `failed`。
 - 报告导出：`research_report`、`reference_list`、`markdown_export`、`evidence_matrix`、`citation_audit` 五种 artifact；报告包含证据覆盖、主张核验和参考文献审计章节，参考文献只从数据库来源元数据按 APA/IEEE/Chicago/MLA 生成，引用标记与参考文献一一对应，不编造文献。
+- 工作台章节编辑：仅允许终态运行编辑章节；后端重新解析引用标记、拒绝未映射标记、过滤失效引用映射并重新计算使用证据 ID，内容变化时创建新的 `draft_sections` 版本并回写提纲章节状态。
+- 同步重导出：`POST /runs/{run_id}/export` 重新核验缺少审计的章节、核验主张、重建证据矩阵/报告/参考文献，并以 `force_new_version` 创建新 artifact 版本；非终态运行返回 409。下载只通过受控 artifact 端点，前端不接触存储路径。
 - 结构化证据：每条证据保存 `source_id`、`source_version_id`、证据类型、摘要、原文引用、前后上下文、`locator`、核验状态和创建时间；PDF 记录页码，HTML/Markdown 记录章节与段落，搜索结果摘要记录摘要来源。
 - 混合检索：`document_chunks` 保存章节/页码/段落与文本哈希，PostgreSQL `to_tsvector('simple', text)` GIN 索引提供关键词检索，pgvector HNSW 提供向量检索；结果按 RRF 合并，支持项目、来源类型、日期、来源和来源版本过滤，并返回原文、来源、定位和已关联证据 ID。
 - 向量降级：没有 Embedding Provider 或向量调用失败时，关键词检索继续工作；`vector` 模式也会自动降级为关键词检索，不会让研究任务崩溃。
@@ -37,7 +40,7 @@
 - SQLAlchemy 2.0 仓储层，覆盖项目、运行、研究问题、检索、来源、切片、证据、主张、提纲、章节、引用核验、审批、事件和导出文件。
 - Alembic 从空数据库初始化、重复升级、降级/再升级和 `alembic check` 均通过；Compose 中的 `migrate` 服务在 `api`、`worker` 启动前完成迁移。
 - 文件记录与实际文件对账工具，能够报告缺失文件和孤儿文件。
-- 容器内单元测试和集成测试，当前 `221 passed`。
+- 容器内单元测试和集成测试，当前 `222 passed`。
 - 不包含 MinIO、S3 或任何对象存储服务。
 
 ## 服务拓扑
@@ -173,6 +176,19 @@ docker compose down
 | `GET` | `/api/v1/runs/{run_id}/events/stream` | SSE 事件流，支持 `Last-Event-ID` 或 `after` |
 | `GET` | `/api/v1/runs/{run_id}/approvals` | 列出审批版本，支持 `status=pending/approved/rejected/modified/cancelled` |
 | `POST` | `/api/v1/runs/{run_id}/approvals/{approval_id}` | 提交批准、拒绝或修改后的计划/提纲，返回 202 并投递恢复任务 |
+| `GET` | `/api/v1/projects/{project_id}/runs` | 项目运行历史，支持 `limit`、`offset` |
+| `GET` | `/api/v1/runs/{run_id}/overview` | 工作台汇总：状态、阶段事件、检索/来源状态、证据/主张/章节数量、用量与成本、待审批 |
+| `GET` | `/api/v1/runs/{run_id}/questions` | 研究问题、优先级与覆盖状态 |
+| `GET` | `/api/v1/runs/{run_id}/sources` | 来源列表，包含来源版本、抓取状态与解析状态 |
+| `GET` | `/api/v1/runs/{run_id}/evidence` | 证据筛选与分页：`question_id`、`source_id`、`evidence_type`、`limit`、`offset` |
+| `GET` | `/api/v1/runs/{run_id}/outline` | 当前提纲版本与章节结构 |
+| `GET` | `/api/v1/runs/{run_id}/sections` | 章节及最新版本、引用映射、核验状态 |
+| `PATCH` | `/api/v1/runs/{run_id}/sections/{section_id}` | 保存章节正文为新版本；仅终态运行，未知引用标记返回 422 |
+| `GET` | `/api/v1/runs/{run_id}/claims` | 主张、引用标记、证据关系与核验理由 |
+| `GET` | `/api/v1/runs/{run_id}/artifacts` | 报告、参考文献、Markdown、证据矩阵与核验 artifact |
+| `GET` | `/api/v1/runs/{run_id}/artifacts/{artifact_id}/download` | 受控下载 artifact，不暴露存储路径 |
+| `GET` | `/api/v1/runs/{run_id}/verification` | 引用核验、参考文献审计与主张汇总 |
+| `POST` | `/api/v1/runs/{run_id}/export` | 同步重新核验并生成新的最终报告 artifact 版本，返回 201 |
 | `POST` | `/api/v1/projects/{project_id}/files` | 上传 PDF、HTML、Markdown 或纯文本，返回 201 并异步解析 |
 | `GET` | `/api/v1/files/{file_id}` | 查询文件元数据、解析状态、解析器版本和错误 |
 | `GET` | `/api/v1/files/{file_id}/download` | 受控下载，响应不包含存储路径 |
@@ -261,6 +277,27 @@ SSE 使用数据库轮询，每页最多 500 条，按事件 `id` 严格递增�
 - 上传成功后投递 `documents.parse`，Worker 在 `parse` 队列解析；`GET /api/v1/files/{file_id}` 可轮询 `pending`、`parsing`、`parsed`、`failed` 及 `parse_error`。
 - 解析失败只影响该文件，不删除原始文件，也不影响其他来源继续解析。
 - 项目不存在或已软删除时，上传、元数据查询和下载均返回 404；下载响应设置 `Content-Disposition: attachment`、`X-Content-Type-Options: nosniff` 和 `Cache-Control: private, no-store`。
+
+## 研究工作台
+
+前端位于 `apps/web/`，使用 Next.js 16 App Router，页面只通过公开 API 读取和修改数据，不包含任何第三方密钥、数据库连接或存储路径。
+
+| 路由 | 功能 |
+|---|---|
+| `/` | 项目列表、创建入口、每个项目的最新运行与实时状态 |
+| `/projects/new` | 创建项目：主题、范围、语言、研究深度、目标字数、时间范围、引用格式、读者与预算 |
+| `/projects/{project_id}` | 项目设置编辑、运行历史和启动新运行 |
+| `/runs/{run_id}` | 运行概览：阶段进度、实时事件、检索/来源状态、证据/主张/章节/artifact 指标、研究问题覆盖、缺口、成本与取消 |
+| `/runs/{run_id}/approvals` | 查看、修改、批准或拒绝研究计划和提纲，填写反馈，查看审批历史 |
+| `/runs/{run_id}/sources` | 来源列表、抓取与解析状态、来源版本、DOI/URL 和失败原因 |
+| `/runs/{run_id}/evidence` | 按问题、来源、关系类型筛选证据；查看原文、上下文、支持/反驳关系与页码/章节/字符定位 |
+| `/runs/{run_id}/article` | 目录与章节切换、编辑/预览、保存新版本、点击引用标记回查证据、主张与引用审计、生成最终报告和下载 |
+
+- 实时进度：页面先读取事件历史，再以 `EventSource` 从最后事件 ID 续传；按事件 ID 去重，流关闭后自动重连并显示 `connecting/live/reconnecting/closed` 状态。概览数据来自运行 API 和汇总 API，不使用前端计时器伪造进度。
+- 审批：修改内容提交到审批 API，由后端按 `ResearchPlan`/`Outline` 校验后恢复工作流；批准、拒绝和修改都会实际改变后续执行。页面会同步待审批版本，避免过期角标。
+- 章节编辑：保存会创建新版本，后端重新计算引用映射和使用证据；未知引用标记被拒绝，前端显示错误而不是静默丢弃。
+- 核验与导出：引用审计、主张核验和 artifact 均从后端读取；点击“生成最终报告”调用同步导出接口，重新核验后返回新版本，再通过受控下载接口导出 Markdown 与参考文献。
+- 每个请求都有加载、错误和空状态；API 不可用时显示明确错误而不是伪造数据。所有页面刷新后从项目、运行和事件持久化状态恢复。
 
 ## 外部研究工具层与文档解析
 
@@ -581,7 +618,7 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
 
 | 表 | 职责 |
 |---|---|
-| `research_projects` | 标题、主题、范围、语言、目标读者、研究深度、引用风格、预算、软删除时间 |
+| `research_projects` | 标题、主题、范围、语言、目标读者、研究深度、引用风格、目标字数、出版时间范围、预算、软删除时间 |
 | `research_runs` | 运行状态、取消请求时间、起止时间、错误摘要、成本与 token 统计、`workflow_thread_id`、checkpoint、幂等键 |
 | `research_questions` | 主问题/子问题、优先级、覆盖状态；同一运行内按规范化问题去重 |
 | `search_queries` | 检索语句、提供商、轮次、结果数量、执行状态；按运行 + 轮次 + 提供商 + 语句指纹去重 |
@@ -644,7 +681,7 @@ docker compose up -d --force-recreate migrate api worker
 
 Linux/macOS 将卷参数替换为 `-v "$PWD/migrations:/app/migrations"`，并去掉 `MSYS_NO_PATHCONV=1`。迁移文件已通过挂载进入 `api` 和 `migrate` 容器，因此修改迁移脚本后无需重建镜像；如果同时修改了模型代码，仍需重建 `api`、`worker` 和 `test` 镜像。
 
-当前迁移链：`c991dd5b285d`（阶段 2 完整架构）→ `4f6d1c8a2b90`（来源版本内容类型去重）→ `8d2a7c4e9f10`（运行取消时间与事件类型扩展）→ `c4e8f1a2b7d3`（增加 Mock 搜索提供商枚举值）→ `e5b9c3d7a1f2`（阶段 5 审批表）→ `a7d3e5f9c2b4`（阶段 6 切片全文索引）。阶段 6 已实际验证：
+当前迁移链：`c991dd5b285d`（阶段 2 完整架构）→ `4f6d1c8a2b90`（来源版本内容类型去重）→ `8d2a7c4e9f10`（运行取消时间与事件类型扩展）→ `c4e8f1a2b7d3`（增加 Mock 搜索提供商枚举值）→ `e5b9c3d7a1f2`（阶段 5 审批表）→ `a7d3e5f9c2b4`（阶段 6 切片全文索引）→ `b8e4f1c7d2a9`（阶段 8 项目目标字数与时间范围）。阶段 6 已实际验证：
 
 - 在已有数据库上执行 `alembic upgrade head` 成功创建 `ix_document_chunks_text_fts`。
 - `alembic check` 返回 `No new upgrade operations detected`；LangGraph checkpoint 表和手写全文表达式索引被正确排除。
@@ -653,6 +690,8 @@ Linux/macOS 将卷参数替换为 `-v "$PWD/migrations:/app/migrations"`，并�
 - `/ready` 的 `schema` 检查在迁移完成后返回 `ok`。
 
 阶段 7 复用已有的 `claims`、`claim_evidence`、`draft_sections`、`citation_audits` 与 `artifacts` 表，没有新增迁移；阶段 7 验收时 `alembic check` 仍返回 `No new upgrade operations detected`。
+
+阶段 8 新增迁移 `b8e4f1c7d2a9`，为 `research_projects` 增加可空的 `target_words`、`date_from`、`date_to`，并在已有数据库上实际升级；升级后 `alembic check` 返回 `No new upgrade operations detected`。工作台只新增读取接口、章节版本写入和同步导出，不需要新的业务表。
 
 ## 仓储层与文件对账
 
@@ -802,6 +841,14 @@ docker compose exec api python -m dr_core.maintenance
 docker compose --profile test run --build --rm test
 ```
 
+阶段 8 测试内容：
+
+- 项目创建与更新支持目标字数、起止日期和引用格式；`date_to` 早于 `date_from` 返回 422。
+- 完整 Mock 研究工作流后，工作台接口返回运行汇总、检索与来源状态计数、研究问题、来源版本、证据筛选、当前提纲、章节、主张、artifact 与核验汇总；artifact 下载返回真实 Markdown/参考文献内容且不暴露存储路径。
+- 章节编辑：未知引用标记返回 422；合法编辑创建新的章节版本、重新计算使用证据并回写提纲章节状态。
+- 同步导出：首次导出创建新 artifact 版本，重复导出按内容重新核验并递增版本；缺少审计的章节被重新审查，导出事件写入运行事件流。
+- 前端 ESLint、TypeScript 与 Next.js 生产构建通过；浏览器验收覆盖从 UI 创建项目/启动运行、实时进度、修改并批准计划与提纲、证据定位、章节编辑、导出下载和刷新恢复。
+
 阶段 7 测试内容：
 
 - 论证型提纲：章节包含写作目的、问题、关键主张、支持/反对证据、预期字数和状态；深度越深目标字数越高。
@@ -877,7 +924,7 @@ docker compose --profile test run --build --rm test
 - 缺失文件与孤儿文件识别。
 - 原有健康检查、CORS、文件跨容器往返和 Celery 测试任务。
 
-当前结果：`221 passed`（阶段 7 新增 16 项；测试全程不需要网络或真实 API Key）。
+当前结果：`222 passed`（阶段 8 新增 1 项端到端工作台集成测试；测试全程不需要网络或真实 API Key）。
 
 前端静态检查：
 
@@ -997,11 +1044,13 @@ Linux/macOS 的恢复命令同样将第二个卷参数改为 `-v "$PWD/backups:/
 - token 与成本预算读取运行累计用量；Mock 提供商不上报真实费用，因此成本预算验证使用项目预算和已记录成本。真实提供商的费用统计精度取决于其结果中的 usage 字段。
 - 主张核验优先使用确定性规则，语义判断是保守的启发式：词项重叠不足或定位缺失会产生 `PARTIAL`/`UNVERIFIABLE`，可能存在假阴性；系统不会为了“通过”而放宽核验。模型复核只能降级，不参与自动升级。当前不会自动发起修订或补充研究循环，未通过的主张保留状态、理由和局限说明。
 - 参考文献的“元数据准确性”以数据库来源记录为准：检查标题、作者、年份、出版方、DOI/URL 是否完整以及正文标记是否可映射，不会访问外部数据库重新核验文献。没有证据支持的章节会明确说明，不会补写引用。
-- 同一运行的最终 artifact 按内容哈希幂等：相同内容重复生成返回同一版本，内容变化（如提纲修订后重新写作）会创建新的 `draft_sections` 与 artifact 版本。当前没有独立的“重新导出”API，导出由工作流定稿节点产生。
+- 同一运行的最终 artifact 按内容哈希幂等：工作流定稿时相同内容返回同一版本。工作台“生成最终报告”调用同步导出 API，会重新核验、重建报告并强制创建新的 artifact 版本；该操作在请求内完成，适用于当前 MVP 规模，后续可迁移为后台任务。
+- 章节编辑只允许在运行进入终态后进行，且不会重新执行研究或检索；编辑后的章节在下一次同步导出时参与引用与主张核验。未知引用标记会被拒绝，不会自动补写来源。
+- 阶段 8 前端为单用户工作台，没有登录与项目级用户权限；浏览器只访问 API 公开地址，第三方密钥仍只存在于后端环境变量中。
 - 对账工具只读，不自动删除孤儿文件；上传失败会自动清理本次写入的文件。
 - PostgreSQL、Redis 不暴露宿主机端口；API 与前端端口默认暴露。
 - 本地开发密码仅用于开发环境，生产部署必须更换并保管在未提交的 `.env` 中。
 
 ## 下一阶段
 
-阶段 8 将开发前端研究工作台：在现有 API 之上提供项目创建、研究运行、审批、事件进度、来源/证据、章节与核验记录、artifact 下载等可操作界面。在获得确认前不会提前实现后续阶段。
+阶段 9 将进行质量评测、观测、安全与最终验收：可选的 Langfuse 观测、评测集与指标、安全加固、完整测试与文档。在获得确认前不会提前实现后续阶段。

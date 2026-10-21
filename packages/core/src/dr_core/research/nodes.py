@@ -5,7 +5,6 @@ import logging
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from decimal import Decimal
-from types import SimpleNamespace
 from uuid import UUID
 
 from langgraph.types import interrupt
@@ -32,11 +31,9 @@ from dr_core.db.enums import (
     SourceVersionKind,
 )
 from dr_core.db.models import (
-    DocumentChunk,
     ResearchQuestion,
     ResearchRun,
     Source,
-    SourceVersion,
 )
 from dr_core.db.repositories import (
     ArtifactRepository,
@@ -52,12 +49,7 @@ from dr_core.db.repositories import (
     SourceRepository,
     SourceVersionRepository,
 )
-from dr_core.normalization import (
-    claim_fingerprint,
-    normalize_doi,
-    normalize_url,
-    text_sha256,
-)
+from dr_core.normalization import normalize_doi, normalize_url, text_sha256
 from dr_core.providers.errors import ProviderError
 from dr_core.providers.models import FetchStatus
 from dr_core.providers.orchestration import fetch_web_content
@@ -87,7 +79,6 @@ from dr_core.research.models import (
     ApprovalDecision,
     CitationAudit,
     CitationIssue,
-    ClaimVerification,
     EvidenceMatrix,
     Outline,
     ReferenceAudit,
@@ -99,21 +90,24 @@ from dr_core.research.models import (
     SourceRecord,
 )
 from dr_core.research.quality import build_evidence_matrix
+from dr_core.research.reporting import (
+    claim_status_counts,
+    persist_report_artifacts,
+    reference_lines,
+    report_markdown,
+    source_views,
+)
 from dr_core.research.retrieval import HybridRetriever, RetrievalFilters, RetrievalHit
 from dr_core.research.state import ResearchState
 from dr_core.research.text import (
     best_sentence_span,
     citation_markers,
     context_window,
-    format_reference,
     sentence_spans,
 )
+from dr_core.research.verification import audit_section, verify_run_claims
 from dr_core.research.writing import compose_section
 from dr_core.schemas import (
-    ArtifactCreate,
-    CitationAuditCreate,
-    ClaimCreate,
-    ClaimEvidenceCreate,
     DraftSectionCreate,
     ResearchQuestionCreate,
     RunEventCreate,
@@ -156,6 +150,9 @@ def parse_brief(ctx: ResearchContext):
                 target_audience=project.target_audience,
                 research_depth=project.research_depth,
                 citation_style=project.citation_style,
+                target_words=project.target_words,
+                date_from=project.date_from,
+                date_to=project.date_to,
                 budget_usd=project.budget_usd,
                 max_search_rounds=max_rounds,
                 max_sources=max_sources,
@@ -527,7 +524,16 @@ def rank_sources(ctx: ResearchContext):
             query_tokens = _plan_tokens(plan)
             ranked = []
             current_year = datetime.now(tz=UTC).year
+            excluded_by_date = 0
             for record in _source_records(state):
+                if record.published_at and brief.date_from:
+                    if record.published_at < brief.date_from:
+                        excluded_by_date += 1
+                        continue
+                if record.published_at and brief.date_to:
+                    if record.published_at > brief.date_to:
+                        excluded_by_date += 1
+                        continue
                 score = (record.score or 0.35)
                 if record.source_origin is SourceOrigin.USER_UPLOAD:
                     score += 1.0
@@ -557,6 +563,17 @@ def rank_sources(ctx: ResearchContext):
             ]
             limitations = _with_limitations(
                 state,
+                *(
+                    [
+                        _text(
+                            brief,
+                            f"{excluded_by_date} 个来源的出版日期超出项目时间范围，已排除。",
+                            f"{excluded_by_date} sources fell outside the project date range and were excluded.",
+                        )
+                    ]
+                    if excluded_by_date
+                    else []
+                ),
                 *(
                     [
                         _text(
@@ -957,7 +974,11 @@ def extract_evidence(ctx: ResearchContext):
                 if record.source_version_id is not None
             ]
             if source_version_ids:
-                filters = RetrievalFilters(source_version_ids=source_version_ids)
+                filters = RetrievalFilters(
+                    source_version_ids=source_version_ids,
+                    published_from=brief.date_from,
+                    published_to=brief.date_to,
+                )
                 with ctx.database.session() as session:
                     retriever = HybridRetriever(
                         session,
@@ -1537,7 +1558,7 @@ def write_sections(ctx: ResearchContext):
                     ctx.project_id,
                     ctx.run_id,
                 )
-                sources = _source_views(session, ctx.project_id)
+                sources = source_views(session, ctx.project_id)
             numbering = source_numbering(evidence)
             matrix = _matrix(state)
             gaps = [
@@ -1651,52 +1672,18 @@ def verify_claims(ctx: ResearchContext):
                 message="Verifying factual claims",
                 dedupe_key="phase:verifying:claims",
             )
-            with ctx.database.session_scope() as session:
-                sections = DraftSectionRepository(session).list_latest_for_run(
-                    ctx.project_id,
-                    ctx.run_id,
-                )
-                evidence = EvidenceRepository(session).list_for_run(
-                    ctx.project_id,
-                    ctx.run_id,
-                )
-                sources = _source_views(session, ctx.project_id)
-            evidence_by_id = {item.id: item for item in evidence}
-            evidence_by_source: dict[UUID, list] = {}
-            for item in evidence:
-                evidence_by_source.setdefault(item.source_id, []).append(item)
-            traceable = _traceability_checker(ctx)
-            reviewer = _claim_reviewer(ctx)
-            claims_state: list[dict] = []
-            llm_reviewed = 0
-            for section in sections:
-                ctx.guard()
-                for candidate in extract_claims(section):
-                    assessment = verify_claim(
-                        candidate,
-                        section=section,
-                        sources_by_id=sources,
-                        evidence_by_id=evidence_by_id,
-                        evidence_by_source=evidence_by_source,
-                        traceable=traceable,
-                    )
-                    if reviewer is not None:
-                        cited = [
-                            evidence_by_id[evidence_id]
-                            for evidence_id in assessment.evidence_ids
-                            if evidence_id in evidence_by_id
-                        ]
-                        before = assessment.status
-                        assessment = review_claim_with_llm(
-                            reviewer,
-                            assessment,
-                            cited,
-                        )
-                        if assessment.status is not before:
-                            llm_reviewed += 1
-                    model = _persist_claim(ctx, section, assessment)
-                    claims_state.append(model.model_dump(mode="json"))
-            summary = _claim_summary(claims_state)
+            ctx.guard()
+            models, llm_reviewed = verify_run_claims(
+                ctx.database,
+                ctx.storage,
+                ctx.settings,
+                ctx.registry.parsers,
+                ctx.project_id,
+                ctx.run_id,
+                llm=_claim_reviewer(ctx),
+            )
+            claims_state = [model.model_dump(mode="json") for model in models]
+            summary = claim_status_counts(claims_state)
             ctx.emit(
                 RunEventType.PROGRESS,
                 message="Factual claims verified",
@@ -1748,6 +1735,7 @@ def verify_citations(ctx: ResearchContext):
                     ctx.project_id,
                     ctx.run_id,
                 )
+                sources = source_views(session, ctx.project_id)
                 for section in sections:
                     ctx.guard()
                     existing = CitationAuditRepository(session).list_for_section(
@@ -1780,7 +1768,7 @@ def verify_citations(ctx: ResearchContext):
                                 )
                         continue
 
-                    audit_value = _audit_section(ctx, section)
+                    audit_value = audit_section(section, sources)
                     CitationAuditRepository(session).create(
                         ctx.project_id,
                         ctx.run_id,
@@ -1839,7 +1827,7 @@ def verify_citations(ctx: ResearchContext):
                     ctx.project_id,
                     ctx.run_id,
                 )
-                sources = _source_views(session, ctx.project_id)
+                sources = source_views(session, ctx.project_id)
                 evidence_source_ids = {
                     item.source_id
                     for item in EvidenceRepository(session).list_for_run(
@@ -1993,19 +1981,13 @@ def finalize_report(ctx: ResearchContext):
                     }
                     for claim in claims
                 ]
-                sources = {
-                    source.id: source
-                    for source in SourceRepository(session).list_for_project(
-                        ctx.project_id,
-                        limit=500,
-                    )
-                }
-                references = _reference_lines(
+                sources = source_views(session, ctx.project_id)
+                references = reference_lines(
                     brief,
                     sections,
                     sources,
                 )
-                report = _report_markdown(
+                report = report_markdown(
                     brief,
                     matrix,
                     sections,
@@ -2034,19 +2016,21 @@ def finalize_report(ctx: ResearchContext):
                         "citation_audit": audit.model_dump(mode="json"),
                         "reference_audit": reference_audit.model_dump(mode="json"),
                         "claims": claim_records,
-                        "claim_summary": _claim_status_counts(claim_records),
+                        "claim_summary": claim_status_counts(claim_records),
                     },
                     ensure_ascii=False,
                     indent=2,
                     sort_keys=True,
                 )
-                artifacts = _persist_report_artifacts(
-                    ctx,
-                    session,
-                    report,
-                    reference_list,
-                    matrix_json,
-                    verification_json,
+                artifacts = persist_report_artifacts(
+                    storage=ctx.storage,
+                    session=session,
+                    project_id=ctx.project_id,
+                    run_id=ctx.run_id,
+                    report=report,
+                    reference_list=reference_list,
+                    matrix_json=matrix_json,
+                    verification_json=verification_json,
                 )
                 artifact_payload = [
                     {
@@ -2074,7 +2058,7 @@ def finalize_report(ctx: ResearchContext):
                             "sections": len(sections),
                             "citations": len(citations),
                             "claims": len(claim_records),
-                            "claim_summary": _claim_status_counts(claim_records),
+                            "claim_summary": claim_status_counts(claim_records),
                             "coverage_ratio": matrix.coverage_ratio,
                         },
                         dedupe_key="run:completed",
@@ -2577,22 +2561,6 @@ def _outline_id(state: ResearchState) -> UUID | None:
     return UUID(value) if value else None
 
 
-def _source_views(session, project_id: UUID) -> dict[UUID, SimpleNamespace]:
-    views: dict[UUID, SimpleNamespace] = {}
-    for source in SourceRepository(session).list_for_project(project_id, limit=500):
-        views[source.id] = SimpleNamespace(
-            id=source.id,
-            title=source.title,
-            authors=list(source.authors or []),
-            published_at=source.published_at,
-            venue=source.venue,
-            publisher=source.publisher,
-            doi=source.doi,
-            canonical_url=source.canonical_url,
-            source_type=source.source_type,
-        )
-    return views
-
 
 def _section_evidence(section, evidence: list) -> list:
     by_id = {item.id: item for item in evidence}
@@ -2640,531 +2608,14 @@ def _claim_reviewer(ctx: ResearchContext):
     return llm
 
 
-def _traceability_checker(ctx: ResearchContext):
-    text_cache: dict[UUID, str | None] = {}
-    chunk_cache: dict[UUID, str | None] = {}
-
-    def normalized(value: str | None) -> str | None:
-        if not value:
-            return None
-        return " ".join(value.split())
-
-    def checker(item) -> bool:
-        quote = normalized(item.quoted_text)
-        if not quote:
-            return False
-        locator = dict(item.locator or {})
-        chunk_value = locator.get("chunk_id")
-        if chunk_value:
-            try:
-                chunk_id = UUID(str(chunk_value))
-            except ValueError:
-                chunk_id = None
-            if chunk_id is not None:
-                if chunk_id not in chunk_cache:
-                    with ctx.database.session() as session:
-                        chunk = session.get(DocumentChunk, chunk_id)
-                        chunk_cache[chunk_id] = (
-                            chunk.text
-                            if chunk is not None
-                            and chunk.project_id == ctx.project_id
-                            else None
-                        )
-                chunk_text = normalized(chunk_cache[chunk_id])
-                if chunk_text is not None:
-                    if quote in chunk_text:
-                        return True
-                    chunk_cache[chunk_id] = chunk_text
-        version_id = item.source_version_id
-        if version_id not in text_cache:
-            text_cache[version_id] = _read_version_text(ctx, version_id)
-        version_text = text_cache[version_id]
-        return bool(version_text and quote in version_text)
-
-    return checker
 
 
-def _read_version_text(ctx: ResearchContext, version_id: UUID) -> str | None:
-    with ctx.database.session() as session:
-        version = session.get(SourceVersion, version_id)
-        if version is None or version.project_id != ctx.project_id:
-            return None
-        storage_key = version.storage_key
-        mime_type = version.mime_type
-        metadata = dict(version.version_metadata)
-        parser_status = version.parser_status
-    if storage_key and parser_status is not ParserStatus.FAILED:
-        try:
-            content = ctx.storage.read(storage_key)
-        except Exception:
-            content = None
-        if content is not None:
-            if mime_type in {"text/markdown", "text/plain"}:
-                try:
-                    return " ".join(
-                        content.decode("utf-8-sig")[
-                            : ctx.settings.parser_max_output_chars
-                        ].split()
-                    )
-                except UnicodeDecodeError:
-                    pass
-            elif ctx.registry.parsers:
-                try:
-                    parsed = ctx.registry.parsers[0].parse(
-                        content,
-                        mime_type=mime_type or "application/octet-stream",
-                        filename=storage_key,
-                    )
-                    return " ".join(
-                        parsed.text[: ctx.settings.parser_max_output_chars].split()
-                    )
-                except Exception:
-                    logger.warning(
-                        "Unable to re-read source version %s for claim tracing",
-                        version_id,
-                    )
-    snippet = metadata.get("snippet")
-    return " ".join(str(snippet).split()) if snippet else None
 
 
-def _persist_claim(
-    ctx: ResearchContext,
-    section,
-    assessment,
-) -> ClaimVerification:
-    candidate = assessment.candidate
-    rationale = "; ".join(assessment.reasons)[:2000] or None
-    with ctx.database.session_scope() as session:
-        repo = ClaimRepository(session)
-        existing = repo.find_by_fingerprint(
-            ctx.run_id,
-            claim_fingerprint(candidate.text),
-        )
-        status = merged_status(
-            existing.verification_status if existing is not None else None,
-            assessment.status,
-        )
-        claim = repo.create(
-            ctx.project_id,
-            ctx.run_id,
-            ClaimCreate(
-                claim_text=candidate.text,
-                claim_type=candidate.claim_type,
-                verification_status=status,
-            ),
-        )
-        if claim.verification_status is not status:
-            claim = repo.update_verification(
-                claim.id,
-                status,
-                project_id=ctx.project_id,
-            )
-        links = ClaimEvidenceRepository(session)
-        for evidence_id, relation in assessment.relations.items():
-            links.link(
-                ctx.project_id,
-                claim.id,
-                ClaimEvidenceCreate(
-                    evidence_id=evidence_id,
-                    relation=relation,
-                    rationale=rationale,
-                ),
-            )
-        claim_id = claim.id
-    return ClaimVerification(
-        claim_id=claim_id,
-        section_id=section.id,
-        section_index=section.section_index,
-        claim_text=candidate.text,
-        claim_type=candidate.claim_type,
-        status=status,
-        citation_markers=list(candidate.markers),
-        evidence_ids=assessment.evidence_ids,
-        reasons=assessment.reasons,
-    )
 
 
-def _claim_summary(claims: list[dict]) -> dict[str, int]:
-    summary = {"total": len(claims)}
-    for claim in claims:
-        key = str(claim.get("status", "")).lower()
-        summary[key] = summary.get(key, 0) + 1
-    return summary
 
 
-def _claim_status_counts(claims: list[dict]) -> dict[str, int]:
-    return _claim_summary(claims)
-
-
-def _audit_section(ctx: ResearchContext, section) -> CitationAuditCreate:
-    markers = citation_markers(section.content_markdown)
-    citation_map = dict(section.citation_map or {})
-    exempt = any(
-        word in section.title.casefold()
-        for word in (
-            "局限",
-            "矛盾",
-            "limitation",
-            "contradiction",
-            "approval feedback",
-            "审批反馈",
-        )
-    )
-    if not markers and not exempt:
-        return CitationAuditCreate(
-            draft_section_id=section.id,
-            status=CitationAuditStatus.WARNING,
-            issue_type=CitationIssueType.MISSING_CITATION,
-            details="Section contains no citation markers or verified source references.",
-        )
-
-    dangling = [
-        f"S{marker}" for marker in markers if f"S{marker}" not in citation_map
-    ]
-    if dangling:
-        return CitationAuditCreate(
-            draft_section_id=section.id,
-            citation_marker=dangling[0],
-            status=CitationAuditStatus.FAILED,
-            issue_type=CitationIssueType.DANGLING_REFERENCE,
-            details=f"Citation markers without source mapping: {', '.join(dangling)}",
-        )
-
-    with ctx.database.session() as session:
-        source_repo = SourceRepository(session)
-        for marker, source_id in citation_map.items():
-            try:
-                source_repo.get(UUID(str(source_id)), project_id=ctx.project_id)
-            except Exception as exc:
-                return CitationAuditCreate(
-                    draft_section_id=section.id,
-                    citation_marker=marker,
-                    status=CitationAuditStatus.FAILED,
-                    issue_type=CitationIssueType.METADATA_MISMATCH,
-                    details=f"Citation source {source_id} is not available in this project.",
-                )
-    return CitationAuditCreate(
-        draft_section_id=section.id,
-        status=CitationAuditStatus.PASSED,
-        details="All citation markers resolve to stored project sources.",
-    )
-
-
-def _reference_lines(brief, sections, sources) -> list[str]:
-    numbering: dict[int, UUID] = {}
-    for section in sections:
-        for marker, source_id in dict(section.citation_map or {}).items():
-            digits = "".join(character for character in marker if character.isdigit())
-            if not digits:
-                continue
-            try:
-                numbering[int(digits)] = UUID(str(source_id))
-            except ValueError:
-                continue
-    lines = []
-    for number in sorted(numbering):
-        source = sources.get(numbering[number])
-        if source is None:
-            continue
-        reference = format_reference(
-            authors=source.authors or [],
-            title=source.title,
-            year=source.published_at.year if source.published_at else None,
-            venue=source.venue,
-            publisher=source.publisher,
-            doi=source.doi,
-            url=source.canonical_url,
-            style=brief.citation_style.value,
-        )
-        lines.append(f"[S{number}] {reference}")
-    return lines
-
-
-def _report_markdown(
-    brief: ResearchBrief,
-    matrix: EvidenceMatrix,
-    sections,
-    references: list[str],
-    citations,
-    limitations: list[str],
-    *,
-    claims: list[dict] | None = None,
-    reference_audit: ReferenceAudit | None = None,
-) -> str:
-    lines = [
-        f"# {brief.title}",
-        "",
-        _text(brief, "## 研究摘要", "## Research Summary"),
-        "",
-        _text(
-            brief,
-            f"本报告围绕“{brief.topic}”生成。共分析 {matrix.source_count} 个来源、"
-            f"{matrix.total_evidence} 条证据，问题覆盖率为 {matrix.coverage_ratio:.0%}。",
-            f"This report examines “{brief.topic}” using {matrix.source_count} sources "
-            f"and {matrix.total_evidence} evidence items; question coverage is "
-            f"{matrix.coverage_ratio:.0%}.",
-        ),
-        "",
-        _text(
-            brief,
-            f"- 生成时间：{datetime.now(tz=UTC).isoformat()}",
-            f"- Generated at: {datetime.now(tz=UTC).isoformat()}",
-        ),
-        _text(
-            brief,
-            f"- 引用格式：{brief.citation_style.value.upper()}",
-            f"- Citation style: {brief.citation_style.value.upper()}",
-        ),
-        "",
-    ]
-    lines.extend(
-        [
-            _text(brief, "## 证据覆盖", "## Evidence Coverage"),
-            "",
-            _text(
-                brief,
-                "| 研究问题 | 覆盖状态 | 支持证据 | 相反证据 | 独立来源 |",
-                "| Question | Coverage | Supporting | Counter | Independent sources |",
-            ),
-            "| --- | --- | --- | --- | --- |",
-        ]
-    )
-    for row in matrix.rows:
-        question = row.question.replace("|", "\\|")[:500]
-        lines.append(
-            f"| {question} | {row.coverage_status.value} | "
-            f"{row.support_count} | {row.refute_count} | "
-            f"{row.independent_source_count} |"
-        )
-    if matrix.duplicate_source_groups:
-        lines.extend(
-            [
-                "",
-                _text(
-                    brief,
-                    "以下来源可能转述同一项原始工作，未按独立来源计数：",
-                    "The following sources appear to report the same original work "
-                    "and were not counted as independent:",
-                ),
-            ]
-        )
-        lines.extend(
-            f"- {group}" for group in matrix.duplicate_source_groups[:10]
-        )
-    lines.append("")
-    for section in sections:
-        lines.append(section.content_markdown.rstrip())
-        lines.append("")
-    lines.append(_text(brief, "## 参考文献", "## References"))
-    lines.append("")
-    if references:
-        lines.extend(references)
-    else:
-        lines.append(
-            _text(
-                brief,
-                "没有可核验的参考文献。",
-                "No verifiable references were available.",
-            )
-        )
-    lines.extend(["", _text(brief, "## 引用核验", "## Citation Audit"), ""])
-    failed = sum(1 for audit in citations if audit.status is CitationAuditStatus.FAILED)
-    warnings = sum(
-        1 for audit in citations if audit.status is CitationAuditStatus.WARNING
-    )
-    lines.append(
-        _text(
-            brief,
-            f"共记录 {len(citations)} 条核验结果：失败 {failed}，警告 {warnings}。",
-            f"{len(citations)} audit records: {failed} failed, {warnings} warnings.",
-        )
-    )
-    if claims:
-        counts = _claim_status_counts(claims)
-        lines.extend(["", _text(brief, "## 事实核验", "## Claim Verification"), ""])
-        lines.append(
-            _text(
-                brief,
-                f"共抽取 {counts.get('total', 0)} 条事实主张："
-                f"有支持 {counts.get('supported', 0)}，部分支持 {counts.get('partial', 0)}，"
-                f"矛盾 {counts.get('contradicted', 0)}，无支持 {counts.get('unsupported', 0)}，"
-                f"无法核验 {counts.get('unverifiable', 0)}。",
-                f"{counts.get('total', 0)} claims extracted: "
-                f"{counts.get('supported', 0)} supported, "
-                f"{counts.get('partial', 0)} partial, "
-                f"{counts.get('contradicted', 0)} contradicted, "
-                f"{counts.get('unsupported', 0)} unsupported, "
-                f"{counts.get('unverifiable', 0)} unverifiable.",
-            )
-        )
-        flagged = [
-            claim
-            for claim in claims
-            if claim.get("status") not in {"SUPPORTED"}
-        ]
-        if flagged:
-            lines.extend(
-                [
-                    "",
-                    _text(
-                        brief,
-                        "未完全通过核验的主张：",
-                        "Claims that did not fully pass verification:",
-                    ),
-                ]
-            )
-            for claim in flagged[:10]:
-                lines.append(
-                    f"- [{claim.get('status')}] {claim.get('claim_text', '')[:300]}"
-                )
-    if reference_audit is not None:
-        lines.extend(["", _text(brief, "## 参考文献审计", "## Reference Audit"), ""])
-        lines.append(
-            _text(
-                brief,
-                f"正文引用来源 {len(reference_audit.cited_source_ids)} 个，"
-                f"未引用证据来源 {len(reference_audit.unused_source_ids)} 个，"
-                f"元数据不完整 {len(reference_audit.invalid_metadata_source_ids)} 个，"
-                f"悬空标记 {len(reference_audit.dangling_markers)} 个。",
-                f"{len(reference_audit.cited_source_ids)} sources cited, "
-                f"{len(reference_audit.unused_source_ids)} evidence sources unused, "
-                f"{len(reference_audit.invalid_metadata_source_ids)} with incomplete metadata, "
-                f"{len(reference_audit.dangling_markers)} dangling markers.",
-            )
-        )
-        if reference_audit.issues:
-            lines.extend(
-                f"- {issue}" for issue in reference_audit.issues[:10]
-            )
-    lines.extend(["", _text(brief, "## 研究局限", "## Limitations"), ""])
-    if limitations:
-        lines.extend(f"- {item}" for item in list(dict.fromkeys(limitations)))
-    else:
-        lines.append(
-            _text(brief, "未记录额外的研究局限。", "No additional limitations were recorded.")
-        )
-    lines.append("")
-    return "\n".join(lines)
-
-
-def _persist_report_artifacts(
-    ctx: ResearchContext,
-    session,
-    report: str,
-    reference_list: str,
-    matrix_json: str,
-    verification_json: str,
-) -> list:
-    repo = ArtifactRepository(session)
-    existing = {item.artifact_type: item for item in repo.list_for_run(
-        ctx.project_id,
-        ctx.run_id,
-    )}
-    artifacts = []
-    for artifact_type, title, content, extension, mime_type in [
-        (ArtifactType.RESEARCH_REPORT, "Research report", report, "md", "text/markdown"),
-        (
-            ArtifactType.REFERENCE_LIST,
-            "Reference list",
-            reference_list,
-            "md",
-            "text/markdown",
-        ),
-        (
-            ArtifactType.MARKDOWN_EXPORT,
-            "Markdown export",
-            report,
-            "md",
-            "text/markdown",
-        ),
-        (
-            ArtifactType.EVIDENCE_MATRIX,
-            "Evidence matrix",
-            matrix_json,
-            "json",
-            "application/json",
-        ),
-        (
-            ArtifactType.CITATION_AUDIT,
-            "Evidence and claim verification",
-            verification_json,
-            "json",
-            "application/json",
-        ),
-    ]:
-        artifacts.append(
-            _persist_artifact(
-                ctx,
-                session,
-                repo,
-                existing.get(artifact_type),
-                artifact_type,
-                title,
-                content,
-                extension=extension,
-                mime_type=mime_type,
-            )
-        )
-    return artifacts
-
-
-def _persist_artifact(
-    ctx: ResearchContext,
-    session,
-    repo: ArtifactRepository,
-    latest,
-    artifact_type: ArtifactType,
-    title: str,
-    content: str,
-    *,
-    extension: str = "md",
-    mime_type: str = "text/markdown",
-):
-    payload = content.encode("utf-8")
-    content_hash = text_sha256(content)
-    if (
-        latest is not None
-        and latest.content_hash == content_hash
-        and ctx.storage.exists(latest.storage_key)
-    ):
-        return latest
-    version = latest.version if latest and latest.content_hash == content_hash else (
-        (latest.version + 1) if latest else 1
-    )
-    key = (
-        f"projects/{ctx.project_id}/runs/{ctx.run_id}/artifacts/"
-        f"{artifact_type.value}/v{version}.{extension}"
-    )
-    created_file = False
-    if latest is None or latest.storage_key != key or not ctx.storage.exists(key):
-        ctx.storage.save(key, payload)
-        created_file = True
-    try:
-        return repo.register(
-            ctx.project_id,
-            ctx.run_id,
-            ArtifactCreate(
-                artifact_type=artifact_type,
-                title=title,
-                version=version,
-                storage_key=key,
-                mime_type=mime_type,
-                size_bytes=len(payload),
-                content_hash=content_hash,
-                metadata={
-                    "sections": content.count("\n## "),
-                    "format": extension,
-                    "generated_by": "phase7-workflow",
-                },
-            ),
-        )
-    except Exception:
-        if created_file:
-            try:
-                ctx.storage.delete(key)
-            except Exception:
-                pass
-        raise
 
 
 def _gap_queries(brief: ResearchBrief, question: str) -> list[str]:

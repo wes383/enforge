@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
@@ -31,6 +31,9 @@ class ProjectResponse(OrmResponse):
     target_audience: str | None
     research_depth: ResearchDepth
     citation_style: CitationStyle
+    target_words: int | None
+    date_from: date | None
+    date_to: date | None
     budget_usd: Decimal | None
     status: ProjectStatus
     deleted_at: datetime | None
@@ -112,3 +115,177 @@ class FileUploadResponse(BaseModel):
     parser_version: str | None
     parse_error: str | None
     created_at: datetime
+
+
+class RunListResponse(BaseModel):
+    items: list[RunResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class ResearchQuestionResponse(OrmResponse):
+    id: UUID
+    question: str
+    priority: int
+    parent_id: UUID | None
+    coverage_status: str
+    created_at: datetime
+
+
+class QuestionListResponse(BaseModel):
+    items: list[ResearchQuestionResponse]
+
+
+class SourceVersionResponse(BaseModel):
+    id: UUID
+    version_number: int
+    content_kind: str
+    mime_type: str | None
+    size_bytes: int | None
+    parser_status: str
+    parser_version: str | None
+    parse_error: str | None
+    fetched_url: str | None
+    fetched_at: datetime
+    has_stored_file: bool
+    metadata: dict[str, Any]
+
+
+class SourceResponse(BaseModel):
+    id: UUID
+    title: str
+    authors: list[str]
+    published_at: date | None
+    doi: str | None
+    url: str | None
+    source_type: str
+    source_origin: str
+    venue: str | None
+    publisher: str | None
+    metadata: dict[str, Any]
+    versions: list[SourceVersionResponse]
+    question_ids: list[UUID]
+    evidence_count: int
+    fetch_status: str | None
+
+
+class SourceListResponse(BaseModel):
+    items: list[SourceResponse]
+
+
+class EvidenceResponse(BaseModel):
+    id: UUID
+    source_id: UUID
+    source_version_id: UUID
+    research_question_id: UUID | None
+    evidence_type: str
+    claim_summary: str
+    quoted_text: str
+    context_before: str | None
+    context_after: str | None
+    locator: dict[str, Any]
+    verification_status: str
+    source_title: str
+    source_url: str | None
+    source_type: str | None
+    source_authors: list[str]
+    source_published_at: date | None
+    source_version_number: int | None
+    source_version_kind: str | None
+    created_at: datetime
+
+
+class EvidenceListResponse(BaseModel):
+    items: list[EvidenceResponse]
+    total: int
+    limit: int
+    offset: int
+
+
+class OutlineWorkspaceResponse(BaseModel):
+    outline: dict[str, Any] | None
+    version: int | None
+    status: str | None
+    approved_at: datetime | None
+
+
+class SectionResponse(BaseModel):
+    id: UUID
+    run_id: UUID
+    outline_id: UUID | None
+    section_index: int
+    title: str
+    content_markdown: str
+    citation_map: dict[str, str]
+    evidence_ids: list[UUID]
+    version: int
+    generation_status: str
+    content_hash: str | None
+    created_at: datetime
+    audit_status: str | None
+    audit_details: list[str]
+
+
+class SectionListResponse(BaseModel):
+    items: list[SectionResponse]
+
+
+class SectionUpdateRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=1000)
+    content_markdown: str = Field(min_length=1, max_length=200000)
+
+
+class ClaimEvidenceLinkResponse(BaseModel):
+    evidence_id: UUID
+    relation: str
+    rationale: str | None
+
+
+class ClaimResponse(BaseModel):
+    id: UUID
+    claim_text: str
+    claim_type: str
+    verification_status: str
+    evidence: list[ClaimEvidenceLinkResponse]
+
+
+class ClaimListResponse(BaseModel):
+    items: list[ClaimResponse]
+
+
+class ArtifactResponse(BaseModel):
+    id: UUID
+    artifact_type: str
+    title: str | None
+    version: int
+    mime_type: str
+    size_bytes: int
+    content_hash: str
+    status: str
+    metadata: dict[str, Any]
+    created_at: datetime
+
+
+class ArtifactListResponse(BaseModel):
+    items: list[ArtifactResponse]
+
+
+class ExportResponse(BaseModel):
+    artifacts: list[ArtifactResponse]
+    claims: list[dict[str, Any]]
+    citation_audit: dict[str, Any]
+    reference_audit: dict[str, Any]
+    section_count: int
+
+
+class RunOverviewResponse(BaseModel):
+    run: RunResponse
+    project: ProjectResponse
+    questions: list[ResearchQuestionResponse]
+    counts: dict[str, int]
+    source_status: dict[str, int]
+    search_status: dict[str, int]
+    gaps: list[dict[str, Any]]
+    pending_approval: ApprovalResponse | None
+    latest_events: list[EventResponse]

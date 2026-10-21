@@ -37,6 +37,9 @@ class ResearchBrief(SchemaModel):
     target_audience: str | None = Field(default=None, max_length=1000)
     research_depth: ResearchDepth = ResearchDepth.STANDARD
     citation_style: CitationStyle = CitationStyle.APA
+    target_words: int | None = Field(default=None, ge=100, le=50000)
+    date_from: date | None = None
+    date_to: date | None = None
     budget_usd: Decimal | None = Field(default=None, gt=0)
     max_search_rounds: int = Field(default=3, ge=1, le=10)
     max_sources: int = Field(default=20, ge=1, le=200)

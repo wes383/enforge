@@ -186,6 +186,11 @@ def build_outline(
     feedback: str | None = None,
 ) -> Outline:
     sections: list[OutlineSection] = []
+    section_budget = (
+        max(100, round(brief.target_words / (len(plan.questions) + 3)))
+        if brief.target_words
+        else None
+    )
     all_items = [
         item for items in evidence_by_question.values() for item in items
     ]
@@ -204,7 +209,7 @@ def build_outline(
                 key_claims=[item.claim_summary[:300] for item in all_items[:3]],
                 support_evidence_ids=[item.id for item in all_items[:3]],
                 evidence_ids=[item.id for item in all_items[:3]],
-                target_words=_target_words(brief, "intro"),
+                target_words=_target_words(brief, "intro", section_budget),
             )
         )
         for question in plan.questions:
@@ -220,7 +225,7 @@ def build_outline(
                     evidence_ids=[item.id for item in [*support, *refute]],
                     support_evidence_ids=[item.id for item in support],
                     refute_evidence_ids=[item.id for item in refute],
-                    target_words=_target_words(brief, "question"),
+                    target_words=_target_words(brief, "question", section_budget),
                 )
             )
         if matrix.contradiction_count:
@@ -247,7 +252,7 @@ def build_outline(
                         if row.support_count and row.refute_count
                         for evidence_id in row.refute_evidence_ids
                     ],
-                    target_words=_target_words(brief, "contradiction"),
+                    target_words=_target_words(brief, "contradiction", section_budget),
                 )
             )
         if gaps:
@@ -257,7 +262,7 @@ def build_outline(
                     title="研究局限与未解决问题",
                     purpose="说明检索和证据覆盖的不足，不将空白包装成结论。",
                     key_claims=[gap.reason[:300] for gap in gaps[:3]],
-                    target_words=_target_words(brief, "limitations"),
+                    target_words=_target_words(brief, "limitations", section_budget),
                 )
             )
         sections.append(
@@ -277,7 +282,7 @@ def build_outline(
                     for row in matrix.rows
                     for evidence_id in row.refute_evidence_ids
                 ],
-                target_words=_target_words(brief, "conclusion"),
+                target_words=_target_words(brief, "conclusion", section_budget),
             )
         )
     else:
@@ -289,7 +294,7 @@ def build_outline(
                 key_claims=[item.claim_summary[:300] for item in all_items[:3]],
                 support_evidence_ids=[item.id for item in all_items[:3]],
                 evidence_ids=[item.id for item in all_items[:3]],
-                target_words=_target_words(brief, "intro"),
+                target_words=_target_words(brief, "intro", section_budget),
             )
         )
         for question in plan.questions:
@@ -307,7 +312,7 @@ def build_outline(
                     evidence_ids=[item.id for item in [*support, *refute]],
                     support_evidence_ids=[item.id for item in support],
                     refute_evidence_ids=[item.id for item in refute],
-                    target_words=_target_words(brief, "question"),
+                    target_words=_target_words(brief, "question", section_budget),
                 )
             )
         if matrix.contradiction_count:
@@ -334,7 +339,7 @@ def build_outline(
                         if row.support_count and row.refute_count
                         for evidence_id in row.refute_evidence_ids
                     ],
-                    target_words=_target_words(brief, "contradiction"),
+                    target_words=_target_words(brief, "contradiction", section_budget),
                 )
             )
         if gaps:
@@ -344,7 +349,7 @@ def build_outline(
                     title="Limitations and Open Questions",
                     purpose="State evidence gaps without presenting them as conclusions.",
                     key_claims=[gap.reason[:300] for gap in gaps[:3]],
-                    target_words=_target_words(brief, "limitations"),
+                    target_words=_target_words(brief, "limitations", section_budget),
                 )
             )
         sections.append(
@@ -364,7 +369,7 @@ def build_outline(
                     for row in matrix.rows
                     for evidence_id in row.refute_evidence_ids
                 ],
-                target_words=_target_words(brief, "conclusion"),
+                target_words=_target_words(brief, "conclusion", section_budget),
             )
         )
 
@@ -441,9 +446,23 @@ _BASE_WORDS = {
     "limitations": 260,
     "conclusion": 360,
 }
+_TARGET_FACTORS = {
+    "intro": 0.55,
+    "question": 1.15,
+    "contradiction": 0.9,
+    "limitations": 0.5,
+    "conclusion": 0.7,
+}
 
 
-def _target_words(brief: ResearchBrief, kind: str) -> int:
+def _target_words(
+    brief: ResearchBrief,
+    kind: str,
+    section_budget: int | None = None,
+) -> int:
+    if brief.target_words:
+        budget = section_budget or max(100, brief.target_words // 4)
+        return max(50, min(5000, round(budget * _TARGET_FACTORS[kind])))
     scale = _DEPTH_WORD_SCALE[brief.research_depth]
     return max(50, min(5000, round(_BASE_WORDS[kind] * scale)))
 

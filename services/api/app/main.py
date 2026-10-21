@@ -6,7 +6,7 @@ from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 
-from app.api import approvals, files, health, projects, runs
+from app.api import approvals, files, health, projects, runs, workbench
 from app.api.dev import router as dev_router
 from dr_core.config import get_settings
 from dr_core.db.repositories import DuplicateEntity, EntityNotFound
@@ -42,6 +42,7 @@ def create_app() -> FastAPI:
     application.include_router(runs.router, prefix=settings.api_v1_prefix)
     application.include_router(approvals.router, prefix=settings.api_v1_prefix)
     application.include_router(files.router, prefix=settings.api_v1_prefix)
+    application.include_router(workbench.router, prefix=settings.api_v1_prefix)
     if settings.enable_dev_endpoints:
         application.include_router(dev_router, prefix=settings.api_v1_prefix)
 

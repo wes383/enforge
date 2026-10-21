@@ -7,6 +7,7 @@ import {
 } from "next/font/google";
 
 import { ThemeProvider } from "@/components/theme-provider";
+import { AppHeader } from "@/components/app-header";
 import "./globals.css";
 
 const inter = Inter({
@@ -39,7 +40,8 @@ const notoSansSC = Noto_Sans_SC({
 
 export const metadata: Metadata = {
   title: "Enforge — Deep Research Writing Agent",
-  description: "Deep research writing agent infrastructure status.",
+  description:
+    "Plan, research, write, and verify long-form reports with traceable evidence.",
 };
 
 export const viewport: Viewport = {
@@ -57,7 +59,12 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
       <body
         className={`${inter.variable} ${plusJakartaSans.variable} ${jetbrainsMono.variable} ${notoSansSC.variable} min-h-screen antialiased`}
       >
-        <ThemeProvider>{children}</ThemeProvider>
+        <ThemeProvider>
+          <div className="flex min-h-screen flex-col bg-background text-foreground">
+            <AppHeader />
+            <div className="flex-1">{children}</div>
+          </div>
+        </ThemeProvider>
       </body>
     </html>
   );

@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from decimal import Decimal
 from typing import TYPE_CHECKING
 from uuid import UUID, uuid4
 
 from sqlalchemy import (
     CheckConstraint,
+    Date,
     DateTime,
     ForeignKey,
     Index,
@@ -62,6 +63,9 @@ class ResearchProject(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         server_default=CitationStyle.APA.value,
         nullable=False,
     )
+    target_words: Mapped[int | None] = mapped_column(Integer)
+    date_from: Mapped[date | None] = mapped_column(Date)
+    date_to: Mapped[date | None] = mapped_column(Date)
     budget_usd: Mapped[Decimal | None] = mapped_column(Numeric(12, 4))
     status: Mapped[ProjectStatus] = mapped_column(
         str_enum(ProjectStatus, "project_status", length=16),
@@ -106,6 +110,14 @@ class ResearchProject(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         CheckConstraint(
             "budget_usd IS NULL OR budget_usd > 0",
             name="budget_positive",
+        ),
+        CheckConstraint(
+            "target_words IS NULL OR (target_words >= 100 AND target_words <= 50000)",
+            name="target_words_range",
+        ),
+        CheckConstraint(
+            "date_from IS NULL OR date_to IS NULL OR date_to >= date_from",
+            name="project_date_range_ordered",
         ),
         Index("ix_research_projects_status_created_at", "status", "created_at"),
     )

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import UTC, datetime
 from uuid import UUID
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.exc import IntegrityError
 
 from dr_core.db.enums import TERMINAL_RUN_STATUSES, RunStatus
@@ -85,6 +85,17 @@ class RunRepository(Repository):
                 .offset(offset)
                 .limit(min(max(limit, 1), 200))
             )
+        )
+
+    def count_for_project(self, project_id: UUID) -> int:
+        self._require_project(project_id)
+        return int(
+            self.session.scalar(
+                select(func.count())
+                .select_from(ResearchRun)
+                .where(ResearchRun.project_id == project_id)
+            )
+            or 0
         )
 
     def update_status(

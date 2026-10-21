@@ -1,7 +1,7 @@
 from typing import Annotated
 from uuid import UUID
 
-from fastapi import APIRouter, Query, Response, status
+from fastapi import APIRouter, HTTPException, Query, Response, status
 
 
 from app.api.schemas import (
@@ -56,7 +56,10 @@ def update_project(
     data: ProjectUpdate,
     session: SessionDep,
 ) -> ProjectResponse:
-    project = ProjectRepository(session).update(project_id, data)
+    try:
+        project = ProjectRepository(session).update(project_id, data)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
     session.commit()
     return ProjectResponse.model_validate(project)
 

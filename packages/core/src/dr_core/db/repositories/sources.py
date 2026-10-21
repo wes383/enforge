@@ -216,6 +216,23 @@ class SourceVersionRepository(Repository):
             )
         )
 
+    def list_for_project(
+        self,
+        project_id: UUID,
+        *,
+        source_ids: list[UUID] | None = None,
+    ) -> list[SourceVersion]:
+        statement = select(SourceVersion).where(
+            SourceVersion.project_id == project_id,
+        )
+        if source_ids:
+            statement = statement.where(SourceVersion.source_id.in_(source_ids))
+        statement = statement.order_by(
+            SourceVersion.source_id.asc(),
+            SourceVersion.version_number.desc(),
+        )
+        return list(self.session.scalars(statement))
+
     def latest_for_source(
         self,
         source_id: UUID,

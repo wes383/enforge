@@ -29,6 +29,9 @@ class ProjectRepository(Repository):
             target_audience=data.target_audience,
             research_depth=data.research_depth,
             citation_style=data.citation_style,
+            target_words=data.target_words,
+            date_from=data.date_from,
+            date_to=data.date_to,
             budget_usd=data.budget_usd,
         )
         return self._flush(project)
@@ -77,6 +80,8 @@ class ProjectRepository(Repository):
             if value is None and field in _NON_NULLABLE_PROJECT_FIELDS:
                 continue
             setattr(project, field, value)
+        if project.date_from and project.date_to and project.date_to < project.date_from:
+            raise ValueError("date_to must not be before date_from")
         self.session.flush()
         self.session.refresh(project)
         return project
