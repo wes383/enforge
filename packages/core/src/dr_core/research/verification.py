@@ -7,6 +7,7 @@ from uuid import UUID
 from dr_core.db.enums import (
     CitationAuditStatus,
     CitationIssueType,
+    ClaimVerificationStatus,
     ParserStatus,
 )
 from dr_core.db.models import DocumentChunk, SourceVersion
@@ -121,6 +122,9 @@ def verify_run_claims(
     )
     models: list[ClaimVerification] = []
     llm_reviewed = 0
+    llm_calls = 0
+    llm_skipped = 0
+    review_limit = settings.research_claim_llm_review_limit
     for section in sections:
         for candidate in extract_claims(section):
             assessment = verify_claim(
@@ -132,15 +136,20 @@ def verify_run_claims(
                 traceable=traceable,
             )
             if llm is not None:
-                cited = [
-                    evidence_by_id[evidence_id]
-                    for evidence_id in assessment.evidence_ids
-                    if evidence_id in evidence_by_id
-                ]
-                before = assessment.status
-                assessment = review_claim_with_llm(llm, assessment, cited)
-                if assessment.status is not before:
-                    llm_reviewed += 1
+                if llm_calls >= review_limit:
+                    llm_skipped += 1
+                else:
+                    cited = [
+                        evidence_by_id[evidence_id]
+                        for evidence_id in assessment.evidence_ids
+                        if evidence_id in evidence_by_id
+                    ]
+                    before = assessment.status
+                    if before is not ClaimVerificationStatus.SUPPORTED and cited:
+                        llm_calls += 1
+                    assessment = review_claim_with_llm(llm, assessment, cited)
+                    if assessment.status is not before:
+                        llm_reviewed += 1
             models.append(
                 persist_claim(
                     database,
@@ -150,6 +159,12 @@ def verify_run_claims(
                     assessment,
                 )
             )
+    if llm_skipped:
+        logger.info(
+            "LLM claim review limit reached (%s); %s claims kept deterministic status",
+            review_limit,
+            llm_skipped,
+        )
     return models, llm_reviewed
 
 

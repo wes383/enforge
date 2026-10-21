@@ -43,7 +43,7 @@
 - SQLAlchemy 2.0 仓储层，覆盖项目、运行、研究问题、检索、来源、切片、证据、主张、提纲、章节、引用核验、审批、事件和导出文件。
 - Alembic 从空数据库初始化、重复升级、降级/再升级和 `alembic check` 均通过；Compose 中的 `migrate` 服务在 `api`、`worker` 启动前完成迁移。
 - 文件记录与实际文件对账工具，能够报告缺失文件和孤儿文件。
-- 容器内单元测试和集成测试，当前 `237 passed`（通过 `docker-compose.test.yml` 强制 mock，真实密钥不参与测试）。
+- 容器内单元测试和集成测试，当前 `240 passed`（通过 `docker-compose.test.yml` 强制 mock，真实密钥不参与测试）。
 - 不包含 MinIO、S3 或任何对象存储服务。
 
 ## 服务拓扑
@@ -413,7 +413,39 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 2. 打开工作流开关：`RESEARCH_LLM_WRITING_ENABLED=true`（章节写作）和/或 `RESEARCH_CLAIM_LLM_REVIEW=true`（主张复核）。
 3. `docker compose up -d --force-recreate api worker` 让新配置生效。
 
-适配器 `OpenAICompatibleLLMProvider`（`packages/core/src/dr_core/providers/llm.py`）走 `POST {OPENAI_BASE_URL}/chat/completions`，复用提供商层统一的超时、重试与缓存策略，并把 `usage` 映射为 token 用量供观测记录。默认不注册：只有 `OPENAI_API_KEY` 非空时才进入 `ProviderRegistry`，因此没有 Key 时系统依旧完全离线、写作与核验保持确定性路径。
+适配器 `OpenAICompatibleLLMProvider`（`packages/core/src/dr_core/providers/llm.py`）走 `POST {OPENAI_BASE_URL}/chat/completions`，把 `usage` 映射为 token 用量供观测记录。默认不注册：只有 `OPENAI_API_KEY` 非空时才进入 `ProviderRegistry`，因此没有 Key 时系统依旧完全离线、写作与核验保持确定性路径。
+
+模型生成远比搜索接口慢，所以它有独立的超时与重试预算（`LLM_REQUEST_TIMEOUT_SECONDS`，默认 120s；`LLM_MAX_RETRIES`，默认 0 次），不复用给搜索设的 20s/3 次重试——否则推理模型每节都会被超时打断并反复重试，最终把整个运行拖到 Celery 时限之外。实测参考：某推理模型生成一段约 600 字正文耗时 36.5s、`completion_tokens=1538`（其中 reasoning 1214）。
+
+时限会随开关自动放大，不需要手工换算：
+
+| 层级 | 未启用模型 | 启用模型写作/复核（默认值） |
+|---|---|---|
+| 单次模型请求 | — | `LLM_REQUEST_TIMEOUT_SECONDS` × (`LLM_MAX_RETRIES`+1) = 120s |
+| `write_sections` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 章节数 × 120s |
+| `verify_claims` 节点 | 90s | 90s + `RESEARCH_CLAIM_LLM_REVIEW_LIMIT` × 120s |
+| Celery 软/硬时限 | 300s / 360s | 2730s / 2790s（取配置值与推算下限的较大者，Worker 启动时打印一条 WARNING 说明实际生效值） |
+
+主张复核另有次数上限（`RESEARCH_CLAIM_LLM_REVIEW_LIMIT`，默认 10），超出的主张保留确定性核验状态并记录一条日志，避免费用与耗时随主张数量线性膨胀。单节模型调用超时或校验失败只影响该节，会回退到确定性写作并继续。
+
+如果运行曾被 Worker 重启或硬超时打断而停在非终态（例如 `writing`），取消请求不会自动落定；重新投递该运行的执行任务即可，工作流会从 checkpoint 恢复，读到 `cancel_requested_at` 后直接落定为 `cancelled`（不会调用模型）：
+
+```bash
+docker compose exec -T api python -c "
+from uuid import uuid4
+from dr_core.config import get_settings
+from dr_core.tasks import get_celery_client
+from dr_core.tasks.names import EXECUTE_RESEARCH_RUN_TASK
+run_id, project_id = '<run_id>', '<project_id>'
+# 用带后缀的 task_id，避免与取消时已 revoke 的 task_id 冲突
+get_celery_client().send_task(
+    EXECUTE_RESEARCH_RUN_TASK,
+    args=[run_id, project_id],
+    task_id=f'{run_id}:recover:{uuid4().hex[:8]}',
+    queue=get_settings().celery_task_default_queue,
+)
+"
+```
 
 模型输出仍受严格校验：必须是 `{"markdown": ...}` JSON，只能使用给定引用标记，段落必须有引用，数字/年份必须能在证据中找到，禁止自行生成参考文献列表；任一校验失败都会记录原因并回退到确定性写作，`MockLLMProvider` 会被显式跳过，不会污染真实产物。
 
@@ -885,6 +917,7 @@ docker compose exec api python -m dr_core.maintenance
 | `RESEARCH_CHUNK_MAX_CHARS` | `1200` | 单个文档切片的最大字符数 |
 | `RESEARCH_LLM_WRITING_ENABLED` | `false` | 是否允许真实 LLM 参与章节写作；需同时配置 `OPENAI_API_KEY`，校验失败自动回退确定性写作 |
 | `RESEARCH_CLAIM_LLM_REVIEW` | `false` | 是否允许真实 LLM 复核未通过的主张；需同时配置 `OPENAI_API_KEY`，只能降级或补充理由，不能升级为 `SUPPORTED` |
+| `RESEARCH_CLAIM_LLM_REVIEW_LIMIT` | `10` | 单次运行最多复核多少条主张，超出部分保留确定性状态，用于约束真实模型的耗时与费用 |
 | `MAX_ACTIVE_RUNS_PER_PROJECT` | `3` | 每个项目允许的非终态运行数；0 表示关闭限流 |
 | `LANGFUSE_ENABLED` | `false` | 是否启用 Langfuse trace 上报 |
 | `LANGFUSE_HOST` | `https://cloud.langfuse.com` | Langfuse 服务地址 |
@@ -903,6 +936,8 @@ docker compose exec api python -m dr_core.maintenance
 | `OPENAI_API_KEY` | 空 | OpenAI 兼容端点密钥；非空时注册真实 LLM 适配器，为空则完全离线 |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Chat Completions 基地址，可指向任意 OpenAI 兼容网关 |
 | `OPENAI_MODEL` | `gpt-4o-mini` | 写作与主张复核使用的模型名 |
+| `LLM_REQUEST_TIMEOUT_SECONDS` | `120` | 单次模型请求读取超时；推理模型每节常需 30–60s，不要沿用搜索的 20s |
+| `LLM_MAX_RETRIES` | `0` | 模型请求重试次数；超时的章节直接回退确定性写作，重试只会拖长运行 |
 | `PROVIDER_REQUEST_TIMEOUT_SECONDS` | `20` | 提供商读取超时 |
 | `PROVIDER_CONNECT_TIMEOUT_SECONDS` | `5` | 提供商连接超时 |
 | `PROVIDER_MAX_RETRIES` | `3` | 429/5xx/网络错误的最大重试次数 |
@@ -958,7 +993,7 @@ docker compose exec api python -m dr_core.maintenance
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test up -d --build api worker
 
-# 2) 运行单元 + 集成 + 评测（237 passed）
+# 2) 运行单元 + 集成 + 评测（240 passed）
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -974,7 +1009,8 @@ docker compose up -d --force-recreate api worker
 - 提示词注入扫描与不可信内容包裹：英文/中文模式、标签转义和防御规则。
 - 项目级并发限流：达到上限返回 `ActiveRunLimitExceeded`（API 映射 429），重复幂等键不受限流影响，终态运行不占用额度。
 - OpenAI 兼容适配器：请求体与 `Authorization` 头、`usage` 映射为 token 用量、5xx 转 `ProviderUnavailable`、缺字段或空内容转 `ProviderResponseError`；只有 `OPENAI_API_KEY` 非空时才注册到 `ProviderRegistry`。
-- 真实 LLM 写作链路（本地假端点，不出网）：打开 `RESEARCH_LLM_WRITING_ENABLED` 后运行完成，章节事件 `used_llm=true`，引用标记仍全部来自数据库证据。
+- 真实 LLM 写作链路（本地假端点，不出网）：打开 `RESEARCH_LLM_WRITING_ENABLED` 后运行完成，章节事件 `used_llm=true`，引用标记仍全部来自数据库证据；主张复核调用次数不超过 `RESEARCH_CLAIM_LLM_REVIEW_LIMIT`。
+- 模型时间预算：LLM 使用独立的超时/重试（不受 `PROVIDER_*` 影响）；未启用模型时节点与 Celery 时限保持原值，启用后按章节数与复核上限放大，且不会低于运维显式配置的更大值。
 - 质量评测集：10 类场景全部完成且断言通过，恢复成功率 1.0，指标达到阈值；人工复核比较函数统计一致率。
 
 阶段 8 测试内容：
@@ -1060,7 +1096,7 @@ docker compose up -d --force-recreate api worker
 - 缺失文件与孤儿文件识别。
 - 原有健康检查、CORS、文件跨容器往返和 Celery 测试任务。
 
-当前结果：`237 passed`（阶段 9 新增观测、安全、限流、LLM 适配器与质量评测测试；测试全程不需要网络或真实 API Key）。质量评测也可以单独运行：
+当前结果：`240 passed`（阶段 9 新增观测、安全、限流、LLM 适配器与质量评测测试；测试全程不需要网络或真实 API Key）。质量评测也可以单独运行：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
@@ -1112,7 +1148,7 @@ docker compose exec -T postgres psql -U enforge -d enforge -c \
 | Compose 配置检查 | `docker compose config --quiet` | 通过 |
 | 镜像构建 | `docker compose up -d --build` | `postgres`、`redis`、`migrate`、`api`、`worker`、`web` 全部 healthy |
 | 数据库迁移 | `migrate` 服务执行 `alembic upgrade head` | 成功；`alembic check` 返回 `No new upgrade operations detected` |
-| Python 单元/集成/评测测试 | `docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test run --rm --build test` | `237 passed` |
+| Python 单元/集成/评测测试 | `docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test run --rm --build test` | `240 passed` |
 | 前端类型检查 | `npm run typecheck` | 通过 |
 | 前端代码检查 | `npm run lint` | 通过 |
 | 前端构建 | `npm run build` | Next.js 16.4 生产构建通过 |
@@ -1191,6 +1227,7 @@ Linux/macOS 的恢复命令同样将第二个卷参数改为 `-v "$PWD/backups:/
 - 当前为单用户本地 MVP，没有用户登录和多用户项目权限；“项目级权限”指项目存在且未软删除、所有运行/文件/审批/证据按 `project_id` 强制过滤，以及 `MAX_ACTIVE_RUNS_PER_PROJECT` 并发限制。对外暴露的部署必须在反向代理后启用认证；多用户访问控制不在本仓库阶段计划内。
 - Phase 1 冒烟接口和 `POST /dev/runs/{run_id}/fail` 仅用于验收，必须在非本地环境设置 `ENABLE_DEV_ENDPOINTS=false`。
 - 阶段 7 的提纲与章节正文默认由确定性生成器基于数据库中的研究问题与证据组织，保证离线可测、引用可追溯；可选的真实 LLM 写作/主张复核开关默认关闭，仓库已内置 OpenAI 兼容适配器（`OPENAI_API_KEY` 非空时注册），但未配置密钥或校验失败时不会调用模型，行文风格和论证深度仍受确定性模板限制。真实模型产出的质量与成本未纳入当前评测指标（评测集固定使用确定性 Mock 提供商）。
+- 启用模型写作后单次运行会显著变慢（每节一次模型调用，推理模型 30–60s/节），Celery 软/硬时限会按 `LLM_*` 与 `RESEARCH_CLAIM_LLM_REVIEW_LIMIT` 自动放大（默认 2730s/2790s），期间该运行会占用一个 Worker 并发槽位；被硬超时或 Worker 重启打断的运行会停在非终态，需要重新投递任务才会从 checkpoint 恢复或落定为 `cancelled`。
 - 阶段 4 的提供商默认全部关闭；只有同时设置 `*_ENABLED=true` 和后端密钥才会启用。启用但缺少密钥时会记录警告并跳过，不影响服务启动。未配置任何第三方 API Key 时，系统仍可迁移、启动并通过全部测试（测试使用 Mock 提供商，不访问网络）。
 - Tavily、Exa、Firecrawl、Crossref、Semantic Scholar 均在后端调用，密钥不会下发浏览器；错误信息、日志和缓存键不包含密钥。Firecrawl 只接受通过 SSRF 校验的 HTTP/HTTPS 公网地址，并在重定向后再次校验最终 URL。
 - 网页全文依赖 Firecrawl；未启用时来源只保留搜索摘要。付费墙、仅摘要、屏蔽和超限响应会记录为不同抓取状态，不会当作全文入库；Crossref 不提供被引列表，因此不伪造引用关系。

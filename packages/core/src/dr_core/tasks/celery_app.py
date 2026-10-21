@@ -35,8 +35,8 @@ def create_celery_app(include: list[str] | None = None) -> Celery:
         result_expires=86400,
         broker_connection_retry_on_startup=True,
         broker_transport_options={"visibility_timeout": 43200},
-        task_soft_time_limit=settings.run_task_soft_time_limit_seconds,
-        task_time_limit=settings.run_task_hard_time_limit_seconds,
+        task_soft_time_limit=settings.effective_run_task_soft_time_limit_seconds,
+        task_time_limit=settings.effective_run_task_hard_time_limit_seconds,
     )
     return app
 

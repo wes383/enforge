@@ -1,15 +1,18 @@
 from __future__ import annotations
 
 import json
+from types import SimpleNamespace
 
 import httpx
 import pytest
 
 from dr_core.config import Settings
+from dr_core.config.settings import LLM_SECTION_CALL_BUDGET
 from dr_core.providers.errors import ProviderResponseError, ProviderUnavailable
 from dr_core.providers.http import RetryPolicy
 from dr_core.providers.llm import OpenAICompatibleLLMProvider
 from dr_core.providers.registry import build_provider_registry
+from dr_core.research.nodes import _verification_node_timeout, _writing_node_timeout
 
 
 def _provider(handler) -> tuple[OpenAICompatibleLLMProvider, list[httpx.Request]]:
@@ -102,3 +105,94 @@ def test_registry_registers_llm_only_when_key_present():
 
     without_key = Settings(_env_file=None, openai_api_key=None)
     assert build_provider_registry(without_key).llm is None
+
+
+def test_llm_gets_its_own_timeout_and_retry_budget():
+    settings = Settings(
+        _env_file=None,
+        openai_api_key="sk-test-key",
+        provider_request_timeout_seconds=20,
+        provider_max_retries=3,
+        llm_request_timeout_seconds=120,
+        llm_max_retries=0,
+    )
+    registry = build_provider_registry(settings)
+    try:
+        http = registry.llm._http
+        assert http._timeout.read == 120
+        assert http._retry_policy.max_attempts == 1
+    finally:
+        registry.close()
+
+
+def test_run_time_limits_expand_only_when_model_writing_is_on():
+    offline = Settings(
+        _env_file=None,
+        run_task_soft_time_limit_seconds=300,
+        run_task_hard_time_limit_seconds=360,
+    )
+    assert offline.effective_run_task_soft_time_limit_seconds == 300
+    assert offline.effective_run_task_hard_time_limit_seconds == 360
+
+    writing = Settings(
+        _env_file=None,
+        research_llm_writing_enabled=True,
+        llm_request_timeout_seconds=120,
+        llm_max_retries=0,
+        research_claim_llm_review_limit=10,
+        research_node_timeout_seconds=90,
+    )
+    assert writing.llm_call_budget_seconds == 120
+    assert writing.effective_run_task_soft_time_limit_seconds == 120 * 22 + 90
+    assert (
+        writing.effective_run_task_hard_time_limit_seconds
+        == writing.effective_run_task_soft_time_limit_seconds + 60
+    )
+
+    generous = Settings(
+        _env_file=None,
+        research_claim_llm_review=True,
+        run_task_soft_time_limit_seconds=99999,
+        run_task_hard_time_limit_seconds=100000,
+    )
+    assert generous.effective_run_task_soft_time_limit_seconds == 99999
+    # the hard limit always stays above the effective soft limit
+    assert generous.effective_run_task_hard_time_limit_seconds == 100059
+
+
+def test_llm_node_timeouts_scale_with_expected_model_calls():
+    settings = Settings(
+        _env_file=None,
+        research_llm_writing_enabled=True,
+        research_claim_llm_review=True,
+        research_claim_llm_review_limit=4,
+        research_node_timeout_seconds=90,
+        llm_request_timeout_seconds=120,
+        llm_max_retries=0,
+    )
+    llm = OpenAICompatibleLLMProvider(
+        "sk-test-key",
+        model="fake-model",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={})
+            )
+        ),
+    )
+    ctx = SimpleNamespace(settings=settings, registry=SimpleNamespace(llm=llm))
+    state = {"outline": {"sections": [{}, {}, {}]}}
+    assert _writing_node_timeout(ctx, state) == 90 + 3 * 120
+    assert _verification_node_timeout(ctx) == 90 + 4 * 120
+    assert _writing_node_timeout(ctx, {}) == 90 + LLM_SECTION_CALL_BUDGET * 120
+
+    deterministic = SimpleNamespace(
+        settings=settings.model_copy(
+            update={
+                "research_llm_writing_enabled": False,
+                "research_claim_llm_review": False,
+            }
+        ),
+        registry=SimpleNamespace(llm=llm),
+    )
+    assert _writing_node_timeout(deterministic, state) == 90
+    assert _verification_node_timeout(deterministic) == 90

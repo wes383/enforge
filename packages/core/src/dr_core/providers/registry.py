@@ -144,9 +144,13 @@ def build_provider_registry(
             openai_key,
             base_url=settings.openai_base_url,
             model=settings.openai_model,
-            timeout_seconds=settings.provider_request_timeout_seconds,
+            timeout_seconds=settings.llm_request_timeout_seconds,
             connect_timeout_seconds=settings.provider_connect_timeout_seconds,
-            retry_policy=retry_policy,
+            retry_policy=RetryPolicy(
+                max_attempts=settings.llm_max_retries + 1,
+                base_delay_seconds=settings.provider_retry_backoff_seconds,
+                max_delay_seconds=30.0,
+            ),
         )
 
     return ProviderRegistry(

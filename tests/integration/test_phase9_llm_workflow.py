@@ -27,19 +27,29 @@ from dr_core.storage import StorageError, StorageFileNotFound, get_file_storage
 
 pytestmark = pytest.mark.integration
 
+_LLM_CALLS: list[str] = []
+_REVIEW_TASK = "Check whether the cited evidence supports the claim."
+
 
 def _fake_llm_handler(request: httpx.Request) -> httpx.Response:
     body = json.loads(request.content)
     prompt = json.loads(body["messages"][-1]["content"])
-    markers = [item["marker"] for item in prompt.get("evidence", [])]
-    marker = markers[0] if markers else "S1"
-    title = prompt.get("section", {}).get("title", "Section")
-    markdown = (
-        f"## {title}\n\n"
-        f"The collected evidence supports this section's central claim "
-        f"[{marker}]."
-    )
-    content = json.dumps({"markdown": markdown})
+    task = str(prompt.get("task", ""))
+    _LLM_CALLS.append(task)
+    if _REVIEW_TASK in task:
+        content = json.dumps(
+            {"status": "PARTIAL", "reason": "cited evidence is indirect"}
+        )
+    else:
+        markers = [item["marker"] for item in prompt.get("evidence", [])]
+        marker = markers[0] if markers else "S1"
+        title = prompt.get("section", {}).get("title", "Section")
+        markdown = (
+            f"## {title}\n\n"
+            f"The collected evidence supports this section's central claim "
+            f"[{marker}]."
+        )
+        content = json.dumps({"markdown": markdown})
     return httpx.Response(
         200,
         json={
@@ -104,11 +114,15 @@ def _cleanup(database, project_id: UUID) -> None:
 
 
 def test_workflow_uses_registered_openai_compatible_llm(database):
+    _LLM_CALLS.clear()
+    review_limit = 2
     settings = get_settings().model_copy(
         update={
             "research_plan_approval_required": False,
             "research_outline_approval_required": False,
             "research_llm_writing_enabled": True,
+            "research_claim_llm_review": True,
+            "research_claim_llm_review_limit": review_limit,
             "research_provider_mode": "mock",
             "langfuse_enabled": False,
             "research_max_search_rounds": 1,
@@ -163,5 +177,9 @@ def test_workflow_uses_registered_openai_compatible_llm(database):
             and event.payload.get("used_llm") is True
         ]
         assert llm_sections, "expected at least one LLM-written section"
+
+        review_calls = [task for task in _LLM_CALLS if _REVIEW_TASK in task]
+        assert len(review_calls) <= review_limit
+        assert len(_LLM_CALLS) == len(llm_sections) + len(review_calls)
     finally:
         _cleanup(database, project_id)

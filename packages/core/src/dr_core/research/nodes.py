@@ -11,6 +11,7 @@ from uuid import UUID
 from langgraph.types import interrupt
 from sqlalchemy import func, select
 
+from dr_core.config.settings import LLM_SECTION_CALL_BUDGET
 from dr_core.db.enums import (
     ApprovalKind,
     ApprovalStatus,
@@ -1547,7 +1548,7 @@ def await_outline_approval(ctx: ResearchContext):
 
 def write_sections(ctx: ResearchContext):
     def node(state: ResearchState) -> ResearchState:
-        with node_timeout(ctx.settings.research_node_timeout_seconds):
+        with node_timeout(_writing_node_timeout(ctx, state)):
             ctx.guard()
             brief = _brief(state)
             ctx.ensure_status(
@@ -1670,7 +1671,7 @@ def write_sections(ctx: ResearchContext):
 
 def verify_claims(ctx: ResearchContext):
     def node(state: ResearchState) -> ResearchState:
-        with node_timeout(ctx.settings.research_node_timeout_seconds):
+        with node_timeout(_verification_node_timeout(ctx)):
             ctx.guard()
             ctx.ensure_status(
                 RunStatus.VERIFYING,
@@ -2612,6 +2613,36 @@ def _claim_reviewer(ctx: ResearchContext):
     if llm is None or getattr(llm, "name", "") == "mock-llm":
         return None
     return llm
+
+
+def _llm_node_timeout(ctx: ResearchContext, calls: int) -> int:
+    """Node budget widened by the worst-case cost of `calls` model requests."""
+    base = ctx.settings.research_node_timeout_seconds
+    if calls <= 0:
+        return base
+    return base + calls * ctx.settings.llm_call_budget_seconds
+
+
+def _writing_node_timeout(ctx: ResearchContext, state: ResearchState) -> int:
+    if _llm_writer(ctx) is None:
+        return ctx.settings.research_node_timeout_seconds
+    outline = state.get("outline") or {}
+    sections = outline.get("sections") if isinstance(outline, dict) else None
+    count = (
+        len(sections)
+        if isinstance(sections, list) and sections
+        else LLM_SECTION_CALL_BUDGET
+    )
+    return _llm_node_timeout(ctx, count)
+
+
+def _verification_node_timeout(ctx: ResearchContext) -> int:
+    if _claim_reviewer(ctx) is None:
+        return ctx.settings.research_node_timeout_seconds
+    return _llm_node_timeout(
+        ctx,
+        ctx.settings.research_claim_llm_review_limit,
+    )
 
 
 

@@ -5,6 +5,10 @@ from typing import Literal
 from pydantic import Field, SecretStr
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+# Worst-case number of model calls the writing node can make in one run; used to
+# derive the Celery time-limit floor when model writing is enabled.
+LLM_SECTION_CALL_BUDGET = 12
+
 
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(
@@ -62,6 +66,12 @@ class Settings(BaseSettings):
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o-mini"
 
+    # Model generation is far slower than search APIs (reasoning models spend tens
+    # of seconds per section), so it gets its own timeout and retry budget instead
+    # of inheriting the provider defaults.
+    llm_request_timeout_seconds: float = Field(default=120.0, gt=0, le=900)
+    llm_max_retries: int = Field(default=0, ge=0, le=5)
+
     web_fetch_max_bytes: int = Field(default=2_000_000, gt=0)
     web_fetch_min_content_chars: int = Field(default=400, ge=0)
 
@@ -90,6 +100,8 @@ class Settings(BaseSettings):
     research_chunk_max_chars: int = Field(default=1200, ge=200, le=10000)
     research_llm_writing_enabled: bool = False
     research_claim_llm_review: bool = False
+    # Caps paid model calls per run so verification time stays bounded.
+    research_claim_llm_review_limit: int = Field(default=10, ge=1, le=500)
     max_active_runs_per_project: int = Field(default=3, ge=0, le=100)
 
     # Optional Langfuse ingestion. Disabled by default so the MVP runs fully
@@ -113,6 +125,35 @@ class Settings(BaseSettings):
     @property
     def cors_origin_list(self) -> list[str]:
         return [origin.strip() for origin in self.cors_origins.split(",") if origin.strip()]
+
+    @property
+    def llm_workflow_enabled(self) -> bool:
+        return self.research_llm_writing_enabled or self.research_claim_llm_review
+
+    @property
+    def llm_call_budget_seconds(self) -> int:
+        """Worst-case wall time of one model call, retries included."""
+        return int((self.llm_max_retries + 1) * self.llm_request_timeout_seconds)
+
+    @property
+    def llm_run_time_floor_seconds(self) -> int:
+        """Ceiling a model-writing run needs before Celery may kill it."""
+        calls = LLM_SECTION_CALL_BUDGET + self.research_claim_llm_review_limit
+        return self.llm_call_budget_seconds * calls + self.research_node_timeout_seconds
+
+    @property
+    def effective_run_task_soft_time_limit_seconds(self) -> int:
+        if not self.llm_workflow_enabled:
+            return self.run_task_soft_time_limit_seconds
+        return max(
+            self.run_task_soft_time_limit_seconds,
+            self.llm_run_time_floor_seconds,
+        )
+
+    @property
+    def effective_run_task_hard_time_limit_seconds(self) -> int:
+        soft = self.effective_run_task_soft_time_limit_seconds
+        return max(self.run_task_hard_time_limit_seconds, soft + 60)
 
 
 @lru_cache
