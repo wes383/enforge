@@ -195,7 +195,7 @@ export function AppSidebar() {
             title={pick(locale, "全部项目", "All projects")}
             className={cn(
               "inline-flex shrink-0 items-center gap-2.5 rounded-full px-2.5 py-2 text-sm transition-colors",
-              collapsed && "lg:h-9 lg:w-9 lg:justify-center lg:gap-0 lg:px-0",
+              collapsed && "lg:h-9 lg:w-9 lg:self-center lg:justify-center lg:gap-0 lg:px-0",
               pathname === "/"
                 ? "bg-hover-bg font-medium text-foreground"
                 : "text-foreground-muted hover:bg-hover-bg hover:text-foreground",
