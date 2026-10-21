@@ -5,7 +5,6 @@ import {
   ClipboardCheck,
   Plus,
   RefreshCw,
-  Send,
   Trash2,
   X,
 } from "lucide-react";
@@ -137,6 +136,8 @@ export default function ApprovalsPage() {
   const [success, setSuccess] = useState<string | null>(null);
   const initializedPlan = useRef<string | null>(null);
   const initializedOutline = useRef<string | null>(null);
+  const initialPlan = useRef<string | null>(null);
+  const initialOutline = useRef<string | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -166,6 +167,8 @@ export default function ApprovalsPage() {
   const active = Boolean(
     overview && !TERMINAL_RUN_STATUSES.has(overview.run.status),
   );
+  const approveLabel = pick(locale, "批准", "Approve");
+  const reviseLabel = pick(locale, "驳回并修订", "Request revision");
 
   useEffect(() => {
     if (!active) return;
@@ -193,7 +196,9 @@ export default function ApprovalsPage() {
     const plan = planFromApproval(pending);
     if (!plan) return;
     initializedPlan.current = pending.id;
-    setPlanDraft(planDraftFrom(plan));
+    const draft = planDraftFrom(plan);
+    initialPlan.current = JSON.stringify(draft);
+    setPlanDraft(draft);
     setPlanError(null);
     setFeedback("");
   }, [pending]);
@@ -204,7 +209,9 @@ export default function ApprovalsPage() {
     const content = outlineFromApproval(pending);
     if (!content) return;
     initializedOutline.current = pending.id;
-    setOutlineDraft(outlineDraftFrom(content));
+    const draft = outlineDraftFrom(content);
+    initialOutline.current = JSON.stringify(draft);
+    setOutlineDraft(draft);
     setOutlineError(null);
     setFeedback("");
   }, [pending]);
@@ -230,6 +237,16 @@ export default function ApprovalsPage() {
         .find((value) => value !== null) ?? null
     );
   }, [approvals]);
+
+  // Approving saves whatever is in the editor, so an untouched draft stays a
+  // plain approval instead of bumping the plan/outline version.
+  function approveDecision(approval: Approval): "approved" | "modified" {
+    const draft = approval.kind === "plan" ? planDraft : outlineDraft;
+    const initial =
+      approval.kind === "plan" ? initialPlan.current : initialOutline.current;
+    if (draft === null || initial === null) return "approved";
+    return JSON.stringify(draft) === initial ? "approved" : "modified";
+  }
 
   async function submitDecision(
     approval: Approval,
@@ -294,11 +311,7 @@ export default function ApprovalsPage() {
     }
 
     const label =
-      decision === "approved"
-        ? pick(locale, "批准", "Approve")
-        : decision === "modified"
-          ? pick(locale, "保存并批准", "Save & approve")
-          : pick(locale, "驳回并修订", "Request revision");
+      decision === "rejected" ? reviseLabel : approveLabel;
     setSubmitting(label);
     try {
       await apiFetch(`/runs/${runId}/approvals/${approval.id}`, {
@@ -445,8 +458,8 @@ export default function ApprovalsPage() {
               <p className="mt-1 text-sm text-foreground-muted">
                 {pick(
                   locale,
-                  "可以直接批准、修改后批准，或填写意见后驳回。",
-                  "Approve as-is, approve with edits, or request a revision.",
+                  "批准会保存这里的修改并继续执行；需要重新生成时填写意见后驳回。",
+                  "Approving saves these edits and continues. Add feedback and reject to regenerate.",
                 )}
               </p>
             </div>
@@ -760,34 +773,21 @@ export default function ApprovalsPage() {
             </Field>
             <div className="mt-4 flex flex-wrap items-center gap-2">
               <Button
-                onClick={() => void submitDecision(pending, "approved")}
-                loading={submitting === pick(locale, "批准", "Approve")}
+                onClick={() => void submitDecision(pending, approveDecision(pending))}
+                loading={submitting === approveLabel}
                 disabled={submitting !== null}
               >
                 <Check className="h-4 w-4" />
-                {pick(locale, "批准", "Approve")}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => void submitDecision(pending, "modified")}
-                loading={
-                  submitting === pick(locale, "保存并批准", "Save & approve")
-                }
-                disabled={submitting !== null}
-              >
-                <Send className="h-4 w-4" />
-                {pick(locale, "保存并批准", "Save & approve")}
+                {approveLabel}
               </Button>
               <Button
                 variant="danger"
                 onClick={() => void submitDecision(pending, "rejected")}
-                loading={
-                  submitting === pick(locale, "驳回并修订", "Request revision")
-                }
+                loading={submitting === reviseLabel}
                 disabled={submitting !== null}
               >
                 <X className="h-4 w-4" />
-                {pick(locale, "驳回并修订", "Request revision")}
+                {reviseLabel}
               </Button>
             </div>
           </div>
