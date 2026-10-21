@@ -143,28 +143,16 @@ export function AppSidebar() {
       >
         <div
           className={cn(
-            "flex items-center gap-2 px-3 py-4",
-            collapsed ? "lg:justify-center lg:px-2" : "justify-between",
+            "flex items-center justify-between gap-2 px-3 py-4",
+            collapsed && "lg:hidden",
           )}
         >
           <Link
             href="/"
-            className={cn(
-              "min-w-0 font-display text-base font-bold leading-none tracking-tight transition-colors hover:text-foreground-muted",
-              collapsed && "lg:hidden",
-            )}
+            className="min-w-0 font-display text-base font-bold leading-none tracking-tight transition-colors hover:text-foreground-muted"
           >
             Enforge
           </Link>
-          <span
-            aria-hidden
-            className={cn(
-              "hidden h-7 w-7 shrink-0 items-center justify-center rounded-md bg-accent text-xs font-bold text-accent-fg lg:inline-flex",
-              !collapsed && "lg:hidden",
-            )}
-          >
-            E
-          </span>
           <Button
             variant="ghost"
             size="icon-xs"
@@ -179,7 +167,7 @@ export function AppSidebar() {
         <div
           className={cn(
             "flex items-center justify-between gap-2 px-3 pb-1",
-            collapsed && "lg:justify-center lg:px-2",
+            collapsed && "lg:justify-center lg:px-1 lg:pt-3",
           )}
         >
           <p className={cn(sectionLabel, collapsed && "lg:hidden")}>
@@ -189,19 +177,25 @@ export function AppSidebar() {
             href="/projects/new"
             aria-label={pick(locale, "新建项目", "New project")}
             title={pick(locale, "新建项目", "New project")}
-            className="inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-foreground-muted transition-colors hover:bg-hover-bg hover:text-foreground"
+            className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-foreground-muted transition-colors hover:bg-hover-bg hover:text-foreground"
           >
-            <Plus className="h-3.5 w-3.5" />
+            <Plus className="h-4 w-4" />
           </Link>
         </div>
 
-        <nav className="flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-3 pb-2">
+        <nav
+          className={cn(
+            "flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-3 pb-2",
+            collapsed && "lg:px-1",
+          )}
+        >
           <Link
             href="/"
             aria-current={pathname === "/" ? "page" : undefined}
+            title={pick(locale, "全部项目", "All projects")}
             className={cn(
               "inline-flex shrink-0 items-center gap-2.5 rounded-full px-2.5 py-2 text-sm transition-colors",
-              collapsed && "lg:justify-center lg:px-0",
+              collapsed && "lg:h-9 lg:w-9 lg:justify-center lg:gap-0 lg:px-0",
               pathname === "/"
                 ? "bg-hover-bg font-medium text-foreground"
                 : "text-foreground-muted hover:bg-hover-bg hover:text-foreground",
@@ -272,7 +266,7 @@ export function AppSidebar() {
         <div
           className={cn(
             "flex flex-col gap-3 border-t border-border px-3 py-4",
-            collapsed && "lg:items-center lg:px-2",
+            collapsed && "lg:items-center lg:px-1",
           )}
         >
           <div className={cn(collapsed && "lg:hidden")}>
@@ -299,8 +293,8 @@ export function AppSidebar() {
             </div>
           </div>
 
-          <div>
-            <p className={cn(sectionLabel, "mb-1.5", collapsed && "lg:hidden")}>
+          <div className={cn(collapsed && "lg:hidden")}>
+            <p className={cn(sectionLabel, "mb-1.5")}>
               {pick(locale, "主题", "Theme")}
             </p>
             <div className="flex items-center gap-1 rounded-full bg-hover-bg p-1">
@@ -318,34 +312,35 @@ export function AppSidebar() {
                   onClick={() => setTheme(option.value)}
                   className={cn(
                     "inline-flex flex-1 items-center justify-center gap-1.5 rounded-full px-2 py-1.5 text-xs font-medium transition-colors",
-                    collapsed && "lg:gap-0 lg:px-1.5",
                     appliedTheme === option.value
                       ? "bg-accent text-accent-fg"
                       : "text-foreground-muted hover:text-foreground",
                   )}
                 >
                   <option.Icon className="h-3.5 w-3.5 shrink-0" />
-                  <span className={cn(collapsed && "lg:hidden")}>{option.label}</span>
+                  {option.label}
                 </button>
               ))}
             </div>
           </div>
 
-          <div className={cn("flex items-center justify-between gap-2", collapsed && "lg:flex-col")}>
+          <div
+            className={cn(
+              "flex items-center justify-between gap-2",
+              collapsed && "lg:justify-center",
+            )}
+          >
             <a
               href={`${API_BASE_URL}/docs`}
               target="_blank"
               rel="noreferrer"
-              title={pick(locale, "API 文档", "API docs")}
               className={cn(
                 "inline-flex items-center gap-1.5 text-xs text-foreground-muted transition-colors hover:text-foreground",
-                collapsed && "lg:justify-center",
+                collapsed && "lg:hidden",
               )}
             >
               <ArrowUpRight className="h-3.5 w-3.5 shrink-0" />
-              <span className={cn(collapsed && "lg:hidden")}>
-                {pick(locale, "API 文档", "API docs")}
-              </span>
+              {pick(locale, "API 文档", "API docs")}
             </a>
 
             <button
@@ -357,7 +352,7 @@ export function AppSidebar() {
                   ? pick(locale, "展开侧边栏", "Expand sidebar")
                   : pick(locale, "收起侧边栏", "Collapse sidebar")
               }
-              className="hidden h-7 w-7 items-center justify-center rounded-full text-foreground-muted transition-colors hover:bg-hover-bg hover:text-foreground lg:inline-flex"
+              className="hidden h-9 w-9 items-center justify-center rounded-full text-foreground-muted transition-colors hover:bg-hover-bg hover:text-foreground lg:inline-flex"
             >
               {collapsed ? (
                 <PanelLeftOpen className="h-4 w-4" />

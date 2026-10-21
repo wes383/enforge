@@ -340,7 +340,7 @@
   }
 
   html[data-sidebar="collapsed"] {
-    --sidebar-width: 4.5rem;
+    --sidebar-width: 3.5rem;
   }
 
   html {
