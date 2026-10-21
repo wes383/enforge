@@ -533,7 +533,8 @@ export default function ApprovalsPage() {
                           };
                           setPlanDraft({ ...planDraft, questions });
                         }}
-                        rows={2}
+                        autoGrow
+                        rows={1}
                         className="flex-1"
                         maxLength={10000}
                       />
