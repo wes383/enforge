@@ -1,3 +1,4 @@
+from dr_core.db.models.approval import RunApproval
 from dr_core.db.models.artifact import Artifact
 from dr_core.db.models.event import RunEvent
 from dr_core.db.models.evidence import Claim, ClaimEvidence, EvidenceItem
@@ -22,6 +23,7 @@ __all__ = [
     "ResearchProject",
     "ResearchQuestion",
     "ResearchRun",
+    "RunApproval",
     "RunEvent",
     "SearchQuery",
     "Source",

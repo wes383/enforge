@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 from datetime import UTC, date, datetime
 from typing import Sequence
+from urllib.parse import urlsplit
 
 from dr_core.db.enums import SearchProviderName
 from dr_core.providers.base import (
@@ -12,8 +13,10 @@ from dr_core.providers.base import (
     SearchProvider,
     WebContentProvider,
 )
+from dr_core.normalization import normalize_url
 from dr_core.providers.errors import (
     DocumentParseError,
+    UnsafeUrlError,
     UnsupportedDocumentType,
 )
 from dr_core.providers.models import (
@@ -30,7 +33,6 @@ from dr_core.providers.models import (
     WebFetchResult,
 )
 from dr_core.providers.text import normalize_extracted_text
-from dr_core.providers.urls import validate_fetch_url
 
 
 class MockSearchProvider:
@@ -136,6 +138,24 @@ class MockAcademicSearchProvider:
         return self._citations[: max(1, limit)]
 
 
+def validate_mock_url(url: str) -> str:
+    """Validate mock URLs without DNS or network access.
+
+    Mock providers never perform network requests; resolving example.org would
+    make offline tests depend on the host resolver or an HTTP proxy.
+    """
+    try:
+        normalized = normalize_url(url)
+    except ValueError as exc:
+        raise UnsafeUrlError("mock", str(exc)) from exc
+    host = (urlsplit(normalized).hostname or "").casefold()
+    if host in {"localhost", "localhost.localdomain"} or host.endswith(
+        (".local", ".internal", ".localhost")
+    ):
+        raise UnsafeUrlError("mock", "Mock URL must not target an internal host")
+    return normalized
+
+
 class MockWebContentProvider:
     name = ContentProviderName.MOCK
 
@@ -148,7 +168,7 @@ class MockWebContentProvider:
         description: str | None = "Mock document description",
         enabled: bool = True,
         fail_with: Exception | None = None,
-        url_validator=validate_fetch_url,
+        url_validator=None,
     ) -> None:
         self._status = status
         self._text = text
@@ -156,7 +176,7 @@ class MockWebContentProvider:
         self._description = description
         self._enabled = enabled
         self._fail_with = fail_with
-        self._validator = url_validator
+        self._validator = url_validator or validate_mock_url
 
     @property
     def enabled(self) -> bool:
@@ -360,4 +380,5 @@ __all__ = [
     "MockWebContentProvider",
     "SearchProvider",
     "WebContentProvider",
+    "validate_mock_url",
 ]

@@ -1,0 +1,201 @@
+from __future__ import annotations
+
+from datetime import date
+from decimal import Decimal
+from typing import Literal
+from uuid import UUID
+
+from pydantic import Field, field_validator
+
+from dr_core.db.enums import (
+    ApprovalKind,
+    ApprovalStatus,
+    CitationAuditStatus,
+    CitationIssueType,
+    CitationStyle,
+    EvidenceType,
+    ProjectLanguage,
+    QuestionCoverageStatus,
+    ResearchDepth,
+    SearchProviderName,
+    SourceOrigin,
+    SourceType,
+)
+from dr_core.schemas.base import SchemaModel
+
+
+class ResearchBrief(SchemaModel):
+    project_id: UUID
+    run_id: UUID
+    title: str = Field(min_length=1, max_length=300)
+    topic: str = Field(min_length=1, max_length=20000)
+    research_scope: str | None = Field(default=None, max_length=20000)
+    language: ProjectLanguage = ProjectLanguage.ZH
+    target_audience: str | None = Field(default=None, max_length=1000)
+    research_depth: ResearchDepth = ResearchDepth.STANDARD
+    citation_style: CitationStyle = CitationStyle.APA
+    budget_usd: Decimal | None = Field(default=None, gt=0)
+    max_search_rounds: int = Field(default=3, ge=1, le=10)
+    max_sources: int = Field(default=20, ge=1, le=200)
+    max_queries_per_round: int = Field(default=6, ge=1, le=30)
+    max_fetches_per_round: int = Field(default=8, ge=0, le=100)
+    max_evidence: int = Field(default=40, ge=1, le=500)
+    token_budget: int = Field(default=0, ge=0)
+    cost_budget_usd: Decimal = Field(default=Decimal("0"), ge=0)
+
+
+class ResearchQuestion(SchemaModel):
+    question_id: UUID | None = None
+    question: str = Field(min_length=1, max_length=10000)
+    priority: int = Field(default=50, ge=0, le=1000)
+    parent_id: UUID | None = None
+    coverage_status: QuestionCoverageStatus = QuestionCoverageStatus.OPEN
+
+
+class ResearchPlan(SchemaModel):
+    version: int = Field(default=1, ge=1)
+    summary: str = Field(min_length=1, max_length=20000)
+    questions: list[ResearchQuestion] = Field(min_length=1, max_length=20)
+    scope_notes: str | None = Field(default=None, max_length=20000)
+
+    @field_validator("questions")
+    @classmethod
+    def _unique_questions(
+        cls,
+        questions: list[ResearchQuestion],
+    ) -> list[ResearchQuestion]:
+        seen: set[str] = set()
+        for item in questions:
+            key = item.question.strip().casefold()
+            if key in seen:
+                raise ValueError("Research plan questions must be unique")
+            seen.add(key)
+        return questions
+
+
+class SearchQuery(SchemaModel):
+    query_text: str = Field(min_length=1, max_length=2000)
+    kind: Literal["web", "academic"]
+    provider: SearchProviderName
+    round_index: int = Field(default=1, ge=1, le=10)
+    research_question_id: UUID | None = None
+
+
+class SourceRecord(SchemaModel):
+    source_id: UUID
+    source_version_id: UUID | None = None
+    title: str = Field(min_length=1, max_length=5000)
+    url: str | None = Field(default=None, max_length=4096)
+    fetch_url: str | None = Field(default=None, max_length=4096)
+    doi: str | None = Field(default=None, max_length=255)
+    authors: list[str] = Field(default_factory=list, max_length=200)
+    published_at: date | None = None
+    source_type: SourceType = SourceType.WEB_PAGE
+    source_origin: SourceOrigin = SourceOrigin.WEB_SEARCH
+    provider: str = Field(min_length=1, max_length=64)
+    score: float | None = Field(default=None, ge=0, le=1)
+    rank_score: float | None = Field(default=None, ge=0)
+    snippet: str | None = Field(default=None, max_length=100000)
+    has_full_text: bool = False
+    parser_status: str | None = None
+    question_ids: list[UUID] = Field(default_factory=list)
+    rank: int = Field(default=0, ge=0)
+
+
+class EvidenceRecord(SchemaModel):
+    evidence_id: UUID
+    source_id: UUID
+    source_version_id: UUID
+    research_question_id: UUID | None = None
+    evidence_type: EvidenceType = EvidenceType.DIRECT_SUPPORT
+    claim_summary: str = Field(min_length=1, max_length=20000)
+    quoted_text: str = Field(min_length=1, max_length=100000)
+
+
+class ResearchGap(SchemaModel):
+    question_id: UUID | None = None
+    question: str = Field(min_length=1, max_length=10000)
+    reason: str = Field(min_length=1, max_length=20000)
+    severity: Literal["low", "medium", "high"] = "medium"
+    suggested_queries: list[str] = Field(default_factory=list, max_length=10)
+
+
+class EvidenceRow(SchemaModel):
+    question_id: UUID | None = None
+    question: str = Field(min_length=1, max_length=10000)
+    support_count: int = Field(default=0, ge=0)
+    refute_count: int = Field(default=0, ge=0)
+    source_count: int = Field(default=0, ge=0)
+    coverage_status: QuestionCoverageStatus = QuestionCoverageStatus.OPEN
+
+
+class EvidenceMatrix(SchemaModel):
+    rows: list[EvidenceRow] = Field(default_factory=list)
+    total_evidence: int = Field(default=0, ge=0)
+    source_count: int = Field(default=0, ge=0)
+    contradiction_count: int = Field(default=0, ge=0)
+    coverage_ratio: float = Field(default=0.0, ge=0, le=1)
+
+
+class OutlineSection(SchemaModel):
+    index: int = Field(ge=0)
+    title: str = Field(min_length=1, max_length=1000)
+    purpose: str = Field(min_length=1, max_length=5000)
+    question_id: UUID | None = None
+    evidence_ids: list[UUID] = Field(default_factory=list)
+
+
+class Outline(SchemaModel):
+    version: int = Field(default=1, ge=1)
+    title: str = Field(min_length=1, max_length=1000)
+    sections: list[OutlineSection] = Field(min_length=1, max_length=30)
+    summary: str = Field(min_length=1, max_length=20000)
+
+    @field_validator("sections")
+    @classmethod
+    def _ordered_unique_sections(
+        cls,
+        sections: list[OutlineSection],
+    ) -> list[OutlineSection]:
+        indexes = [section.index for section in sections]
+        if indexes != list(range(len(sections))):
+            raise ValueError("Outline section indexes must be contiguous from zero")
+        return sections
+
+
+class CitationIssue(SchemaModel):
+    section_index: int = Field(ge=0)
+    status: CitationAuditStatus
+    issue_type: CitationIssueType | None = None
+    details: str = Field(min_length=1, max_length=20000)
+
+
+class CitationAudit(SchemaModel):
+    issues: list[CitationIssue] = Field(default_factory=list)
+    passed: int = Field(default=0, ge=0)
+    warnings: int = Field(default=0, ge=0)
+    failed: int = Field(default=0, ge=0)
+
+
+class ApprovalRequest(SchemaModel):
+    kind: ApprovalKind
+    version: int = Field(ge=1)
+    payload: dict
+
+
+class ApprovalDecision(SchemaModel):
+    decision: ApprovalStatus
+    feedback: str | None = Field(default=None, max_length=20000)
+    content: dict | None = None
+
+    @field_validator("decision")
+    @classmethod
+    def _decision_value(cls, decision: ApprovalStatus) -> ApprovalStatus:
+        allowed = {
+            ApprovalStatus.APPROVED,
+            ApprovalStatus.REJECTED,
+            ApprovalStatus.MODIFIED,
+        }
+        if decision not in allowed:
+            raise ValueError("Approval decision must be approved, rejected, or modified")
+        return decision

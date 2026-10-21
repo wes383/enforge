@@ -35,6 +35,7 @@ ALLOWED_RUN_TRANSITIONS: dict[RunStatus, frozenset[RunStatus]] = {
     ),
     RunStatus.BUILDING_EVIDENCE: frozenset(
         {
+            RunStatus.SEARCHING,
             RunStatus.WRITING,
             RunStatus.AWAITING_APPROVAL,
             RunStatus.FAILED,

@@ -6,13 +6,14 @@ from app.celery_app import celery_app
 from dr_core.config import get_settings
 from dr_core.db import get_database
 from dr_core.db.repositories.exceptions import EntityNotFound
+from dr_core.research.graph import run_research_workflow
 from dr_core.services import (
     PermanentRunError,
     TransientRunError,
-    execute_run_pipeline,
     fail_run,
     record_retry,
 )
+from dr_core.services.approvals import resume_payload
 from dr_core.tasks.names import EXECUTE_RESEARCH_RUN_TASK
 from dr_core.tasks.retry import retry_countdown_seconds
 
@@ -52,21 +53,35 @@ def execute_research_run(
     run_id: str,
     project_id: str,
     simulate_failure: bool = False,
-) -> dict[str, str]:
+    approval_id: str | None = None,
+) -> dict[str, object]:
     run_uuid = UUID(run_id)
     project_uuid = UUID(project_id)
     database = get_database()
 
     try:
-        result = execute_run_pipeline(
+        if simulate_failure:
+            raise PermanentRunError(
+                "Simulated task failure requested by development tooling"
+            )
+        resume = (
+            resume_payload(database, run_uuid, UUID(approval_id))
+            if approval_id
+            else None
+        )
+        result = run_research_workflow(
             database,
             run_uuid,
             project_uuid,
-            simulate_failure=simulate_failure,
+            resume=resume,
         )
         return {
             "run_id": str(result.run_id),
             "status": result.status.value,
+            "paused_for_approval": result.paused_for_approval,
+            "approval_id": (
+                str(result.approval_id) if result.approval_id else None
+            ),
         }
     except EntityNotFound:
         logger.warning("Discarding task for missing run %s", run_id)

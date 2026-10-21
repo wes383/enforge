@@ -1,3 +1,4 @@
+from dr_core.db.repositories.approvals import RunApprovalRepository
 from dr_core.db.repositories.artifacts import ArtifactRepository
 from dr_core.db.repositories.events import RunEventRepository
 from dr_core.db.repositories.evidence import (
@@ -43,6 +44,7 @@ __all__ = [
     "ProjectRepository",
     "RepositoryError",
     "ResearchQuestionRepository",
+    "RunApprovalRepository",
     "RunEventRepository",
     "RunRepository",
     "SearchQueryRepository",

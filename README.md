@@ -1,6 +1,6 @@
 # Enforge · Deep Research Writing Agent
 
-阶段 4：统一的外部研究工具层与本地文档解析。本阶段在阶段 3 的业务 API 和异步任务之上，加入可替换的网页搜索、学术检索、网页抓取和文档解析适配器，统一超时、重试、限流、缓存、异常与 SSRF 防护；上传文档由 `parse` 队列在 Worker 内使用本地库解析并持久化状态。LangGraph 研究循环、证据矩阵和写作流程仍留待后续阶段实现。
+阶段 5：LangGraph 研究循环、证据矩阵、审批与断点恢复。本阶段把阶段 4 的搜索、抓取和解析能力接入由证据缺口驱动的条件工作流：规划与提纲可人工审批，审批被拒绝或修改会改变后续行为；运行状态与 LangGraph checkpoint 一起持久化，Worker 重启后可继续；轮次、来源、抓取并发、token 与成本预算到达上限时生成带明确局限说明的报告，而不是静默失败。
 
 ## 当前已实现
 
@@ -16,12 +16,17 @@
 - Celery 独立入口与任务：任务 ID 等于运行 ID，重试采用指数退避，永久失败与暂时性失败分类处理，`research` 与 `parse` 队列隔离；文档解析任务只传递项目 ID 和来源版本 ID。
 - 协作式取消：排队和待审批运行立即终止；执行中的任务通过数据库取消标记在安全检查点停止。Celery revoke 仅作加速，不承担正确性。
 - 持久化事件系统：阶段开始/完成/失败、取消请求、重试调度和待审批事件写入 `run_events`，SSE 以数据库事件为唯一真相来源。
-- 阶段 3 运行流程为规划脚手架：创建研究问题后停在 `awaiting_approval`，为阶段 5 的人工审批与完整工作流预留状态；审批接口在阶段 5 提供。
-- 阶段 2 完整数据模型：15 张研究业务表、项目级外键、DOI/URL 去重、幂等唯一约束、相对存储键约束和 HNSW 向量索引。
-- SQLAlchemy 2.0 仓储层，覆盖项目、运行、研究问题、检索、来源、切片、证据、主张、提纲、章节、引用核验、事件和导出文件。
+- LangGraph 研究工作流：16 个业务节点加 2 个审批节点，覆盖解析研究简报、规划、检索、规范化、排序、正文获取、文档解析、证据抽取、证据分析、缺口分析、补充检索、提纲、写作、引用核验和报告定稿。
+- 缺口驱动的条件循环：`analyze_gaps` 根据研究问题覆盖率、证据数量与反方证据缺口决定是否进入 `revise_search_plan` 并开始下一轮检索，轮次或预算耗尽后继续生成提纲，而不是固定线性执行。
+- 研究计划与提纲人工审批：通过 LangGraph `interrupt` 暂停，`run_approvals` 表保存待审批版本；批准、拒绝和修改都通过 `Command(resume=...)` 恢复并实际改变后续工作流（拒绝重新规划/重新生成提纲，修改内容直接生效）。
+- 稳定线程 ID 与 PostgreSQL checkpoint：`research_runs.workflow_thread_id` 贯穿首次执行和审批恢复，`checkpoint_id` 同步到运行记录；Worker 重启、任务重试和重复投递都能从最近 checkpoint 继续，节点副作用通过数据库唯一约束保持幂等。
+- 预算与终止语义：最大检索轮次、每轮查询数、来源数、抓取数、抓取并发、证据数、单节点超时、token 预算和成本预算；预算停止写入局限说明并继续产出报告，暂时性错误进入 Celery 重试，永久性错误和超时耗尽明确进入 `failed`。
+- 报告导出：`research_report`、`reference_list`、`markdown_export` 三种 artifact；参考文献只从数据库来源元数据按 APA/IEEE/Chicago/MLA 生成，引用标记与参考文献一一对应，不编造文献。
+- 阶段 2 完整数据模型：16 张研究业务表（新增 `run_approvals`）、项目级外键、DOI/URL 去重、幂等唯一约束、相对存储键约束和 HNSW 向量索引。
+- SQLAlchemy 2.0 仓储层，覆盖项目、运行、研究问题、检索、来源、切片、证据、主张、提纲、章节、引用核验、审批、事件和导出文件。
 - Alembic 从空数据库初始化、重复升级、降级/再升级和 `alembic check` 均通过；Compose 中的 `migrate` 服务在 `api`、`worker` 启动前完成迁移。
 - 文件记录与实际文件对账工具，能够报告缺失文件和孤儿文件。
-- 容器内单元测试和集成测试，当前 `176 passed`。
+- 容器内单元测试和集成测试，当前 `188 passed`。
 - 不包含 MinIO、S3 或任何对象存储服务。
 
 ## 服务拓扑
@@ -49,6 +54,7 @@ migrate (Alembic, 一次性任务) ──▶ postgres:5432
 - 浏览器访问公开地址：`http://localhost:3000` 和 `http://localhost:8000`。
 - 容器之间使用服务名：`api:8000`、`postgres:5432`、`redis:6379`。
 - `research` 承载常规研究运行，`parse` 承载重型文档解析任务；当前单个 Worker 同时消费两个队列，部署时可以拆分为独立 Worker 进程，队列名已通过路由隔离。
+- LangGraph checkpoint 保存在 PostgreSQL 的 `checkpoints`、`checkpoint_blobs`、`checkpoint_writes`、`checkpoint_migrations` 表中，与业务表使用同一数据库但由 LangGraph 管理生命周期；Alembic 不接管这四张表。
 - PostgreSQL 与 Redis 不暴露宿主机端口，只能从 `app_net` 网络或 `docker compose exec` 访问。
 - `migrate` 是 Compose 管理的短生命周期服务，成功执行 `alembic upgrade head` 后以状态码 0 退出；`api` 与 `worker` 只在迁移成功后启动。
 - `api`、`worker` 必须使用相同的 `FILE_STORAGE_ROOT=/app/data/files` 并挂载同一 Named Volume。
@@ -68,7 +74,8 @@ enforge/
 │       │   ├── base.py             声明式基类、命名约定、时间戳
 │       │   └── session.py          引擎与会话工厂
 │       ├── schemas/                Pydantic 输入校验
-│       ├── services/               运行状态机、取消/失败/重试、来源入库、解析状态
+│       ├── services/               运行状态机、取消/失败/重试、审批、来源入库、解析状态
+│       ├── research/               LangGraph 图、18 个节点、研究领域模型、文本与报告生成
 │       ├── providers/              搜索/学术/抓取/解析接口、适配器、缓存、Mock
 │       ├── tasks/                  Celery 工厂、任务名与重试退避策略
 │       ├── maintenance/            文件对账与运维入口
@@ -153,6 +160,8 @@ docker compose down
 | `POST` | `/api/v1/runs/{run_id}/cancel` | 请求取消运行，返回 202 |
 | `GET` | `/api/v1/runs/{run_id}/events` | 事件历史，支持 `after_id`、`limit` |
 | `GET` | `/api/v1/runs/{run_id}/events/stream` | SSE 事件流，支持 `Last-Event-ID` 或 `after` |
+| `GET` | `/api/v1/runs/{run_id}/approvals` | 列出审批版本，支持 `status=pending/approved/rejected/modified/cancelled` |
+| `POST` | `/api/v1/runs/{run_id}/approvals/{approval_id}` | 提交批准、拒绝或修改后的计划/提纲，返回 202 并投递恢复任务 |
 | `POST` | `/api/v1/projects/{project_id}/files` | 上传 PDF、HTML、Markdown 或纯文本，返回 201 并异步解析 |
 | `GET` | `/api/v1/files/{file_id}` | 查询文件元数据、解析状态、解析器版本和错误 |
 | `GET` | `/api/v1/files/{file_id}/download` | 受控下载，响应不包含存储路径 |
@@ -181,16 +190,23 @@ curl -F 'file=@paper.pdf;type=application/pdf' \
 
 ### 运行状态与取消
 
-阶段 3 已使用的状态迁移：
+完整状态迁移：
 
 ```text
-queued → planning → awaiting_approval
-   │         │              │
-   ├─────────┴──────────────┴──▶ failed / cancelled
-   └──▶ cancelled
+queued → planning ⇄ awaiting_approval（研究计划）
+             │
+             ▼
+         searching → processing_sources → building_evidence
+             ▲                                   │
+             └──── revise_search_plan（发现缺口）◀┘
+                                                 │（无缺口或预算耗尽）
+                                                 ▼
+                    awaiting_approval（提纲）→ writing → verifying → completed
+
+任意非终态 → failed / cancelled
 ```
 
-`searching`、`processing_sources`、`building_evidence`、`writing`、`verifying`、`completed` 已定义合法迁移，留给阶段 5 的 LangGraph 工作流；终态为 `completed`、`failed`、`cancelled`，不可再迁移。非法迁移由服务层拒绝并返回 HTTP 409。
+`awaiting_approval` 可以因计划拒绝回到 `planning`、因计划批准进入 `searching`、因缺口循环带着新证据再次进入（等待提纲审批）或在提纲批准后进入 `writing`；`building_evidence` 可以回到 `searching` 执行补充检索。终态为 `completed`、`failed`、`cancelled`，不可再迁移。非法迁移由服务层拒绝并返回 HTTP 409。
 
 取消语义：
 
@@ -201,11 +217,11 @@ queued → planning → awaiting_approval
 
 ### 事件与 SSE
 
-`run_events` 是持久化业务事件，包含自增 bigint `id`、事件类型、阶段、消息和 JSON payload。阶段 3 产生的事件包括：
+`run_events` 是持久化业务事件，包含自增 bigint `id`、事件类型、阶段、消息和 JSON payload。研究运行时产生的事件包括：
 
-- `run_created`、`phase_started`、`phase_completed`、`awaiting_approval`
-- `cancel_requested`、`run_cancelled`
-- `retry_scheduled`、`phase_failed`
+- 生命周期：`run_created`、`phase_started`、`phase_completed`、`cancel_requested`、`run_cancelled`、`retry_scheduled`、`phase_failed`
+- 工作流进度：`progress`、`source_fetched`、`source_parsed`、`evidence_extracted`、`section_generated`、`citation_audit_failed`
+- 审批：`awaiting_approval`、`approval_decided`（payload 包含审批 ID、类型、版本与决定）
 
 SSE 使用数据库轮询，每页最多 500 条，按事件 `id` 严格递增输出；格式为 `id`、`event`、`data` 三个字段，并首先发送 `retry: 3000`。客户端断线后携带 `Last-Event-ID`（或 `after` 查询参数）重连，只接收该 ID 之后的事件。事件有去重键约束，重复任务投递不会重复产生同一业务事件。运行进入终态后，服务端在发送完剩余事件后关闭连接；空闲时每 15 秒发送注释行保活。SSE、Celery 结果和未来 LangGraph checkpoint 是三种不同机制，不能互相替代。
 
@@ -215,14 +231,14 @@ SSE 使用数据库轮询，每页最多 500 条，按事件 `id` 严格递增�
 - 任务名：`research.execute_run`、`documents.parse`、`debug.ping`、`storage.smoke`。
 - 队列：`research`（常规研究）与 `parse`（重型解析），由 `CELERY_TASK_DEFAULT_QUEUE`、`CELERY_PARSE_QUEUE` 配置。
 - 任务消息只包含运行 ID、来源版本 ID、项目 ID 和必要的布尔开关，不包含主题正文、文献全文或 API Key。
-- 研究任务 ID 等于运行 ID，解析任务 ID 为 `parse:{source_version_id}`；重复投递分别由运行状态机、事件去重键和解析状态检查保证幂等。
-- 暂时性失败抛出 `TransientRunError`，记录 `retry_scheduled` 事件后按 `1, 2, 4, 8…` 秒退避重试，单次上限 30 秒，默认最多 3 次；达到上限后标记 `failed`。
+- 研究任务 ID 等于运行 ID；审批恢复任务 ID 为 `{run_id}:resume:{approval_id}`，消息只额外携带审批 ID，不携带计划或正文。重复投递分别由运行状态机、审批状态、事件去重键和 checkpoint 保证幂等。
+- 暂时性失败（节点超时、数据库/存储瞬时错误、提供商暂时不可用）抛出 `TransientRunError`，记录 `retry_scheduled` 事件后按 `1, 2, 4, 8…` 秒退避重试，单次上限 30 秒，默认最多 3 次；达到上限后标记 `failed`。
 - 永久性失败抛出 `PermanentRunError`，立即标记 `failed` 并写入可读 `error_summary`；未预期异常同样按失败处理。
 - 任务配置 `acks_late`、`reject_on_worker_lost`、prefetch=1、软/硬超时，避免 Worker 异常退出导致任务被静默确认。
-- 业务状态以 PostgreSQL 为准；Redis 只保存队列消息和可过期的任务结果。Worker 重启后从数据库重新读取运行状态，已提交的阶段不会重复创建业务记录。
+- 业务状态以 PostgreSQL 为准；Redis 只保存队列消息和可过期的任务结果。Worker 重启后从数据库重新读取运行状态，LangGraph 从 `workflow_thread_id` 对应的最近 checkpoint 继续；已提交的阶段不会重复创建业务记录。
 - `GET /api/v1/dev/tasks/{task_id}` 可查询 Celery 结果，仅用于开发验收。
 
-阶段 3 的规划流水线仍会创建一条研究问题并停在 `awaiting_approval`；阶段 4 已提供搜索、学术检索、抓取和解析工具，但尚未接入研究循环，LangGraph 工作流与审批将在阶段 5 接入。
+研究任务现在执行完整 LangGraph 工作流：首次投递从 `parse_brief` 开始，遇到审批节点暂停并向 API 返回 `approval_id`；审批决定后由独立恢复任务以 `Command(resume=...)` 继续。运行终态、待审批和取消状态都先写入数据库，再反映到 Celery 返回值，避免队列结果与业务状态不一致。
 
 ### 文件接口规则
 
@@ -302,11 +318,121 @@ SSE 使用数据库轮询，每页最多 500 条，按事件 `id` 严格递增�
 
 所有缓存、重试和解析结果都经过 Pydantic 模型校验；Mock Provider 提供确定性的网页、学术、抓取、解析、Embedding 和 LLM 结果，测试完全离线。
 
+## LangGraph 研究工作流与审批
+
+工作流代码位于 `packages/core/src/dr_core/research/`：
+
+| 模块 | 职责 |
+|---|---|
+| `models.py` | `ResearchBrief`、`ResearchPlan`、`ResearchQuestion`、`SearchQuery`、`SourceRecord`、`EvidenceRecord`、`ResearchGap`、`EvidenceMatrix`、`Outline`、`CitationAudit` 等领域模型及约束 |
+| `state.py` | LangGraph 状态：简报、计划、查询、轮次、来源、证据 ID、矩阵、缺口、提纲、章节、引用核验、artifact、反馈与局限 |
+| `context.py` | 数据库/存储/提供商上下文、取消与终态检查、节点超时、预算读取、事件写入 |
+| `nodes.py` | 全部节点、条件路由和报告/参考文献生成 |
+| `graph.py` | 图构建、PostgreSQL checkpointer、首次执行/恢复/重试入口 |
+| `generation.py` | 确定性的计划、查询、缺口查询、提纲与章节生成 |
+| `text.py` | 中英文分句/停用词、证据句提取、引用标记解析和 APA/IEEE/Chicago/MLA 参考文献格式化 |
+
+### 节点与条件路由
+
+规范中的 16 个研究节点全部实现，并额外提供两个显式审批节点：
+
+| 节点 | 行为 |
+|---|---|
+| `parse_brief` | 校验研究简报，建立主问题与子问题，确定语言、深度、引用风格与预算 |
+| `plan_research` | 生成版本化研究计划；被拒绝后根据反馈生成新版本 |
+| `await_plan_approval` | 写入待审批记录并 `interrupt`；批准进入检索，拒绝回到规划，修改内容直接生效 |
+| `generate_queries` | 按轮次及研究问题生成网页/学术查询，跳过重复语句 |
+| `search_sources` | 调用已启用的搜索与学术提供商，记录查询执行状态、来源和所属研究问题 |
+| `normalize_sources` | DOI/URL/标题去重、元数据合并、来源类型与问题关联归一化 |
+| `rank_sources` | 按相关性、来源类型与可获取全文能力做确定性排序，写入 `rank_score` |
+| `fetch_full_text` | 受控并发抓取候选来源全文；失败、付费墙、仅摘要等状态保留，不伪造全文 |
+| `parse_documents` | 使用本地解析器解析已抓取或上传文档，持久化解析器版本、状态和失败原因 |
+| `extract_evidence` | 从全文或摘要中抽取与问题相关的证据句，写入可追溯证据记录并按指纹幂等 |
+| `analyze_evidence` | 构建证据矩阵，统计研究问题覆盖、支持/反驳数量与来源分布 |
+| `analyze_gaps` | 识别未覆盖问题、证据不足和缺少反方证据等缺口，生成定向补充查询 |
+| `revise_search_plan` | 轮次加一，记录补充检索原因；达到最大轮次或预算上限时停止循环 |
+| `generate_outline` | 生成结构化提纲；被拒绝后根据反馈生成新版本并加入反馈章节 |
+| `await_outline_approval` | 写入待审批记录并 `interrupt`；批准进入写作，拒绝重新生成提纲，修改后提纲生效 |
+| `write_sections` | 按提纲和证据矩阵逐节生成正文，只引用数据库中已有证据，并记录引用映射 |
+| `verify_citations` | 校验正文引用标记、来源存在性和引用映射，写入 `citation_audits` 记录 |
+| `finalize_report` | 生成报告、参考文献列表与 Markdown artifact，写入完成事件并终止运行 |
+
+关键条件边：
+
+- `analyze_gaps → revise_search_plan → search_sources`：存在缺口时进入下一轮检索；该循环由数据库中的证据覆盖情况驱动，不是固定轮数。
+- `analyze_gaps → generate_outline`：无缺口、达到 `RESEARCH_MAX_SEARCH_ROUNDS` 或预算耗尽时继续写作；预算停止会写入 `limitations` 并在报告中明确说明。
+- `await_plan_approval` 与 `await_outline_approval`：批准/拒绝走不同分支；修改后的计划或提纲替换 LangGraph 状态并由 API 同步到数据库。
+
+### Checkpoint、恢复与幂等
+
+- `research_runs.workflow_thread_id` 在创建运行时生成且永不改变；`research_runs.checkpoint_id` 在每次图执行后更新为最近的 LangGraph checkpoint。
+- checkpoint 使用官方 `PostgresSaver`，保存在 PostgreSQL 中；四个 checkpoint 表由 LangGraph 创建和迁移，Alembic 通过 `include_object` 排除它们，避免误删或重复创建。
+- 首次执行从 `START` 开始；审批决定后使用 `Command(resume=payload)` 恢复；任务重试或 Worker 重启时若存在 checkpoint 则调用 `graph.invoke(None, config)` 继续。若运行已不再等待审批，则忽略过期 resume。
+- 节点副作用以数据库唯一约束为基础：研究问题、检索查询、来源、来源版本、证据、提纲版本、章节版本、事件、审批和 artifact 都有幂等键或唯一约束；`RunApprovalRepository.request` 按 `(run_id, kind, version)` 去重，因此恢复时重新执行审批前置代码不会产生重复记录。
+- 工作流状态只保存 ID 和紧凑数据，全文留在共享文件卷，证据正文留在数据库；因此 checkpoint 不会因全文而膨胀。
+- 每个节点边界都检查取消标记和运行终态；取消后不再启动新节点，已写入的事件和记录保留。
+
+### 审批 API
+
+待审批版本保存在 `run_approvals`：`kind`（`plan`/`outline`）、`status`（`pending`/`approved`/`rejected`/`modified`/`cancelled`）、`version`、`payload`、`feedback`、`decision_payload` 和 `decided_at`。同一运行的同一类型可以保存多个版本，但 `(run_id, kind, version)` 唯一。
+
+```bash
+# 查询待审批项
+curl -s "http://localhost:8000/api/v1/runs/$RUN_ID/approvals?status=pending"
+
+# 批准研究计划
+curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_ID" \
+  -H 'Content-Type: application/json' \
+  -d '{"decision":"approved"}'
+
+# 拒绝提纲并给出修改意见
+curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_ID" \
+  -H 'Content-Type: application/json' \
+  -d '{"decision":"rejected","feedback":"Add a section on enforcement costs"}'
+
+# 提交修改后的计划或提纲（必须符合对应领域模型）
+curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_ID" \
+  -H 'Content-Type: application/json' \
+  -d '{"decision":"modified","content":{...}}'
+```
+
+- 只有 `awaiting_approval` 运行上的 `pending` 审批可以被决定；重复决定返回 409。
+- `modified` 请求的 `content` 会先按 `ResearchPlan` 或 `Outline` 校验，非法内容返回 422；提纲修改会同步到 `outlines` 表。
+- 决定成功后写入 `approval_decided` 事件并投递恢复任务；队列不可用时审批会被重置为 `pending`，接口返回 503，避免出现“已批准但工作流没有恢复”的状态。
+- 取消运行会把待审批记录标记为 `cancelled`；已取消的审批不能恢复。
+- `RESEARCH_PLAN_APPROVAL_REQUIRED=false` 或 `RESEARCH_OUTLINE_APPROVAL_REQUIRED=false` 时对应节点直接继续，适用于全自动运行。
+
+### 预算、超时与失败语义
+
+| 限制 | 配置 | 行为 |
+|---|---|---|
+| 最大检索轮次 | `RESEARCH_MAX_SEARCH_ROUNDS` | 达到后停止补充检索，继续提纲与写作 |
+| 每轮查询数 | `RESEARCH_MAX_QUERIES_PER_ROUND` | 限制生成的查询数量 |
+| 最大来源数 | `RESEARCH_MAX_SOURCES` | 排名后截断参与抓取和证据抽取的来源 |
+| 每轮抓取数 / 并发 | `RESEARCH_MAX_FETCHES_PER_ROUND`、`RESEARCH_MAX_FETCH_CONCURRENCY` | 控制外部抓取压力 |
+| 最大证据数 | `RESEARCH_MAX_EVIDENCE` | 达到后停止继续抽取 |
+| 单节点超时 | `RESEARCH_NODE_TIMEOUT_SECONDS` | 超时抛出 `TransientRunError` 并进入重试 |
+| token / 成本预算 | `RESEARCH_TOKEN_BUDGET`、`RESEARCH_COST_BUDGET_USD`、项目 `budget_usd` | 从运行累计用量读取；达到任一上限时停止新一轮检索，写入局限说明 |
+
+- 预算停止不等于运行失败：报告仍会生成，`limitations` 中记录触发的预算类型，帮助读者判断证据完整性。
+- 暂时性错误（节点超时、数据库/存储瞬时故障）交给 Celery 重试；永久性错误（状态/计划/审批数据不合法）立即标记 `failed`。
+- 搜索、抓取和解析的单个提供商/单条来源失败不会终止整个研究；失败状态保留在来源元数据和事件中。
+
+### 提供商模式
+
+`RESEARCH_PROVIDER_MODE` 控制工作流使用的提供商：
+
+- `auto`（默认）：优先使用已启用并配置密钥的真实提供商；非生产环境下若没有任何真实提供商，自动回退到确定性 Mock。
+- `real`：只使用真实提供商；未配置时搜索为空，但工作流仍会以明确的局限说明完成。
+- `mock`：强制使用 Mock，便于离线验收和测试。
+
+报告正文与 Mock Provider 的内容生成是确定性的，但引用只能来自实际写入数据库的来源；当没有可引用证据时，章节会明确说明缺少证据，而不是编造引文。
+
 ## 数据库与迁移
 
 ### 数据模型
 
-15 张表通过 `project_id` 归属到研究项目，并在删除项目时由数据库级联清理：
+16 张表通过 `project_id` 归属到研究项目，并在删除项目时由数据库级联清理：
 
 | 表 | 职责 |
 |---|---|
@@ -324,6 +450,7 @@ SSE 使用数据库轮询，每页最多 500 条，按事件 `id` 严格递增�
 | `draft_sections` | 章节正文、引用映射、使用过的证据 ID、版本与生成状态 |
 | `citation_audits` | 引用核验结果、问题类型、审查方式、修正说明与修正版本 |
 | `run_events` | 持久化进度/阶段/审批事件，单调递增 `id` 可直接作为 SSE `Last-Event-ID` 游标 |
+| `run_approvals` | 计划/提纲审批的版本、状态、快照、反馈、修改后内容和决定时间；`(run_id, kind, version)` 唯一 |
 | `artifacts` | 研究报告、参考文献、证据矩阵、Markdown/PDF/DOCX 导出的相对存储键、MIME、大小、哈希与版本 |
 
 关键约束和行为：
@@ -371,12 +498,12 @@ docker compose up -d --force-recreate migrate api worker
 
 Linux/macOS 将卷参数替换为 `-v "$PWD/migrations:/app/migrations"`，并去掉 `MSYS_NO_PATHCONV=1`。迁移文件已通过挂载进入 `api` 和 `migrate` 容器，因此修改迁移脚本后无需重建镜像；如果同时修改了模型代码，仍需重建 `api`、`worker` 和 `test` 镜像。
 
-当前迁移链：`c991dd5b285d`（阶段 2 完整架构）→ `4f6d1c8a2b90`（来源版本内容类型去重）→ `8d2a7c4e9f10`（运行取消时间与事件类型扩展）→ `c4e8f1a2b7d3`（增加 Mock 搜索提供商枚举值）。阶段 3/4 已实际验证：
+当前迁移链：`c991dd5b285d`（阶段 2 完整架构）→ `4f6d1c8a2b90`（来源版本内容类型去重）→ `8d2a7c4e9f10`（运行取消时间与事件类型扩展）→ `c4e8f1a2b7d3`（增加 Mock 搜索提供商枚举值）→ `e5b9c3d7a1f2`（阶段 5 审批表）。阶段 5 已实际验证：
 
-- 在已有数据上执行 `alembic upgrade head` 成功添加取消字段、扩展事件类型和搜索提供商 CHECK 约束。
-- `alembic check` 返回 `No new upgrade operations detected`。
-- 在全新空数据库上执行完整迁移链成功创建全部 15 张业务表。
-- 在空库上执行目标版本降级与重新升级均成功。
+- 在已有数据库上执行 `alembic upgrade head` 成功创建 `run_approvals`、枚举 CHECK 约束和索引。
+- `alembic check` 返回 `No new upgrade operations detected`；LangGraph 的四个 checkpoint 表被正确排除，不会被识别为待删除表。
+- 在全新空数据库上执行完整迁移链成功创建全部 16 张业务表，LangGraph checkpoint 表按需由 `PostgresSaver.setup()` 创建。
+- 在空库上执行 `e5b9c3d7a1f2 → c4e8f1a2b7d3` 降级和重新升级均成功。
 - `/ready` 的 `schema` 检查在迁移完成后返回 `ok`。
 
 ## 仓储层与文件对账
@@ -444,10 +571,21 @@ docker compose exec api python -m dr_core.maintenance
 | `CELERY_RESULT_BACKEND` | `redis://redis:6379/2` | Celery 结果后端 |
 | `CELERY_TASK_DEFAULT_QUEUE` | `research` | 常规研究任务队列 |
 | `CELERY_PARSE_QUEUE` | `parse` | 重型文档解析任务队列 |
-| `RUN_PHASE_PAUSE_SECONDS` | `0.35` | 规划阶段演示暂停秒数；便于本地观察取消与 SSE，生产可设为 0 |
 | `RUN_TASK_MAX_RETRIES` | `3` | 暂时性失败的最大重试次数 |
 | `RUN_TASK_SOFT_TIME_LIMIT_SECONDS` | `300` | Celery 软超时，超时任务可被中断并标记失败 |
 | `RUN_TASK_HARD_TIME_LIMIT_SECONDS` | `360` | Celery 硬超时，必须大于软超时 |
+| `RESEARCH_PROVIDER_MODE` | `auto` | `auto`/`real`/`mock`；auto 在无真实提供商时回退 Mock |
+| `RESEARCH_MAX_SEARCH_ROUNDS` | `3` | 最大检索轮次（含首轮） |
+| `RESEARCH_MAX_QUERIES_PER_ROUND` | `6` | 每轮生成的检索查询上限 |
+| `RESEARCH_MAX_SOURCES` | `20` | 参与抓取与证据抽取的来源上限 |
+| `RESEARCH_MAX_FETCHES_PER_ROUND` | `8` | 每轮抓取全文的来源上限 |
+| `RESEARCH_MAX_EVIDENCE` | `40` | 单次运行的最大证据数 |
+| `RESEARCH_MAX_FETCH_CONCURRENCY` | `2` | 抓取全文的并发数 |
+| `RESEARCH_NODE_TIMEOUT_SECONDS` | `90` | 单个工作流节点的超时；超时按暂时性错误重试 |
+| `RESEARCH_TOKEN_BUDGET` | `0` | token 预算；0 表示不限制 |
+| `RESEARCH_COST_BUDGET_USD` | `0` | 成本预算（美元）；0 表示不限制，与项目预算取较小正值 |
+| `RESEARCH_PLAN_APPROVAL_REQUIRED` | `true` | 是否在研究计划节点暂停等待人工审批 |
+| `RESEARCH_OUTLINE_APPROVAL_REQUIRED` | `true` | 是否在提纲节点暂停等待人工审批 |
 | `SSE_POLL_INTERVAL_SECONDS` | `1.0` | SSE 轮询数据库事件的间隔 |
 | `SSE_KEEPALIVE_SECONDS` | `15.0` | SSE 空闲保活注释间隔 |
 | `FILE_STORAGE_ROOT` | `/app/data/files` | 容器内文件根目录；Docker 环境下不要修改，否则会脱离共享卷 |
@@ -511,6 +649,16 @@ docker compose exec api python -m dr_core.maintenance
 docker compose --profile test run --build --rm test
 ```
 
+阶段 5 测试内容：
+
+- 研究计划与提纲的 Pydantic 约束；深度感知的计划/提纲生成与反馈版本递增；条件路由在批准、拒绝、缺口与预算耗尽时的目标。
+- 预算合并规则（配置与项目预算取最小正值）、来源排序分数上限、中英文停用词与 Mock URL 校验。
+- 端到端 Mock 研究：计划审批、两轮条件检索、抓取、解析、证据抽取、提纲审批、写作、引用核验、报告与参考文献 artifact。
+- 从数据库中读取 LangGraph checkpoint，并用新的 `PostgresSaver` 和独立执行入口恢复；验证线程 ID 与 checkpoint ID。
+- 计划拒绝后重新规划、修改后的计划/提纲生效、提纲审批通过、取消后待审批记录终止，以及重复审批返回 409。
+- 成本预算耗尽时停止补充检索，报告包含明确的预算限制说明；证据、检索轮次与报告内容一致。
+- 审批 API 的缺失/非法修改内容返回 422，队列不可用时审批回滚为待审批并返回 503。
+
 阶段 4 测试内容：
 
 - 提供商 Pydantic 模型、URL/DOI 规范化、内容哈希一致性和失败对象转换。
@@ -532,7 +680,7 @@ docker compose --profile test run --build --rm test
 - 运行创建快速返回 202、`Idempotency-Key` 重复提交返回同一运行、规划流水线最终进入 `awaiting_approval`。
 - 重复投递同一运行任务不会重复创建研究问题或事件。
 - 事件历史严格递增；SSE 使用 `Last-Event-ID` 和 `after` 重放时不丢失、不重复事件；终态运行关闭事件流。
-- 排队、待审批和执行中三种取消路径；取消后不再产生阶段完成事件或业务记录；已失败运行取消返回 409。
+- 排队、待审批和执行中三种取消路径；取消后不再启动新阶段，最后一个事件为 `run_cancelled`；已失败运行取消返回 409。
 - 强制失败任务写入可读 `error_summary` 和单条 `phase_failed` 事件。
 - 重试事件去重、指数退避上限、dispatch 参数只包含 ID、revoke 不终止 Worker。
 - PDF/HTML/Markdown/纯文本上传下载一致性；MIME、PDF 文件头、UTF-8、NUL、空文件、大小上限、路径穿越和不安全文件名校验。
@@ -542,7 +690,7 @@ docker compose --profile test run --build --rm test
 
 - DOI、URL、问题、查询、主张和证据指纹的规范化。
 - Pydantic 输入约束、相对存储键校验、向量维度异常。
-- 15 张表的模型元数据、项目级外键级联和 pgvector 维度一致性。
+- 16 张表的模型元数据、项目级外键级联和 pgvector 维度一致性。
 - 项目创建、更新、软删除、恢复与项目隔离。
 - 运行幂等键、状态与 checkpoint。
 - 问题、检索、来源 DOI/URL、来源版本哈希和证据/主张的幂等去重。
@@ -554,7 +702,7 @@ docker compose --profile test run --build --rm test
 - 缺失文件与孤儿文件识别。
 - 原有健康检查、CORS、文件跨容器往返和 Celery 测试任务。
 
-当前结果：`176 passed`（阶段 4 新增 41 项；测试全程不需要网络或真实 API Key）。
+当前结果：`188 passed`（阶段 5 新增 12 项；测试全程不需要网络或真实 API Key）。
 
 前端静态检查：
 
@@ -589,6 +737,8 @@ docker compose exec -T postgres psql -U enforge -d enforge -c \
 4. 对比下载内容与上传内容，二者应完全一致。
 
 阶段 1 已实际执行以上两类验证，均通过。阶段 3 还验证了运行状态与事件在服务重启后的可恢复性：等待运行进入 `awaiting_approval` 后重启 `api`、`worker`，再查询运行与事件历史，结果保持一致；任务状态不依赖 Redis 中的临时结果。阶段 4 的解析状态、解析器版本和抓取全文同样保存在 PostgreSQL 与共享文件卷中，Worker 重启后可重新读取。
+
+阶段 5 的 checkpoint 恢复已通过测试验证：运行停在计划或提纲审批时，`research_runs.checkpoint_id` 指向 PostgreSQL 中的 checkpoint；测试使用新的 `PostgresSaver` 读取同一 `workflow_thread_id`，并通过恢复任务继续到 `completed`。Worker 重启不改变线程 ID，也不会重复创建研究问题、来源、证据或审批记录。
 
 ## 备份与恢复
 
@@ -655,20 +805,22 @@ Linux/macOS 的恢复命令同样将第二个卷参数改为 `-v "$PWD/backups:/
 
 - 当前为单用户本地开发骨架，没有用户登录和项目级用户权限；“权限检查”目前指项目存在且未软删除。多用户访问控制将在后续阶段实现。
 - Phase 1 冒烟接口和 `POST /dev/runs/{run_id}/fail` 仅用于验收，必须在非本地环境设置 `ENABLE_DEV_ENDPOINTS=false`。
-- 阶段 3 的运行流水线仍是规划脚手架，会创建研究问题并停在 `awaiting_approval`；阶段 4 完成的是提供商与解析能力，审批接口和实际 LangGraph 研究工作流在阶段 5 接入。
+- 阶段 5 的计划、提纲和章节正文由确定性生成器基于数据库中的研究问题与证据组织，尚未接入真实 LLM 改写与长文润色；这保证离线可测和引用可追溯，但行文风格和论证深度有限。
 - 阶段 4 的提供商默认全部关闭；只有同时设置 `*_ENABLED=true` 和后端密钥才会启用。启用但缺少密钥时会记录警告并跳过，不影响服务启动。未配置任何第三方 API Key 时，系统仍可迁移、启动并通过全部测试（测试使用 Mock 提供商，不访问网络）。
 - Tavily、Exa、Firecrawl、Crossref、Semantic Scholar 均在后端调用，密钥不会下发浏览器；错误信息、日志和缓存键不包含密钥。Firecrawl 只接受通过 SSRF 校验的 HTTP/HTTPS 公网地址，并在重定向后再次校验最终 URL。
 - 网页全文依赖 Firecrawl；未启用时来源只保留搜索摘要。付费墙、仅摘要、屏蔽和超限响应会记录为不同抓取状态，不会当作全文入库；Crossref 不提供被引列表，因此不伪造引用关系。
 - 本地解析器支持 PDF、HTML、Markdown 和纯文本，扫描版 PDF、加密或损坏文件会明确失败并记录解析错误；表格提取为尽力而为。不接入 MinerU，也不做 OCR 或版面还原。
 - `documents.parse` 已注册并在 `parse` 队列执行；Compose 中单个 Worker 默认同时消费 `research,parse`，可通过队列与部署配置拆分为独立解析 Worker。
 - SSE 通过数据库轮询实现，默认 1 秒间隔；对当前 MVP 足够，后续可按需改为 PostgreSQL `LISTEN/NOTIFY` 或消息总线。
-- 取消是协作式的，只在流水线安全检查点生效；提供商调用已有超时和重试上限，但尚未接入工作流取消边界，阶段 5 接入时需在每个外部调用边界增加取消检查。
+- 取消是协作式的，在每个节点边界、抓取/解析/证据循环内检查；已经发出的单个提供商 HTTP 请求不会被强制中断，但会受连接/读取超时约束，且其后续节点不会启动。
+- 节点超时使用 Unix 主线程的 `SIGALRM`；在非主线程或非 Unix 环境下退化为依赖提供商与数据库自身的超时。LangGraph checkpoint 的首次建表使用进程锁 + PostgreSQL advisory lock，避免多个 Worker 并发执行 `setup()`。
 - Celery revoke 是尽力而为，正确性由数据库取消标记保证；Redis 结果过期后仍可从运行与事件 API 读取业务状态。
-- 向量检索的仓储层与 `EmbeddingProvider` 接口/模拟实现已就绪，但尚未接入真实 Embedding 服务、HTTP API 或研究工作流；计划在阶段 6 完成。
+- 向量检索的仓储层与 `EmbeddingProvider` 接口/模拟实现已就绪，但尚未接入真实 Embedding 服务和 pgvector 相似度检索；当前证据抽取使用确定性的文本/问题匹配。计划在阶段 6 完成。
+- token 与成本预算读取运行累计用量；Mock 提供商不上报真实费用，因此成本预算验证使用项目预算和已记录成本。真实提供商的费用统计精度取决于其结果中的 usage 字段。
 - 对账工具只读，不自动删除孤儿文件；上传失败会自动清理本次写入的文件。
 - PostgreSQL、Redis 不暴露宿主机端口；API 与前端端口默认暴露。
 - 本地开发密码仅用于开发环境，生产部署必须更换并保管在未提交的 `.env` 中。
 
 ## 下一阶段
 
-阶段 5 将把阶段 4 的提供商与解析能力接入 LangGraph 研究工作流：定义研究数据模型，实现规划、检索、规范化、排序、正文获取、证据提取、缺口分析与研究循环，并使用 checkpoint 支持断点恢复和运行审批。在获得确认前不会提前实现后续阶段。
+阶段 6 将补全真实 Embedding 服务与 pgvector 语义检索、深化证据抽取与缺口分析的召回质量，并在此基础上接入真实 LLM 长文写作与主张核验增强。在获得确认前不会提前实现后续阶段。

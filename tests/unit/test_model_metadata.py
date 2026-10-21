@@ -19,6 +19,7 @@ REQUIRED_TABLES = {
     "draft_sections",
     "citation_audits",
     "run_events",
+    "run_approvals",
     "artifacts",
 }
 

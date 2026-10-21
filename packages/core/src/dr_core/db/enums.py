@@ -184,6 +184,20 @@ class AuditMethod(StrEnum):
     HUMAN = "human"
 
 
+class ApprovalKind(StrEnum):
+    PLAN = "plan"
+    OUTLINE = "outline"
+    EVIDENCE = "evidence"
+
+
+class ApprovalStatus(StrEnum):
+    PENDING = "pending"
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    MODIFIED = "modified"
+    CANCELLED = "cancelled"
+
+
 class RunEventType(StrEnum):
     RUN_CREATED = "run_created"
     CANCEL_REQUESTED = "cancel_requested"

@@ -1,11 +1,13 @@
 from datetime import datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 from dr_core.db.enums import (
+    ApprovalKind,
+    ApprovalStatus,
     CitationStyle,
     ParserStatus,
     ProjectLanguage,
@@ -54,6 +56,8 @@ class RunResponse(OrmResponse):
     cost_usd: Decimal
     input_tokens: int
     output_tokens: int
+    workflow_thread_id: str
+    checkpoint_id: str | None
     created_at: datetime
     updated_at: datetime
 
@@ -70,6 +74,30 @@ class EventResponse(OrmResponse):
 
 class EventListResponse(BaseModel):
     items: list[EventResponse]
+
+
+class ApprovalResponse(OrmResponse):
+    id: UUID
+    project_id: UUID
+    run_id: UUID
+    kind: ApprovalKind
+    status: ApprovalStatus
+    version: int
+    payload: dict[str, Any]
+    feedback: str | None
+    decision_payload: dict[str, Any] | None
+    created_at: datetime
+    decided_at: datetime | None
+
+
+class ApprovalListResponse(BaseModel):
+    items: list[ApprovalResponse]
+
+
+class ApprovalDecisionRequest(BaseModel):
+    decision: Literal["approved", "rejected", "modified"]
+    feedback: str | None = Field(default=None, max_length=20000)
+    content: dict[str, Any] | None = None
 
 
 class FileUploadResponse(BaseModel):

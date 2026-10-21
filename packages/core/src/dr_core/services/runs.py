@@ -10,7 +10,11 @@ from sqlalchemy.orm import Session
 from dr_core.db import Database
 from dr_core.db.enums import TERMINAL_RUN_STATUSES, RunEventType, RunStatus
 from dr_core.db.models import ResearchRun
-from dr_core.db.repositories import RunEventRepository, RunRepository
+from dr_core.db.repositories import (
+    RunApprovalRepository,
+    RunEventRepository,
+    RunRepository,
+)
 from dr_core.db.repositories.exceptions import EntityNotFound
 from dr_core.schemas import RunCreate, RunEventCreate
 from dr_core.services.run_state import (
@@ -103,6 +107,7 @@ def finalize_cancelled_run(session: Session, run: ResearchRun) -> None:
         run.cancel_requested_at = datetime.now(tz=UTC)
     if run.status is RunStatus.CANCELLED:
         return
+    RunApprovalRepository(session).cancel_pending(run.id)
     transition_run(
         session,
         run,

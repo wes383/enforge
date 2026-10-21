@@ -1,0 +1,37 @@
+from dr_core.research.models import (
+    ApprovalDecision,
+    ApprovalRequest,
+    CitationAudit,
+    CitationIssue,
+    EvidenceMatrix,
+    EvidenceRecord,
+    EvidenceRow,
+    Outline,
+    OutlineSection,
+    ResearchBrief,
+    ResearchGap,
+    ResearchPlan,
+    ResearchQuestion,
+    SearchQuery,
+    SourceRecord,
+)
+from dr_core.research.state import ResearchState
+
+__all__ = [
+    "ApprovalDecision",
+    "ApprovalRequest",
+    "CitationAudit",
+    "CitationIssue",
+    "EvidenceMatrix",
+    "EvidenceRecord",
+    "EvidenceRow",
+    "Outline",
+    "OutlineSection",
+    "ResearchBrief",
+    "ResearchGap",
+    "ResearchPlan",
+    "ResearchQuestion",
+    "ResearchState",
+    "SearchQuery",
+    "SourceRecord",
+]

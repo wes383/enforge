@@ -9,12 +9,14 @@ from dr_core.services.ingestion import (
     persist_parsed_document,
     persist_web_fetch,
 )
-from dr_core.services.run_pipeline import (
-    PermanentRunError,
-    RunPipelineResult,
-    TransientRunError,
-    execute_run_pipeline,
+from dr_core.services.approvals import (
+    ApprovalConflict,
+    decide_approval,
+    list_approvals,
+    reopen_approval,
+    resume_payload,
 )
+from dr_core.services.errors import PermanentRunError, TransientRunError
 from dr_core.services.run_state import (
     ALLOWED_RUN_TRANSITIONS,
     InvalidRunTransition,
@@ -35,6 +37,7 @@ from dr_core.services.runs import (
 
 __all__ = [
     "ALLOWED_RUN_TRANSITIONS",
+    "ApprovalConflict",
     "CancelOutcome",
     "IngestedSource",
     "InvalidRunTransition",
@@ -42,11 +45,13 @@ __all__ = [
     "PermanentRunError",
     "PersistedFetch",
     "RunAlreadyFinished",
-    "RunPipelineResult",
     "TransientRunError",
     "create_run_with_event",
+    "decide_approval",
+    "list_approvals",
+    "reopen_approval",
+    "resume_payload",
     "ensure_run_transition",
-    "execute_run_pipeline",
     "fail_run",
     "finalize_cancelled_run",
     "ingest_academic_result",

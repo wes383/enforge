@@ -28,6 +28,23 @@ def _render_item(type_, obj, autogen_context):
     return False
 
 
+# LangGraph owns these tables and creates them through PostgresSaver.setup().
+_LANGGRAPH_TABLES = frozenset(
+    {
+        "checkpoints",
+        "checkpoint_blobs",
+        "checkpoint_writes",
+        "checkpoint_migrations",
+    }
+)
+
+
+def _include_object(obj, name, type_, reflected, compare_to):
+    if type_ == "table" and name in _LANGGRAPH_TABLES:
+        return False
+    return True
+
+
 def run_migrations_offline() -> None:
     context.configure(
         url=_database_url(),
@@ -36,6 +53,7 @@ def run_migrations_offline() -> None:
         dialect_opts={"paramstyle": "named"},
         compare_type=True,
         render_item=_render_item,
+        include_object=_include_object,
     )
     with context.begin_transaction():
         context.run_migrations()
@@ -52,6 +70,7 @@ def run_migrations_online() -> None:
             target_metadata=target_metadata,
             compare_type=True,
             render_item=_render_item,
+            include_object=_include_object,
         )
         with context.begin_transaction():
             context.run_migrations()
