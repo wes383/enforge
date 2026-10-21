@@ -62,7 +62,7 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         <ThemeProvider>
           <div className="min-h-screen bg-background text-foreground">
             <AppSidebar />
-            <div className="lg:pl-64">
+            <div className="transition-[padding-left] duration-base ease-out lg:pl-[var(--sidebar-width)]">
               <div className="flex min-h-screen flex-col">{children}</div>
             </div>
           </div>

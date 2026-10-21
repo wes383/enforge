@@ -335,6 +335,14 @@
     border-color: var(--border);
   }
 
+  :root {
+    --sidebar-width: 13rem;
+  }
+
+  html[data-sidebar="collapsed"] {
+    --sidebar-width: 4.5rem;
+  }
+
   html {
     background: var(--background);
     -webkit-text-size-adjust: 100%;
