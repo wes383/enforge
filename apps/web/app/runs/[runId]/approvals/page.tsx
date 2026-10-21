@@ -131,6 +131,7 @@ export default function ApprovalsPage() {
   const [outlineDraft, setOutlineDraft] = useState<OutlineDraft | null>(null);
   const [planError, setPlanError] = useState<string | null>(null);
   const [outlineError, setOutlineError] = useState<string | null>(null);
+  const [feedbackError, setFeedbackError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [success, setSuccess] = useState<string | null>(null);
@@ -201,6 +202,7 @@ export default function ApprovalsPage() {
     setPlanDraft(draft);
     setPlanError(null);
     setFeedback("");
+    setFeedbackError(null);
   }, [pending]);
 
   useEffect(() => {
@@ -214,6 +216,7 @@ export default function ApprovalsPage() {
     setOutlineDraft(draft);
     setOutlineError(null);
     setFeedback("");
+    setFeedbackError(null);
   }, [pending]);
 
   const history = useMemo(
@@ -256,6 +259,7 @@ export default function ApprovalsPage() {
     setSuccess(null);
     setPlanError(null);
     setOutlineError(null);
+    setFeedbackError(null);
 
     let content: unknown;
     if (decision === "modified") {
@@ -300,7 +304,7 @@ export default function ApprovalsPage() {
     }
 
     if (decision === "rejected" && !feedback.trim()) {
-      setActionError(
+      setFeedbackError(
         pick(
           locale,
           "驳回时需要填写修改意见，工作流会据此生成下一版。",
@@ -758,10 +762,14 @@ export default function ApprovalsPage() {
                 "驳回时必填；批准时可留空。",
                 "Required when requesting a revision; optional otherwise.",
               )}
+              error={feedbackError ?? undefined}
             >
               <Textarea
                 value={feedback}
-                onChange={(event) => setFeedback(event.target.value)}
+                onChange={(event) => {
+                  setFeedback(event.target.value);
+                  if (feedbackError) setFeedbackError(null);
+                }}
                 rows={3}
                 maxLength={20000}
                 placeholder={pick(
