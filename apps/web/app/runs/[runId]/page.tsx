@@ -83,31 +83,38 @@ const PHASE_EVENT_TYPES = new Set([
 type TaskState = "completed" | "running" | "failed" | "neutral";
 
 function phaseTasks(events: RunEvent[], active: boolean) {
-  const relevant = events.filter((event) => PHASE_EVENT_TYPES.has(event.event_type));
+  const relevant = events.filter((event) =>
+    PHASE_EVENT_TYPES.has(event.event_type),
+  );
   const states: TaskState[] = [];
-  // Only the newest start without a terminal event of its own is still running;
-  // earlier starts either close by stage or get superseded by the next phase.
+  // Index of the newest start that no later event has resolved yet.
   let openIndex: number | null = null;
 
   relevant.forEach((event, index) => {
     let state: TaskState = "neutral";
-    if (event.event_type === "phase_completed") {
-      state = "completed";
-      if (openIndex !== null && relevant[openIndex].stage === event.stage) {
-        openIndex = null;
-      }
+    if (event.event_type === "phase_started") {
+      if (openIndex !== null) states[openIndex] = "neutral";
+      state = "running";
+      openIndex = index;
     } else if (
+      event.event_type === "phase_completed" ||
       event.event_type === "phase_failed" ||
       event.event_type === "error"
     ) {
-      state = "failed";
-      if (openIndex !== null && relevant[openIndex].stage === event.stage) {
+      state =
+        event.event_type === "phase_completed"
+          ? "completed"
+          : "failed";
+      // The start row stops spinning once its own stage is resolved, or once the
+      // run reaches its final stage because nothing can still be in flight.
+      if (
+        openIndex !== null &&
+        (relevant[openIndex].stage === event.stage ||
+          event.stage === "completed")
+      ) {
+        states[openIndex] = "neutral";
         openIndex = null;
       }
-    } else if (event.event_type === "phase_started") {
-      state = "running";
-      if (openIndex !== null) states[openIndex] = "neutral";
-      openIndex = index;
     }
     states.push(state);
   });
