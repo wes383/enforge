@@ -10,8 +10,6 @@ import {
   Radio,
   ScrollText,
   Search,
-  Square,
-  X,
 } from "lucide-react";
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -74,27 +72,52 @@ function latestPlan(approvals: Approval[]): {
   return null;
 }
 
+const PHASE_EVENT_TYPES = new Set([
+  "phase_started",
+  "phase_completed",
+  "phase_failed",
+  "run_cancelled",
+  "error",
+]);
+
+type TaskState = "completed" | "running" | "failed" | "neutral";
+
 function phaseTasks(events: RunEvent[], active: boolean) {
-  const relevant = events.filter(
-    (event) =>
-      event.event_type === "phase_started" ||
-      event.event_type === "phase_completed" ||
-      event.event_type === "phase_failed" ||
-      event.event_type === "run_cancelled" ||
-      event.event_type === "error",
-  );
-  return relevant.slice(-10).reverse().map((event) => {
-    let state: "completed" | "running" | "failed" | "neutral" = "neutral";
-    if (event.event_type === "phase_completed") state = "completed";
-    else if (
+  const relevant = events.filter((event) => PHASE_EVENT_TYPES.has(event.event_type));
+  const states: TaskState[] = [];
+  // Only the newest start without a terminal event of its own is still running;
+  // earlier starts either close by stage or get superseded by the next phase.
+  let openIndex: number | null = null;
+
+  relevant.forEach((event, index) => {
+    let state: TaskState = "neutral";
+    if (event.event_type === "phase_completed") {
+      state = "completed";
+      if (openIndex !== null && relevant[openIndex].stage === event.stage) {
+        openIndex = null;
+      }
+    } else if (
       event.event_type === "phase_failed" ||
       event.event_type === "error"
-    )
+    ) {
       state = "failed";
-    else if (event.event_type === "phase_started") state = active ? "running" : "neutral";
-    else if (event.event_type === "run_cancelled") state = "neutral";
-    return { event, state };
+      if (openIndex !== null && relevant[openIndex].stage === event.stage) {
+        openIndex = null;
+      }
+    } else if (event.event_type === "phase_started") {
+      state = "running";
+      if (openIndex !== null) states[openIndex] = "neutral";
+      openIndex = index;
+    }
+    states.push(state);
   });
+
+  if (openIndex !== null && !active) states[openIndex] = "neutral";
+
+  return relevant
+    .map((event, index) => ({ event, state: states[index] }))
+    .slice(-10)
+    .reverse();
 }
 
 function MetricCard({
@@ -159,9 +182,6 @@ export default function RunOverviewPage() {
 
   const [approvals, setApprovals] = useState<Approval[]>([]);
   const [approvalError, setApprovalError] = useState<string | null>(null);
-  const [cancelArmed, setCancelArmed] = useState(false);
-  const [cancelling, setCancelling] = useState(false);
-  const [actionError, setActionError] = useState<string | null>(null);
   const refreshTimer = useRef<number | null>(null);
 
   const loadApprovals = useCallback(async () => {
@@ -245,22 +265,6 @@ export default function RunOverviewPage() {
     [events],
   );
 
-  async function cancelRun() {
-    if (!run) return;
-    setCancelling(true);
-    setActionError(null);
-    try {
-      await apiFetch(`/runs/${run.id}/cancel`, { method: "POST" });
-      setCancelArmed(false);
-      await reload();
-      await loadApprovals();
-    } catch (caught) {
-      setActionError(caught instanceof ApiError ? caught.detail : String(caught));
-    } finally {
-      setCancelling(false);
-    }
-  }
-
   if (!overview || !run) {
     return error ? <ErrorState message={error} onRetry={() => void reload()} /> : null;
   }
@@ -288,11 +292,6 @@ export default function RunOverviewPage() {
             "工作流将在当前任务结束后停止。",
             "The workflow will stop after the current task finishes.",
           )}
-        </Notice>
-      ) : null}
-      {actionError ? (
-        <Notice variant="danger" title={pick(locale, "操作失败", "Action failed")}>
-          {actionError}
         </Notice>
       ) : null}
       {pending ? (
@@ -372,37 +371,6 @@ export default function RunOverviewPage() {
               </h2>
               <div className="flex items-center gap-2">
                 <StreamBadge status={stream.status} />
-                {active ? (
-                  cancelArmed ? (
-                    <div className="flex items-center gap-1.5">
-                      <Button
-                        variant="danger"
-                        size="xs"
-                        loading={cancelling}
-                        onClick={() => void cancelRun()}
-                      >
-                        {pick(locale, "确认取消", "Confirm cancel")}
-                      </Button>
-                      <Button
-                        variant="ghost"
-                        size="xs"
-                        onClick={() => setCancelArmed(false)}
-                        disabled={cancelling}
-                      >
-                        <X className="h-3.5 w-3.5" />
-                      </Button>
-                    </div>
-                  ) : (
-                    <Button
-                      variant="outline"
-                      size="xs"
-                      onClick={() => setCancelArmed(true)}
-                    >
-                      <Square className="h-3 w-3" />
-                      {pick(locale, "取消运行", "Cancel run")}
-                    </Button>
-                  )
-                ) : null}
               </div>
             </div>
             <div className="mt-4">

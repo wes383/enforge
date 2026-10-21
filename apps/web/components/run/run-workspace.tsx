@@ -8,6 +8,8 @@ import {
   Gauge,
   RefreshCw,
   ScrollText,
+  Square,
+  X,
 } from "lucide-react";
 import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
@@ -21,12 +23,16 @@ import {
   type ReactNode,
 } from "react";
 
-import { ErrorState, LoadingState } from "@/components/states";
+import { ErrorState, LoadingState, Notice } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ApiError, apiFetch } from "@/lib/api";
 import { formatCost, formatDateTime, formatDuration, shortId } from "@/lib/format";
-import { runStatusLabel, runStatusVariant } from "@/lib/labels";
+import {
+  runStatusLabel,
+  runStatusVariant,
+  TERMINAL_RUN_STATUSES,
+} from "@/lib/labels";
 import { pick, useLocale } from "@/lib/locale";
 import type { RunOverview } from "@/lib/types";
 import { cn } from "@/lib/utils";
@@ -76,6 +82,31 @@ export function RunWorkspaceLayout({ children }: { children: ReactNode }) {
     setLoading(true);
     await reload();
   }, [reload]);
+
+  const [cancelArmed, setCancelArmed] = useState(false);
+  const [cancelling, setCancelling] = useState(false);
+  const [cancelError, setCancelError] = useState<string | null>(null);
+  const active = Boolean(
+    overview && !TERMINAL_RUN_STATUSES.has(overview.run.status),
+  );
+
+  const cancelRun = useCallback(async () => {
+    setCancelling(true);
+    setCancelError(null);
+    try {
+      await apiFetch(`/runs/${runId}/cancel`, { method: "POST" });
+      setCancelArmed(false);
+      await reload();
+    } catch (caught) {
+      setCancelError(caught instanceof ApiError ? caught.detail : String(caught));
+    } finally {
+      setCancelling(false);
+    }
+  }, [reload, runId]);
+
+  useEffect(() => {
+    if (!active) setCancelArmed(false);
+  }, [active]);
 
   useEffect(() => {
     void reload();
@@ -185,17 +216,60 @@ export function RunWorkspaceLayout({ children }: { children: ReactNode }) {
               ) : null}
             </div>
 
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => void refresh()}
-              disabled={loading}
-              className="self-start lg:self-auto"
-            >
-              <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
-              {pick(locale, "刷新", "Refresh")}
-            </Button>
+            <div className="flex shrink-0 items-center gap-2 self-start lg:self-auto">
+              {active ? (
+                cancelArmed ? (
+                  <>
+                    <Button
+                      variant="danger"
+                      size="sm"
+                      loading={cancelling}
+                      onClick={() => void cancelRun()}
+                    >
+                      {pick(locale, "确认取消", "Confirm cancel")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="icon-sm"
+                      onClick={() => setCancelArmed(false)}
+                      disabled={cancelling}
+                      aria-label={pick(locale, "返回", "Back")}
+                    >
+                      <X className="h-4 w-4" />
+                    </Button>
+                  </>
+                ) : (
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setCancelArmed(true)}
+                  >
+                    <Square className="h-3.5 w-3.5" />
+                    {pick(locale, "取消运行", "Cancel run")}
+                  </Button>
+                )
+              ) : null}
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => void refresh()}
+                disabled={loading}
+              >
+                <RefreshCw className={cn("h-4 w-4", loading && "animate-spin")} />
+                {pick(locale, "刷新", "Refresh")}
+              </Button>
+            </div>
           </div>
+
+          {cancelError ? (
+            <Notice
+              variant="danger"
+              title={pick(locale, "取消运行失败", "Could not cancel the run")}
+              className="mt-4"
+            >
+              {cancelError}
+            </Notice>
+          ) : null}
 
           <nav className="mt-5 flex gap-1 overflow-x-auto scrollbar-none">
             {tabs.map((tab) => {
