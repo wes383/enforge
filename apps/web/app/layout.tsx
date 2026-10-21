@@ -7,7 +7,7 @@ import {
 } from "next/font/google";
 
 import { ThemeProvider } from "@/components/theme-provider";
-import { AppHeader } from "@/components/app-header";
+import { AppSidebar } from "@/components/app-sidebar";
 import "./globals.css";
 
 const inter = Inter({
@@ -60,9 +60,11 @@ export default function RootLayout({ children }: LayoutProps<"/">) {
         className={`${inter.variable} ${plusJakartaSans.variable} ${jetbrainsMono.variable} ${notoSansSC.variable} min-h-screen antialiased`}
       >
         <ThemeProvider>
-          <div className="flex min-h-screen flex-col bg-background text-foreground">
-            <AppHeader />
-            <div className="flex-1">{children}</div>
+          <div className="min-h-screen bg-background text-foreground">
+            <AppSidebar />
+            <div className="lg:pl-64">
+              <div className="flex min-h-screen flex-col">{children}</div>
+            </div>
           </div>
         </ThemeProvider>
       </body>

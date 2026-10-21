@@ -483,7 +483,7 @@ export default function ArticlePage() {
         />
       ) : (
         <div className="grid gap-4 lg:grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[220px_minmax(0,1fr)_370px]">
-          <Card className="h-fit p-3 lg:sticky lg:top-24">
+          <Card className="h-fit p-3 lg:sticky lg:top-6">
             <p className="px-2 pb-2 text-[11px] font-medium uppercase tracking-wide text-foreground-subtle">
               {pick(locale, "目录", "Contents")}
             </p>
@@ -698,7 +698,7 @@ export default function ArticlePage() {
             )}
           </Card>
 
-          <Card className="flex h-fit min-w-0 flex-col lg:col-span-2 xl:col-span-1 xl:sticky xl:top-24 xl:max-h-[calc(100vh-7rem)]">
+          <Card className="flex h-fit min-w-0 flex-col lg:col-span-2 xl:col-span-1 xl:sticky xl:top-6 xl:max-h-[calc(100vh-3rem)]">
             <div className="flex items-center gap-1 border-b border-border p-2">
               {(
                 [
