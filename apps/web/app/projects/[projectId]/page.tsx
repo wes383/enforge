@@ -16,6 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 
 import { PageHeader } from "@/components/page-header";
 import { ProjectForm } from "@/components/project-form";
+import { ProjectUploads } from "@/components/project-uploads";
 import { EmptyState, ErrorState, LoadingState, Notice } from "@/components/states";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -231,6 +232,8 @@ export default function ProjectPage() {
           </p>
         </Card>
       ) : null}
+
+      <ProjectUploads projectId={project.id} />
 
       {editing ? (
         <Card className="mt-6 p-6 lg:p-8">

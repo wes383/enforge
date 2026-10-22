@@ -7,13 +7,15 @@ from starlette.concurrency import run_in_threadpool
 from starlette.datastructures import UploadFile as StarletteUploadFile
 from starlette.formparsers import MultiPartException
 
-from app.api.schemas import FileUploadResponse
+from app.api.schemas import FileListResponse, FileUploadResponse
 from app.services.dispatch import dispatch_document_parse
 from app.services.uploads import (
+    FileRecord,
     UploadValidationError,
     content_disposition,
     get_file_record,
     iter_file,
+    list_project_files as list_uploaded_files,
     open_download,
     sanitize_original_filename,
     store_upload,
@@ -27,6 +29,22 @@ logger = logging.getLogger(__name__)
 router = APIRouter(tags=["files"])
 
 _READ_CHUNK_SIZE = 1024 * 1024
+
+
+def _file_response(record: FileRecord) -> FileUploadResponse:
+    return FileUploadResponse(
+        file_id=record.file_id,
+        source_id=record.source_id,
+        project_id=record.project_id,
+        original_name=record.original_name,
+        mime_type=record.mime_type,
+        size_bytes=record.size_bytes,
+        sha256=record.sha256,
+        parser_status=record.parser_status,
+        parser_version=record.parser_version,
+        parse_error=record.parse_error,
+        created_at=record.created_at,
+    )
 
 
 @router.post(
@@ -126,37 +144,22 @@ async def upload_project_file(
             exc_info=True,
         )
 
-    return FileUploadResponse(
-        file_id=stored.file_id,
-        source_id=stored.source_id,
-        project_id=stored.project_id,
-        original_name=stored.original_name,
-        mime_type=stored.mime_type,
-        size_bytes=stored.size_bytes,
-        sha256=stored.sha256,
-        parser_status=stored.parser_status,
-        parser_version=stored.parser_version,
-        parse_error=stored.parse_error,
-        created_at=stored.created_at,
-    )
+    return _file_response(stored)
+
+
+@router.get(
+    "/projects/{project_id}/files",
+    response_model=FileListResponse,
+)
+async def list_project_files(project_id: UUID) -> FileListResponse:
+    records = await run_in_threadpool(list_uploaded_files, project_id)
+    return FileListResponse(items=[_file_response(record) for record in records])
 
 
 @router.get("/files/{file_id}", response_model=FileUploadResponse)
 async def get_project_file(file_id: UUID) -> FileUploadResponse:
     record = await run_in_threadpool(get_file_record, file_id)
-    return FileUploadResponse(
-        file_id=record.file_id,
-        source_id=record.source_id,
-        project_id=record.project_id,
-        original_name=record.original_name,
-        mime_type=record.mime_type,
-        size_bytes=record.size_bytes,
-        sha256=record.sha256,
-        parser_status=record.parser_status,
-        parser_version=record.parser_version,
-        parse_error=record.parse_error,
-        created_at=record.created_at,
-    )
+    return _file_response(record)
 
 
 @router.get("/files/{file_id}/download")

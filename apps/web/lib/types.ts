@@ -165,6 +165,22 @@ export type Source = {
 
 export type SourceListResponse = { items: Source[] };
 
+export type UploadedFile = {
+  file_id: string;
+  source_id: string;
+  project_id: string;
+  original_name: string;
+  mime_type: string;
+  size_bytes: number;
+  sha256: string;
+  parser_status: string;
+  parser_version: string | null;
+  parse_error: string | null;
+  created_at: string;
+};
+
+export type FileListResponse = { items: UploadedFile[] };
+
 export type Evidence = {
   id: string;
   source_id: string;

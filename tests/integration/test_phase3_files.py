@@ -223,6 +223,33 @@ def test_upload_sanitizes_path_traversal_filenames(client, project):
     )
 
 
+def test_project_files_listing_returns_uploaded_documents(client, project):
+    first = client.post(
+        f"{API}/projects/{project['id']}/files",
+        files={"file": ("first.md", b"# First\n", "text/markdown")},
+    )
+    assert first.status_code == 201, first.text
+    second = client.post(
+        f"{API}/projects/{project['id']}/files",
+        files={"file": ("second.txt", b"Second\n", "text/plain")},
+    )
+    assert second.status_code == 201, second.text
+
+    listing = client.get(f"{API}/projects/{project['id']}/files")
+    assert listing.status_code == 200, listing.text
+    items = listing.json()["items"]
+    ids = [item["file_id"] for item in items]
+    assert first.json()["file_id"] in ids
+    assert second.json()["file_id"] in ids
+    for item in items:
+        assert item["project_id"] == project["id"]
+        assert item["parser_status"] in {"pending", "parsing", "parsed", "failed"}
+        assert "storage_key" not in item
+
+    missing = client.get(f"{API}/projects/{uuid.uuid4()}/files")
+    assert missing.status_code == 404
+
+
 def test_files_require_visible_project(client, project):
     upload = client.post(
         f"{API}/projects/{project['id']}/files",
@@ -233,6 +260,7 @@ def test_files_require_visible_project(client, project):
 
     assert client.delete(f"{API}/projects/{project['id']}").status_code == 204
     assert client.get(f"{API}/files/{file_id}/download").status_code == 404
+    assert client.get(f"{API}/projects/{project['id']}/files").status_code == 404
 
     missing_project = client.post(
         f"{API}/projects/{uuid.uuid4()}/files",

@@ -117,6 +117,10 @@ class FileUploadResponse(BaseModel):
     created_at: datetime
 
 
+class FileListResponse(BaseModel):
+    items: list[FileUploadResponse]
+
+
 class RunListResponse(BaseModel):
     items: list[RunResponse]
     total: int

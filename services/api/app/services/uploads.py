@@ -7,6 +7,8 @@ from typing import BinaryIO, Literal
 from urllib.parse import quote
 from uuid import UUID, uuid4
 
+from sqlalchemy import select
+
 from dr_core.db import get_database
 from dr_core.db.enums import (
     ParserStatus,
@@ -209,23 +211,49 @@ def get_file_record(file_id: UUID) -> FileRecord:
         if project is None or project.deleted_at is not None:
             raise EntityNotFound("File not found")
         source = session.get(Source, version.source_id)
-        original_name = sanitize_original_filename(
-            version.version_metadata.get("original_filename")
-            or (source.title if source else None)
-        )
-        return FileRecord(
-            file_id=version.id,
-            source_id=version.source_id,
-            project_id=version.project_id,
-            original_name=original_name,
-            mime_type=version.mime_type or "application/octet-stream",
-            size_bytes=version.size_bytes or 0,
-            sha256=version.content_hash,
-            parser_status=version.parser_status,
-            parser_version=version.parser_version,
-            parse_error=version.parse_error,
-            created_at=version.created_at,
-        )
+        return _file_record(version, source)
+
+
+def list_project_files(project_id: UUID) -> list[FileRecord]:
+    with get_database().session() as session:
+        project = session.get(ResearchProject, project_id)
+        if project is None or project.deleted_at is not None:
+            raise EntityNotFound("Project not found")
+        rows = session.execute(
+            select(SourceVersion, Source)
+            .join(Source, Source.id == SourceVersion.source_id)
+            .where(
+                SourceVersion.project_id == project_id,
+                SourceVersion.content_kind
+                == SourceVersionKind.UPLOADED_DOCUMENT,
+            )
+            .order_by(SourceVersion.created_at.desc())
+            .limit(200)
+        ).all()
+        return [_file_record(version, source) for version, source in rows]
+
+
+def _file_record(
+    version: SourceVersion,
+    source: Source | None,
+) -> FileRecord:
+    original_name = sanitize_original_filename(
+        version.version_metadata.get("original_filename")
+        or (source.title if source else None)
+    )
+    return FileRecord(
+        file_id=version.id,
+        source_id=version.source_id,
+        project_id=version.project_id,
+        original_name=original_name,
+        mime_type=version.mime_type or "application/octet-stream",
+        size_bytes=version.size_bytes or 0,
+        sha256=version.content_hash,
+        parser_status=version.parser_status,
+        parser_version=version.parser_version,
+        parse_error=version.parse_error,
+        created_at=version.created_at,
+    )
 
 
 def open_download(file_id: UUID) -> DownloadHandle:

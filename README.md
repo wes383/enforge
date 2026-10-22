@@ -12,7 +12,7 @@
 - 项目 API：创建、分页列表、详情、更新和软删除；支持研究语言、深度、目标字数、时间范围、目标读者、引用格式和预算；软删除项目及其运行、文件对外立即不可见。
 - 研究工作台 API：项目运行历史、运行汇总（含检索/来源状态与用量）、研究问题、来源及版本、证据筛选分页、当前提纲、章节版本、主张核验、artifact 列表与受控下载、核验汇总，以及同步重新核验并导出的接口。
 - 研究运行 API：快速返回 `run_id` 的创建接口、状态查询、取消、事件历史和 SSE 实时事件流；SSE 支持 `Last-Event-ID` 与 `after` 游标重连。
-- 文件 API：项目级上传、类型/大小/内容校验、受控下载和解析状态查询；存储键由服务端生成，响应不暴露宿主机路径。上传成功后自动投递 `documents.parse` 任务。
+- 文件 API：项目级上传、类型/大小/内容校验、受控下载、解析状态查询和项目资料列表；存储键由服务端生成，响应不暴露宿主机路径。上传成功后自动投递 `documents.parse` 任务。项目页可直接上传资料并轮询解析状态，上传的文档在后续研究运行的来源阶段加入来源池。
 - 外部研究工具层：`SearchProvider`、`AcademicSearchProvider`、`WebContentProvider`、`DocumentParserProvider`、`EmbeddingProvider`、`LLMProvider` 协议；Tavily、Exa、Crossref、Semantic Scholar、Firecrawl 适配器及离线 Mock Provider。
 - 统一的提供商基础设施：Pydantic 结果模型、连接/读取超时、429 与 5xx 指数退避、`Retry-After`、进程内 TTL 查询缓存、SSRF 主机/端口/IP 校验和密钥脱敏。
 - 本地文档解析：Worker 内使用 pypdf、trafilatura 和 BeautifulSoup 解析 PDF、HTML、Markdown 和纯文本，提取标题、章节、段落、页码及尽力而为的表格，持久化解析器版本、状态和错误。
@@ -200,6 +200,7 @@ docker compose down
 | `GET` | `/api/v1/runs/{run_id}/verification` | 引用核验、参考文献审计与主张汇总 |
 | `POST` | `/api/v1/runs/{run_id}/export` | 同步重新核验并生成新的最终报告 artifact 版本，返回 201 |
 | `POST` | `/api/v1/projects/{project_id}/files` | 上传 PDF、HTML、Markdown 或纯文本，返回 201 并异步解析 |
+| `GET` | `/api/v1/projects/{project_id}/files` | 项目上传资料列表（最新在前），含解析状态、大小与时间 |
 | `GET` | `/api/v1/files/{file_id}` | 查询文件元数据、解析状态、解析器版本和错误 |
 | `GET` | `/api/v1/files/{file_id}/download` | 受控下载，响应不包含存储路径 |
 
@@ -296,7 +297,7 @@ SSE 使用数据库轮询，每页最多 500 条，按事件 `id` 严格递增�
 |---|---|
 | `/` | 项目列表、创建入口、每个项目的最新运行与实时状态 |
 | `/projects/new` | 创建项目：主题、范围、语言、研究深度、目标字数、时间范围、引用格式、读者与预算 |
-| `/projects/{project_id}` | 项目设置编辑、运行历史和启动新运行 |
+| `/projects/{project_id}` | 项目设置编辑、资料上传与解析状态、运行历史和启动新运行 |
 | `/runs/{run_id}` | 运行概览：阶段进度、实时事件、检索/来源状态、证据/主张/章节/artifact 指标、研究问题覆盖、缺口、成本与取消 |
 | `/runs/{run_id}/approvals` | 查看、修改、批准或拒绝研究计划和提纲，填写反馈，查看审批历史 |
 | `/runs/{run_id}/sources` | 来源列表、抓取与解析状态、来源版本、DOI/URL 和失败原因 |
@@ -1122,6 +1123,7 @@ docker compose up -d --force-recreate api worker
 - 强制失败任务写入可读 `error_summary` 和单条 `phase_failed` 事件。
 - 重试事件去重、指数退避上限、dispatch 参数只包含 ID、revoke 不终止 Worker。
 - PDF/HTML/Markdown/纯文本上传下载一致性；MIME、PDF 文件头、UTF-8、NUL、空文件、大小上限、路径穿越和不安全文件名校验。
+- 项目资料列表返回上传文档的解析状态与元数据、不暴露存储路径；未知或软删除项目返回 404。
 - 存储键为服务端相对路径；下载头包含安全策略；软删除项目后文件不可访问。
 
 阶段 1 与阶段 2 测试内容：
