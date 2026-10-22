@@ -53,23 +53,31 @@ export default function ProjectPage() {
   const [editing, setEditing] = useState(false);
   const [starting, setStarting] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
+  const [clock, setClock] = useState<number | null>(null);
+
+  const loadRuns = useCallback(async () => {
+    if (!projectId) return;
+    const runData = await apiFetch<RunListResponse>(
+      `/projects/${projectId}/runs?limit=100`,
+    );
+    setRuns(runData.items);
+  }, [projectId]);
 
   const load = useCallback(async () => {
     if (!projectId) return;
     try {
-      const [projectData, runData] = await Promise.all([
+      const [projectData] = await Promise.all([
         apiFetch<Project>(`/projects/${projectId}`),
-        apiFetch<RunListResponse>(`/projects/${projectId}/runs?limit=100`),
+        loadRuns(),
       ]);
       setProject(projectData);
-      setRuns(runData.items);
       setError(null);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.detail : String(caught));
     } finally {
       setLoading(false);
     }
-  }, [projectId]);
+  }, [projectId, loadRuns]);
 
   const refresh = useCallback(async () => {
     setLoading(true);
@@ -79,6 +87,21 @@ export default function ProjectPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  const hasActiveRun =
+    runs?.some((run) => !TERMINAL_RUN_STATUSES.has(run.status)) ?? false;
+
+  useEffect(() => {
+    if (!hasActiveRun) return;
+    const clockTimer = window.setInterval(() => setClock(Date.now()), 1000);
+    const pollTimer = window.setInterval(() => {
+      void loadRuns().catch(() => undefined);
+    }, 4000);
+    return () => {
+      window.clearInterval(clockTimer);
+      window.clearInterval(pollTimer);
+    };
+  }, [hasActiveRun, loadRuns]);
 
   async function startRun() {
     if (!project) return;
@@ -337,7 +360,12 @@ export default function ProjectPage() {
                       {formatDateTime(run.started_at ?? run.created_at, locale)}
                     </td>
                     <td className="px-5 py-3.5 text-xs text-foreground-muted">
-                      {formatDuration(run.started_at, run.finished_at, locale)}
+                      {formatDuration(
+                        run.started_at,
+                        run.finished_at,
+                        locale,
+                        clock ?? undefined,
+                      )}
                     </td>
                     <td className="px-5 py-3.5 font-mono text-xs text-foreground-muted">
                       {formatNumber(run.input_tokens + run.output_tokens, locale)}{" "}

@@ -53,10 +53,11 @@ export function formatDuration(
   start: string | null | undefined,
   end: string | null | undefined,
   locale: Locale,
+  now?: number,
 ): string {
   if (!start) return "—";
   const startTime = new Date(start).getTime();
-  const endTime = end ? new Date(end).getTime() : Date.now();
+  const endTime = end ? new Date(end).getTime() : (now ?? Date.now());
   if (Number.isNaN(startTime) || Number.isNaN(endTime)) return "—";
   const seconds = Math.max(0, Math.round((endTime - startTime) / 1000));
   if (seconds < 60) {
