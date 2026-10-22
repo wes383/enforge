@@ -332,6 +332,7 @@ export type ResearchPlanQuestion = {
   priority: number;
   parent_id?: string | null;
   coverage_status?: string;
+  search_terms?: string[];
 };
 
 export type ResearchPlan = {

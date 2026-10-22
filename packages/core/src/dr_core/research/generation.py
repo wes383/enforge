@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Iterable
 from uuid import UUID
 
@@ -109,6 +110,34 @@ def build_plan(
     )
 
 
+_LATIN_RE = re.compile(r"[A-Za-z]")
+
+
+def query_pair(
+    question: str,
+    search_terms: list[str],
+) -> tuple[str, str]:
+    """(primary, latin) query text: web uses primary, academic uses latin."""
+    terms = [
+        " ".join(term.split())
+        for term in search_terms
+        if term and term.strip()
+    ]
+    primary = terms[0] if terms else question
+    latin = next((term for term in terms if _LATIN_RE.search(term)), primary)
+    return primary, latin
+
+
+def web_query_text(question: ResearchQuestion) -> str:
+    """In-project-language query for a research question."""
+    return query_pair(question.question, question.search_terms)[0]
+
+
+def academic_query_text(question: ResearchQuestion) -> str:
+    """Academic indexes match English best, so prefer a Latin-script term."""
+    return query_pair(question.question, question.search_terms)[1]
+
+
 def build_queries(
     plan: ResearchPlan,
     *,
@@ -124,7 +153,7 @@ def build_queries(
         if web_providers:
             queries.append(
                 SearchQuery(
-                    query_text=question.question,
+                    query_text=web_query_text(question),
                     kind="web",
                     provider=web_providers[index % len(web_providers)],
                     round_index=round_index,
@@ -134,7 +163,7 @@ def build_queries(
         if len(queries) < limit and academic_providers:
             queries.append(
                 SearchQuery(
-                    query_text=question.question,
+                    query_text=academic_query_text(question),
                     kind="academic",
                     provider=academic_providers[
                         index % len(academic_providers)

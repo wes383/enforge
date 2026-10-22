@@ -29,9 +29,12 @@ _MAX_TEXTS = {
     "feedback": 2000,
     "summary": 4000,
     "question": 400,
+    "term": 120,
 }
 _MIN_QUESTION_CHARS = 8
+_MIN_TERM_CHARS = 2
 _MIN_QUESTIONS = 2
+_MAX_SEARCH_TERMS = 3
 _LIST_PREFIX_RE = re.compile(r"^(?:[-*•]|\d+[.)、])\s*")
 _WHITESPACE_RE = re.compile(r"\s+")
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
@@ -65,6 +68,40 @@ def build_plan_with_llm(
     feedback: str | None = None,
 ) -> ResearchPlan | None:
     limit = depth_question_limit(brief)
+    language_name = (
+        "Simplified Chinese"
+        if brief.language is ProjectLanguage.ZH
+        else "English"
+    )
+    rules = [
+        "Propose distinct sub-questions that together answer the main topic.",
+        f"Write the summary and every question in {language_name}.",
+        "Each question must be a single searchable question, not a list.",
+        "Cover different angles: concepts and current state, supporting "
+        "evidence, counter-evidence and controversies, practice or recent "
+        "developments, and reliability or limits.",
+        "Do not reuse the same angle twice.",
+        "Questions guide retrieval only: do not state facts, numbers, "
+        "conclusions, sources or citations.",
+        "Add 1-3 search_terms to every question: short keyword phrases "
+        "(2-6 words) that web search and academic indexes can match, not "
+        "full sentences.",
+        *(
+            [
+                "For Chinese projects every question needs both a Chinese and "
+                "an English search term; academic indexes (Crossref, Semantic "
+                "Scholar) retrieve far better in English."
+            ]
+            if brief.language is ProjectLanguage.ZH
+            else []
+        ),
+        "Order the questions from most to least important and score "
+        "priority from 0 to 1000.",
+        *untrusted_rules(),
+        "Return JSON only: {\"summary\": string, \"questions\": "
+        "[{\"question\": string, \"priority\": integer, "
+        "\"search_terms\": [string]}]}.",
+    ]
     prompt = json.dumps(
         {
             "task": PLANNING_TASK,
@@ -100,27 +137,9 @@ def build_plan_with_llm(
             ),
             "required": {
                 "questions": limit,
-                "write_in_language": (
-                    "Simplified Chinese"
-                    if brief.language is ProjectLanguage.ZH
-                    else "English"
-                ),
+                "write_in_language": language_name,
             },
-            "rules": [
-                "Propose distinct sub-questions that together answer the main topic.",
-                "Each question must be a single searchable question, not a list.",
-                "Cover different angles: concepts and current state, supporting "
-                "evidence, counter-evidence and controversies, practice or recent "
-                "developments, and reliability or limits.",
-                "Do not reuse the same angle twice.",
-                "Questions guide retrieval only: do not state facts, numbers, "
-                "conclusions, sources or citations.",
-                "Order the questions from most to least important and score "
-                "priority from 0 to 1000.",
-                *untrusted_rules(),
-                "Return JSON only: {\"summary\": string, \"questions\": "
-                "[{\"question\": string, \"priority\": integer}]}.",
-            ],
+            "rules": rules,
         },
         ensure_ascii=False,
     )
@@ -161,21 +180,21 @@ def _plan_from_payload(
     if not summary or not isinstance(raw, list):
         return None
 
-    kept: list[tuple[str, int | None]] = []
+    kept: list[tuple[str, int | None, list[str]]] = []
     seen: set[str] = set()
     for entry in raw:
-        text, priority = _entry(entry)
+        text, priority, terms = _entry(entry)
         key = text.casefold()
         if not text or key in seen:
             continue
         seen.add(key)
-        kept.append((text, priority))
+        kept.append((text, priority, terms))
 
     if len(kept) < min(_MIN_QUESTIONS, limit):
         return None
     if not _on_topic(kept, brief):
         return None
-    if not _in_expected_language([text for text, _ in kept], brief):
+    if not _in_expected_language([text for text, _, _ in kept], brief):
         return None
 
     questions = [
@@ -184,8 +203,9 @@ def _plan_from_payload(
             priority=priority
             if priority is not None
             else default_priority(index),
+            search_terms=terms,
         )
-        for index, (text, priority) in enumerate(kept[:limit])
+        for index, (text, priority, terms) in enumerate(kept[:limit])
     ]
     return ResearchPlan(
         version=version,
@@ -195,7 +215,7 @@ def _plan_from_payload(
     )
 
 
-def _entry(value: Any) -> tuple[str, int | None]:
+def _entry(value: Any) -> tuple[str, int | None, list[str]]:
     if isinstance(value, dict):
         text = _clean_text(
             value.get("question") or value.get("text") or value.get("title"),
@@ -203,6 +223,7 @@ def _entry(value: Any) -> tuple[str, int | None]:
             min_chars=_MIN_QUESTION_CHARS,
         )
         priority_value = value.get("priority")
+        terms_value = value.get("search_terms")
     else:
         text = _clean_text(
             value,
@@ -210,13 +231,36 @@ def _entry(value: Any) -> tuple[str, int | None]:
             min_chars=_MIN_QUESTION_CHARS,
         )
         priority_value = None
+        terms_value = None
     if not text:
-        return "", None
-    if isinstance(priority_value, bool) or not isinstance(
-        priority_value, (int, float)
-    ):
-        return text, None
-    return text, max(0, min(1000, int(priority_value)))
+        return "", None, []
+    return text, _priority(priority_value), _search_terms(terms_value)
+
+
+def _priority(value: Any) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return max(0, min(1000, int(value)))
+
+
+def _search_terms(value: Any) -> list[str]:
+    raw = value if isinstance(value, list) else [value]
+    terms: list[str] = []
+    seen: set[str] = set()
+    for item in raw:
+        term = _clean_text(
+            item,
+            _MAX_TEXTS["term"],
+            min_chars=_MIN_TERM_CHARS,
+        )
+        key = term.casefold()
+        if not term or key in seen:
+            continue
+        seen.add(key)
+        terms.append(term)
+        if len(terms) >= _MAX_SEARCH_TERMS:
+            break
+    return terms
 
 
 def _clean_text(value: Any, limit: int, *, min_chars: int = 1) -> str:
@@ -231,7 +275,10 @@ def _clean_text(value: Any, limit: int, *, min_chars: int = 1) -> str:
     return cleaned[:limit]
 
 
-def _on_topic(kept: list[tuple[str, int | None]], brief: ResearchBrief) -> bool:
+def _on_topic(
+    kept: list[tuple[str, int | None, list[str]]],
+    brief: ResearchBrief,
+) -> bool:
     brief_tokens = (
         tokenize(
             " ".join(
@@ -248,7 +295,7 @@ def _on_topic(kept: list[tuple[str, int | None]], brief: ResearchBrief) -> bool:
         return True
     # One shared content word is enough: a model may legitimately paraphrase, but
     # a plan with no topic overlap at all answered some other brief.
-    return any(tokenize(text) & brief_tokens for text, _ in kept)
+    return any(tokenize(text) & brief_tokens for text, _, _ in kept)
 
 
 def _in_expected_language(texts: list[str], brief: ResearchBrief) -> bool:

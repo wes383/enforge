@@ -74,6 +74,7 @@ from dr_core.research.generation import (
     build_outline,
     build_plan,
     build_queries,
+    query_pair,
     source_numbering,
 )
 from dr_core.research.indexing import IndexResult, ensure_source_index
@@ -1242,6 +1243,11 @@ def analyze_gaps(ctx: ResearchContext):
             brief = _brief(state)
             matrix = _matrix(state)
             round_index = int(state.get("round_index", 1))
+            terms_by_question = {
+                question.question_id: question.search_terms
+                for question in _plan(state).questions
+                if question.question_id is not None
+            }
             gaps: list[ResearchGap] = []
             for row in matrix.rows:
                 if row.coverage_status is QuestionCoverageStatus.COVERED:
@@ -1266,7 +1272,11 @@ def analyze_gaps(ctx: ResearchContext):
                             ),
                         ),
                         severity="high" if severe else "medium",
-                        suggested_queries=_gap_queries(brief, row.question),
+                        suggested_queries=_gap_queries(
+                            brief,
+                            row.question,
+                            terms_by_question.get(row.question_id, []),
+                        ),
                     )
                 )
             if (
@@ -1293,7 +1303,11 @@ def analyze_gaps(ctx: ResearchContext):
                                 "The current evidence lacks explicit opposing or critical views.",
                             ),
                             severity="medium",
-                            suggested_queries=_counter_queries(brief, target.question),
+                            suggested_queries=_counter_queries(
+                                brief,
+                                target.question,
+                                terms_by_question.get(target.question_id, []),
+                            ),
                         )
                     )
 
@@ -2692,27 +2706,47 @@ def _verification_node_timeout(ctx: ResearchContext) -> int:
 
 
 
-def _gap_queries(brief: ResearchBrief, question: str) -> list[str]:
+def _gap_queries(
+    brief: ResearchBrief,
+    question: str,
+    search_terms: list[str] | None = None,
+) -> list[str]:
+    primary, latin = query_pair(question, search_terms or [])
     if brief.language is ProjectLanguage.ZH:
+        if latin != primary:
+            return [
+                f"{primary} 证据 数据 案例",
+                f"{latin} evidence data cases",
+            ]
         return [
-            f"{question} 证据 数据 案例",
-            f"{question} 反方观点 局限 批评",
+            f"{primary} 证据 数据 案例",
+            f"{primary} 反方观点 局限 批评",
         ]
     return [
-        f"{question} evidence data cases",
-        f"{question} counterarguments limitations critique",
+        f"{primary} evidence data cases",
+        f"{primary} counterarguments limitations critique",
     ]
 
 
-def _counter_queries(brief: ResearchBrief, question: str) -> list[str]:
+def _counter_queries(
+    brief: ResearchBrief,
+    question: str,
+    search_terms: list[str] | None = None,
+) -> list[str]:
+    primary, latin = query_pair(question, search_terms or [])
     if brief.language is ProjectLanguage.ZH:
+        if latin != primary:
+            return [
+                f"{primary} 反方证据 批评 争议",
+                f"{latin} counter-evidence critique controversy",
+            ]
         return [
-            f"{question} 反方证据 批评 争议",
-            f"{question} 风险 适用边界",
+            f"{primary} 反方证据 批评 争议",
+            f"{primary} 风险 适用边界",
         ]
     return [
-        f"{question} counter-evidence critique controversy",
-        f"{question} risks boundary conditions",
+        f"{primary} counter-evidence critique controversy",
+        f"{primary} risks boundary conditions",
     ]
 
 

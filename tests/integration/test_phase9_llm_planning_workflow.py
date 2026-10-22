@@ -16,6 +16,7 @@ from dr_core.db.models import (
     ResearchQuestion,
     ResearchRun,
     RunEvent,
+    SearchQuery,
     SourceVersion,
 )
 from dr_core.db.repositories import ProjectRepository, RunRepository
@@ -40,11 +41,27 @@ def _planning_payload() -> str:
         {
             "summary": _LLM_SUMMARY,
             "questions": [
-                {"question": _LLM_QUESTION, "priority": 900},
-                {"question": "What evidence shows peer review bias against new ideas?"},
-                {"question": "How do editors weigh conflicting peer review reports?"},
-                {"question": "Which limits constrain peer review reliability claims?"},
-                {"question": "What do replication studies say about peer review?"},
+                {
+                    "question": _LLM_QUESTION,
+                    "priority": 900,
+                    "search_terms": ["peer review error rates"],
+                },
+                {
+                    "question": "What evidence shows peer review bias against new ideas?",
+                    "search_terms": ["peer review bias"],
+                },
+                {
+                    "question": "How do editors weigh conflicting peer review reports?",
+                    "search_terms": ["editor conflicting reviews"],
+                },
+                {
+                    "question": "Which limits constrain peer review reliability claims?",
+                    "search_terms": ["peer review reliability limits"],
+                },
+                {
+                    "question": "What do replication studies say about peer review?",
+                    "search_terms": ["peer review replication"],
+                },
             ],
         },
         ensure_ascii=False,
@@ -144,6 +161,17 @@ def _planning_event(database, run_id: UUID):
         )
 
 
+def _query_texts(database, run_id: UUID) -> list[str]:
+    with database.session() as session:
+        return list(
+            session.scalars(
+                select(SearchQuery.query_text).where(
+                    SearchQuery.run_id == run_id
+                )
+            )
+        )
+
+
 def _cleanup(database, project_id: UUID) -> None:
     storage = get_file_storage()
     with database.session_scope() as session:
@@ -234,6 +262,11 @@ def test_workflow_uses_model_generated_research_questions(database):
         event = _planning_event(database, run_id)
         assert event is not None
         assert event.payload["planner"] == "llm"
+
+        query_texts = _query_texts(database, run_id)
+        assert query_texts
+        assert "peer review error rates" in query_texts
+        assert _LLM_QUESTION not in query_texts
     finally:
         _cleanup(database, project_id)
 

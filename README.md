@@ -35,7 +35,7 @@
 - 证据矩阵：按研究问题输出主要结论、支持/相反证据 ID、独立来源数、来源与证据质量理由、局限和未解决缺口；相反证据完整保留并进入报告，矩阵 JSON 作为 `evidence_matrix` artifact 持久化。
 - 论证型提纲：每个章节保存标题、写作目的、关联研究问题、关键主张、支持证据 ID、反对证据 ID、预期字数和 `planned/drafted/verified` 状态；提纲审批通过后，写作和核验阶段会回写章节状态。
 - 分章节长文写作：写作节点按章节选择数据库证据，正文包含本节问题、核心判断、证据、反方观点、局限和下一节衔接；章节保存 `citation_map`、使用过的证据 ID 和版本，内容变化时自动生成新版本。
-- 可选的模型规划：打开 `RESEARCH_LLM_PLANNING_ENABLED=true` 后由大模型按项目简报生成研究问题，语言、深度（决定问题数）、范围、目标读者和上一轮审批反馈都进入提示词；输出必须是 JSON，且要通过去重、数量、语言和题目相关性校验，否则回退到确定性模板并在研究局限中记录原因。
+- 可选的模型规划：打开 `RESEARCH_LLM_PLANNING_ENABLED=true` 后由大模型按项目简报生成研究问题，语言、深度（决定问题数）、范围、目标读者和上一轮审批反馈都进入提示词；每个问题同时产出 1–3 个短检索词，中文项目还会要求一条英文检索词供学术库使用；输出必须是 JSON，且要通过去重、数量、语言和题目相关性校验，否则回退到确定性模板并在研究局限中记录原因。
 - 可选的模型写作：配置 `OPENAI_API_KEY`（任意 OpenAI 兼容端点）并显式打开 `RESEARCH_LLM_WRITING_ENABLED=true` 时才启用；输出必须是 JSON，且通过引用标记、段落引用、数字和参考文献禁令校验，否则自动回退到确定性写作。
 - 用量与成本记账：每次模型调用的 `usage` 累加到运行的 `input_tokens`/`output_tokens`/`cost_usd`，金额按可配置单价计算；单价为 0 时只显示 tokens。token/成本预算守卫读取同一组数值。
 - 主张核验：从正文抽取带引用和缺少引用的事实性、量化、因果、比较、规范与预测主张；确定性规则检查引用映射、来源存在性、原文定位、数字/年份一致性、词项支持、绝对化措辞和反驳证据，状态为 `SUPPORTED`/`PARTIAL`/`CONTRADICTED`/`UNSUPPORTED`/`UNVERIFIABLE`，失败的核验结果不会被自动升级。
@@ -45,7 +45,7 @@
 - SQLAlchemy 2.0 仓储层，覆盖项目、运行、研究问题、检索、来源、切片、证据、主张、提纲、章节、引用核验、审批、事件和导出文件。
 - Alembic 从空数据库初始化、重复升级、降级/再升级和 `alembic check` 均通过；Compose 中的 `migrate` 服务在 `api`、`worker` 启动前完成迁移。
 - 文件记录与实际文件对账工具，能够报告缺失文件和孤儿文件。
-- 容器内单元测试和集成测试，当前 `255 passed`（通过 `docker-compose.test.yml` 强制 mock，真实密钥不参与测试）。
+- 容器内单元测试和集成测试，当前 `262 passed`（通过 `docker-compose.test.yml` 强制 mock，真实密钥不参与测试）。
 - 不包含 MinIO、S3 或任何对象存储服务。
 
 ## 服务拓扑
@@ -535,7 +535,7 @@ Embedding 仍需自行接入：注册真实 `EmbeddingProvider` 并保持 `EMBED
 | `parse_brief` | 校验研究简报，建立主问题与子问题，确定语言、深度、引用风格与预算 |
 | `plan_research` | 生成版本化研究计划（默认深度感知的确定性模板，打开 `RESEARCH_LLM_PLANNING_ENABLED` 时由模型生成并校验）；被拒绝后根据反馈生成新版本 |
 | `await_plan_approval` | 写入待审批记录并 `interrupt`；批准进入检索，拒绝回到规划，修改内容直接生效 |
-| `generate_queries` | 按轮次及研究问题生成网页/学术查询，跳过重复语句 |
+| `generate_queries` | 按轮次、研究问题及其检索词生成网页/学术查询，跳过重复语句 |
 | `search_sources` | 调用已启用的搜索与学术提供商，记录查询执行状态、来源和所属研究问题 |
 | `normalize_sources` | DOI/URL/标题去重、元数据合并、来源类型与问题关联归一化 |
 | `rank_sources` | 按相关性、来源类型与可获取全文能力做确定性排序，写入 `rank_score` |
@@ -730,7 +730,9 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
 
 可选模型写作由 `RESEARCH_LLM_WRITING_ENABLED` 控制，默认关闭。只有在 `ProviderRegistry` 中存在真实 `LLMProvider`（配置 `OPENAI_API_KEY` 后自动注册 OpenAI 兼容适配器）时才会调用；Mock Provider 会被跳过。模型输出必须是 `{"markdown": ...}` JSON，且每个正文段落都要有引用标记、不能出现未提供的标记、不能包含参考文献章节，正文中的数字/年份必须能在所给证据中找到；任一校验失败都会回退到确定性写作。
 
-研究问题本身也可以交给模型（`RESEARCH_LLM_PLANNING_ENABLED`，默认关闭）。`plan_research` 请求 `{"summary", "questions": [{"question", "priority"}]}` JSON，提示词带上项目语言、研究深度（决定问题数 3/4/5）、范围、目标读者、日期范围与上一轮审批反馈，简报和反馈文本按不可信内容包裹并附注入防御规则。返回的计划必须满足：摘要非空、问题清理（去列表前缀、合并空白、截断）后去重不少于 2 条、数量不超过深度上限、语言与项目一致（英文项目要含拉丁字母、中文项目要含中日韩字符）、至少一条问题与简报共享词元，且不得包含代码块或不可信标签；模型调用失败、JSON 非法或任一校验不通过都回退到 `generation.build_plan` 的确定性模板，并把回退原因写入 `limitations`（最终进入报告的局限章节）。阶段完成事件的 payload 带 `planner: "llm" | "template"`，用于区分本次计划来源。
+研究问题本身也可以交给模型（`RESEARCH_LLM_PLANNING_ENABLED`，默认关闭）。`plan_research` 请求 `{"summary", "questions": [{"question", "priority", "search_terms"}]}` JSON，提示词带上项目语言、研究深度（决定问题数 3/4/5）、范围、目标读者、日期范围与上一轮审批反馈，简报和反馈文本按不可信内容包裹并附注入防御规则。返回的计划必须满足：摘要非空、问题清理（去列表前缀、合并空白、截断）后去重不少于 2 条、数量不超过深度上限、语言与项目一致（英文项目要含拉丁字母、中文项目要含中日韩字符）、至少一条问题与简报共享词元，且不得包含代码块或不可信标签；模型调用失败、JSON 非法或任一校验不通过都回退到 `generation.build_plan` 的确定性模板，并把回退原因写入 `limitations`（最终进入报告的局限章节）。阶段完成事件的 payload 带 `planner: "llm" | "template"`，用于区分本次计划来源。
+
+规划会为每个问题产出 1–3 个短检索词（`search_terms`，2–6 个词而不是整句）。检索时网页查询用第一个检索词，学术查询优先用含拉丁字母的检索词，所以中文项目可以同时用中文查网页、用英文查 Crossref / Semantic Scholar；中文项目的提示词会明确要求同时给出中英文检索词。缺口补充检索也走同一套检索词，只是按中/英文分别拼接"证据 数据 案例"或 "counter-evidence critique controversy" 这类后缀。没有检索词时（确定性模板计划、或人工编辑后丢失）回退为用完整研究问题检索，行为与之前一致。
 
 ### 主张核验
 
@@ -1003,7 +1005,7 @@ docker compose exec api python -m dr_core.maintenance
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test up -d --build api worker
 
-# 2) 运行单元 + 集成 + 评测（255 passed）
+# 2) 运行单元 + 集成 + 评测（262 passed）
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -1021,6 +1023,7 @@ docker compose up -d --force-recreate api worker
 - OpenAI 兼容适配器：请求体与 `Authorization` 头、`usage` 映射为 token 用量、5xx 转 `ProviderUnavailable`、缺字段或空内容转 `ProviderResponseError`；只有 `OPENAI_API_KEY` 非空时才注册到 `ProviderRegistry`。
 - 真实 LLM 写作链路（本地假端点，不出网）：打开 `RESEARCH_LLM_WRITING_ENABLED` 后运行完成，章节事件 `used_llm=true`，引用标记仍全部来自数据库证据；主张复核调用次数不超过 `RESEARCH_CLAIM_LLM_REVIEW_LIMIT`。
 - LLM 生成研究问题（本地假端点）：打开 `RESEARCH_LLM_PLANNING_ENABLED` 后研究问题来自模型输出并按深度上限截断、`planner=llm`；模型返回非法内容或问题跑题/语言不符时回退确定性模板并记录局限、`planner=template`；`_llm_planner` 门禁跳过 Mock Provider，规划开启时节点与 Celery 时限各放大相应的模型调用预算。
+- 规划产出检索词：模型返回的 `search_terms` 会合并空白、去重并最多保留 3 个；中文计划的网页查询用中文词、学术查询用英文词，运行后 `search_queries` 里存的是检索词而不是整句问题；没有检索词时回退整句问题，缺口补充检索按中英文分别拼接对应后缀。
 - 用量与成本记账：运行结束后 `input_tokens`/`output_tokens` 与假端点的每次调用（40/20）严格相等，`cost_usd` 按单价（2.5/10）累计为每次 0.0003；单价为 0 时成本保持 0；记账包装只在调用成功后上报，失败的调用不计数。
 - 模型时间预算：LLM 使用独立的超时/重试（不受 `PROVIDER_*` 影响）；未启用模型时节点与 Celery 时限保持原值，启用后按章节数与复核上限放大，且不会低于运维显式配置的更大值。
 - 质量评测集：10 类场景全部完成且断言通过，恢复成功率 1.0，指标达到阈值；人工复核比较函数统计一致率。
@@ -1108,7 +1111,7 @@ docker compose up -d --force-recreate api worker
 - 缺失文件与孤儿文件识别。
 - 原有健康检查、CORS、文件跨容器往返和 Celery 测试任务。
 
-当前结果：`255 passed`（阶段 9 新增观测、安全、限流、LLM 适配器与质量评测测试；测试全程不需要网络或真实 API Key）。质量评测也可以单独运行：
+当前结果：`262 passed`（阶段 9 新增观测、安全、限流、LLM 适配器与质量评测测试；测试全程不需要网络或真实 API Key）。质量评测也可以单独运行：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
@@ -1160,7 +1163,7 @@ docker compose exec -T postgres psql -U enforge -d enforge -c \
 | Compose 配置检查 | `docker compose config --quiet` | 通过 |
 | 镜像构建 | `docker compose up -d --build` | `postgres`、`redis`、`migrate`、`api`、`worker`、`web` 全部 healthy |
 | 数据库迁移 | `migrate` 服务执行 `alembic upgrade head` | 成功；`alembic check` 返回 `No new upgrade operations detected` |
-| Python 单元/集成/评测测试 | `docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test run --rm --build test` | `255 passed` |
+| Python 单元/集成/评测测试 | `docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test run --rm --build test` | `262 passed` |
 | 前端类型检查 | `npm run typecheck` | 通过 |
 | 前端代码检查 | `npm run lint` | 通过 |
 | 前端构建 | `npm run build` | Next.js 16.4 生产构建通过 |

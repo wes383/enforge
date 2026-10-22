@@ -56,6 +56,25 @@ class ResearchQuestion(SchemaModel):
     priority: int = Field(default=50, ge=0, le=1000)
     parent_id: UUID | None = None
     coverage_status: QuestionCoverageStatus = QuestionCoverageStatus.OPEN
+    # Short keyword queries derived from the question; empty means "search the
+    # question text itself". The validator keeps at most three.
+    search_terms: list[str] = Field(default_factory=list, max_length=20)
+
+    @field_validator("search_terms")
+    @classmethod
+    def _clean_search_terms(cls, terms: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for value in terms:
+            text = " ".join(str(value).split()).strip()[:200]
+            key = text.casefold()
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(text)
+            if len(cleaned) >= 3:
+                break
+        return cleaned
 
 
 class ResearchPlan(SchemaModel):

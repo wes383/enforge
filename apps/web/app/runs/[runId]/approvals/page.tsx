@@ -38,6 +38,7 @@ type PlanQuestionDraft = {
   question: string;
   priority: number;
   coverage_status: string;
+  search_terms: string[];
 };
 
 type PlanDraft = {
@@ -91,6 +92,7 @@ function planDraftFrom(plan: ResearchPlan): PlanDraft {
       question: question.question,
       priority: question.priority,
       coverage_status: question.coverage_status ?? "open",
+      search_terms: question.search_terms ?? [],
     })),
   };
 }
@@ -279,6 +281,7 @@ export default function ApprovalsPage() {
             question: question.question.trim(),
             priority: question.priority,
             coverage_status: question.coverage_status,
+            search_terms: question.search_terms,
           })),
         };
       } else if (approval.kind === "outline") {
@@ -522,6 +525,7 @@ export default function ApprovalsPage() {
                             question: "",
                             priority: 50,
                             coverage_status: "open",
+                            search_terms: [],
                           },
                         ],
                       })

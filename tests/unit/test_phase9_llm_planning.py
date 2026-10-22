@@ -115,6 +115,79 @@ def test_plain_string_questions_and_numbering_are_normalized():
     assert [item.priority for item in plan.questions] == [90, 80, 70]
 
 
+def test_search_terms_are_parsed_cleaned_and_capped():
+    plan = build_plan_with_llm(
+        _brief(),
+        _FakeLLM(
+            _text(
+                [
+                    {
+                        "question": "Which peer review models change reported "
+                        "error rates?",
+                        "search_terms": [
+                            "  peer   review   error rates ",
+                            "PEER REVIEW ERROR RATES",
+                            "review bias",
+                            "third term",
+                            "fourth term",
+                        ],
+                    },
+                    {
+                        "question": "What evidence links review length to "
+                        "reliability?",
+                        "search_terms": "review length reliability",
+                    },
+                ]
+            )
+        ),
+    )
+
+    assert plan is not None
+    assert plan.questions[0].search_terms == [
+        "peer review error rates",
+        "review bias",
+        "third term",
+    ]
+    assert plan.questions[1].search_terms == ["review length reliability"]
+
+
+def test_chinese_planning_prompt_asks_for_english_terms():
+    zh = _brief(
+        language=ProjectLanguage.ZH,
+        title="同行评审",
+        topic="同行评审如何影响研究可靠性",
+    )
+    llm = _FakeLLM(
+        _text(
+            [
+                {"question": "同行评审对论文错误率的实际影响有哪些证据？"},
+                {"question": "单盲与双盲评审在可靠性上的差异如何测量？"},
+            ],
+            summary="围绕同行评审组织证据检索。",
+        )
+    )
+    build_plan_with_llm(zh, llm)
+
+    prompt = json.loads(llm.prompts[0])
+    assert "Simplified Chinese" in " ".join(prompt["rules"])
+    assert any("English search term" in rule for rule in prompt["rules"])
+    assert "search_terms" in prompt["rules"][-1]
+
+    english = _FakeLLM(
+        _text(
+            [
+                {"question": "Which peer review models change error rates?"},
+                {"question": "What evidence links review length to reliability?"},
+            ]
+        )
+    )
+    build_plan_with_llm(_brief(), english)
+    assert not any(
+        "English search term" in rule
+        for rule in json.loads(english.prompts[0])["rules"]
+    )
+
+
 def test_duplicate_and_overflowing_questions_are_trimmed_to_depth_limit():
     plan = build_plan_with_llm(
         _brief(research_depth=ResearchDepth.QUICK),
