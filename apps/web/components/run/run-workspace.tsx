@@ -19,6 +19,7 @@ import {
   useContext,
   useEffect,
   useMemo,
+  useRef,
   useState,
   type ReactNode,
 } from "react";
@@ -37,6 +38,8 @@ import { pick, useLocale } from "@/lib/locale";
 import type { RunOverview } from "@/lib/types";
 import { cn } from "@/lib/utils";
 
+type RefreshHandler = () => void | Promise<void>;
+
 type RunWorkspaceValue = {
   runId: string;
   overview: RunOverview | null;
@@ -44,6 +47,7 @@ type RunWorkspaceValue = {
   error: string | null;
   reload: () => Promise<void>;
   refresh: () => Promise<void>;
+  registerRefresh: (handler: RefreshHandler) => () => void;
 };
 
 const RunWorkspaceContext = createContext<RunWorkspaceValue | null>(null);
@@ -78,9 +82,26 @@ export function RunWorkspaceLayout({ children }: { children: ReactNode }) {
     }
   }, [runId]);
 
+  // Tab pages register their own loaders so the header button refreshes both
+  // the run overview and whatever list the current tab shows.
+  const refreshHandlers = useRef(new Set<RefreshHandler>());
+  const registerRefresh = useCallback((handler: RefreshHandler) => {
+    refreshHandlers.current.add(handler);
+    return () => {
+      refreshHandlers.current.delete(handler);
+    };
+  }, []);
+
   const refresh = useCallback(async () => {
     setLoading(true);
-    await reload();
+    try {
+      await Promise.allSettled([
+        reload(),
+        ...Array.from(refreshHandlers.current, (handler) => handler()),
+      ]);
+    } finally {
+      setLoading(false);
+    }
   }, [reload]);
 
   const [cancelArmed, setCancelArmed] = useState(false);
@@ -152,6 +173,7 @@ export function RunWorkspaceLayout({ children }: { children: ReactNode }) {
     error,
     reload,
     refresh,
+    registerRefresh,
   };
 
   return (

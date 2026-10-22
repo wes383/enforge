@@ -7,7 +7,6 @@ import {
   Eye,
   FileText,
   Pencil,
-  RefreshCw,
   Save,
   ScrollText,
   TriangleAlert,
@@ -103,7 +102,7 @@ const CLAIM_SORT: Record<string, number> = {
 
 export default function ArticlePage() {
   const locale = useLocale();
-  const { runId, overview } = useRunWorkspace();
+  const { runId, overview, registerRefresh } = useRunWorkspace();
   const [sections, setSections] = useState<DraftSection[] | null>(null);
   const [evidence, setEvidence] = useState<Evidence[]>([]);
   const [claims, setClaims] = useState<Claim[]>([]);
@@ -162,6 +161,8 @@ export default function ArticlePage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => registerRefresh(refresh), [refresh, registerRefresh]);
 
   useEffect(() => {
     if (!sections || sections.length === 0 || selectedId) return;
@@ -424,10 +425,6 @@ export default function ArticlePage() {
           ) : null}
         </div>
         <div className="flex flex-wrap items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
-            <RefreshCw className={loading ? "h-3.5 w-3.5 animate-spin" : "h-3.5 w-3.5"} />
-            {pick(locale, "刷新", "Refresh")}
-          </Button>
           {markdownArtifact ? (
             <Button asChild variant="outline" size="sm">
               <a

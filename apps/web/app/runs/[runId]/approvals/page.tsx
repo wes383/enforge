@@ -4,7 +4,6 @@ import {
   Check,
   ClipboardCheck,
   Plus,
-  RefreshCw,
   Trash2,
   X,
 } from "lucide-react";
@@ -31,7 +30,6 @@ import type {
   OutlineWorkspace,
   ResearchPlan,
 } from "@/lib/types";
-import { cn } from "@/lib/utils";
 
 type PlanQuestionDraft = {
   question_id: string | null;
@@ -123,7 +121,12 @@ const DEFAULT_SECTION: OutlineSection = {
 
 export default function ApprovalsPage() {
   const locale = useLocale();
-  const { runId, overview, reload: reloadWorkspace } = useRunWorkspace();
+  const {
+    runId,
+    overview,
+    reload: reloadWorkspace,
+    registerRefresh,
+  } = useRunWorkspace();
   const [approvals, setApprovals] = useState<Approval[] | null>(null);
   const [outline, setOutline] = useState<OutlineWorkspace | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -166,6 +169,8 @@ export default function ApprovalsPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => registerRefresh(refresh), [refresh, registerRefresh]);
 
   const active = Boolean(
     overview && !TERMINAL_RUN_STATUSES.has(overview.run.status),
@@ -470,10 +475,6 @@ export default function ApprovalsPage() {
                 )}
               </p>
             </div>
-            <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
-              <RefreshCw className={cn("h-3.5 w-3.5", loading && "animate-spin")} />
-              {pick(locale, "刷新", "Refresh")}
-            </Button>
           </div>
 
           {pending.kind === "plan" && planDraft ? (

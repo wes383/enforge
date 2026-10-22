@@ -183,7 +183,8 @@ function StreamBadge({ status }: { status: StreamStatus }) {
 
 export default function RunOverviewPage() {
   const locale = useLocale();
-  const { runId, overview, error, reload } = useRunWorkspace();
+  const { runId, overview, error, reload, registerRefresh } =
+    useRunWorkspace();
   const run = overview?.run;
   const active = Boolean(run && !TERMINAL_RUN_STATUSES.has(run.status));
 
@@ -237,6 +238,11 @@ export default function RunOverviewPage() {
   useEffect(() => {
     void loadApprovals();
   }, [loadApprovals]);
+
+  useEffect(
+    () => registerRefresh(loadApprovals),
+    [loadApprovals, registerRefresh],
+  );
 
   useEffect(() => {
     if (!active) return;

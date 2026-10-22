@@ -5,7 +5,6 @@ import {
   BookOpenCheck,
   ChevronDown,
   Filter,
-  RefreshCw,
   Search,
 } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -43,7 +42,7 @@ function sourceHasVersion(source: Source, predicate: (status: string) => boolean
 
 export default function SourcesPage() {
   const locale = useLocale();
-  const { runId, overview } = useRunWorkspace();
+  const { runId, overview, registerRefresh } = useRunWorkspace();
   const [sources, setSources] = useState<Source[] | null>(null);
   const [questions, setQuestions] = useState<ResearchQuestion[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,6 +75,8 @@ export default function SourcesPage() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  useEffect(() => registerRefresh(refresh), [refresh, registerRefresh]);
 
   useEffect(() => {
     const initial = new URLSearchParams(window.location.search).get("question");
@@ -155,17 +156,13 @@ export default function SourcesPage() {
             )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {activeRun ? (
+        {activeRun ? (
+          <div className="flex items-center gap-2">
             <Badge variant="info" size="xs" dot>
               {pick(locale, "运行中，列表可能更新", "Run active; list may change")}
             </Badge>
-          ) : null}
-          <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
-            <RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-            {pick(locale, "刷新", "Refresh")}
-          </Button>
-        </div>
+          </div>
+        ) : null}
       </div>
 
       <Card className="grid gap-3 p-4 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_240px_200px]">

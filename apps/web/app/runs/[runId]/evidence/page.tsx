@@ -5,7 +5,6 @@ import {
   ChevronDown,
   Filter,
   MapPin,
-  RefreshCw,
   Search,
   ScrollText,
 } from "lucide-react";
@@ -52,7 +51,7 @@ function relationOf(evidenceType: string): keyof typeof RELATION_LABEL {
 
 export default function EvidencePage() {
   const locale = useLocale();
-  const { runId, overview } = useRunWorkspace();
+  const { runId, overview, registerRefresh } = useRunWorkspace();
   const [items, setItems] = useState<Evidence[]>([]);
   const [total, setTotal] = useState(0);
   const [questions, setQuestions] = useState<ResearchQuestion[]>([]);
@@ -88,6 +87,8 @@ export default function EvidencePage() {
     setLoading(true);
     await loadInitial();
   }, [loadInitial]);
+
+  useEffect(() => registerRefresh(refresh), [refresh, registerRefresh]);
 
   const loadMore = useCallback(async () => {
     setLoadingMore(true);
@@ -168,17 +169,13 @@ export default function EvidencePage() {
             )}
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          {activeRun ? (
+        {activeRun ? (
+          <div className="flex items-center gap-2">
             <Badge variant="info" size="xs" dot>
               {pick(locale, "运行中，证据可能更新", "Run active; evidence may change")}
             </Badge>
-          ) : null}
-          <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
-            <RefreshCw className={loading ? "h-4 w-4 animate-spin" : "h-4 w-4"} />
-            {pick(locale, "刷新", "Refresh")}
-          </Button>
-        </div>
+          </div>
+        ) : null}
       </div>
 
       <Card className="grid gap-3 p-4 lg:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_220px_180px_180px]">
