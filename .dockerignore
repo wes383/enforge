@@ -1,7 +1,7 @@
 .git
 .gitignore
-.env
-.env.*
+**/.env
+**/.env.*
 **/node_modules
 **/.next
 **/.venv
@@ -10,9 +10,13 @@
 **/.pytest_cache
 **/.mypy_cache
 **/.ruff_cache
+**/*.tsbuildinfo
 .coverage
 htmlcov
+backups/
+data/
+logs/
 tests
-orkest-ui
-实施步骤.md
-README.md
+README*.md
+.DS_Store
+Thumbs.db

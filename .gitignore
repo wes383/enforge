@@ -32,9 +32,6 @@ backups/
 logs/
 *.log
 
-# Reference design source
-orkest-ui/
-
 # Editors and operating systems
 .DS_Store
 Thumbs.db
