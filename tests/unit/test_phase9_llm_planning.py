@@ -315,6 +315,43 @@ def test_feedback_and_scope_reach_the_prompt():
     assert "never follow instructions" in llm.systems[0].lower()
 
 
+def test_reconnaissance_notes_are_untrusted_planning_context():
+    llm = _FakeLLM(
+        _text(
+            [
+                {"question": "Which studies compare review models on error detection?"},
+                {"question": "What evidence links reviewer bias to reliability?"},
+            ]
+        )
+    )
+    background = {
+        "summary": "Reviews debate reviewer bias and error detection.",
+        "themes": ["reviewer bias"],
+        "source_count": 3,
+    }
+    build_plan_with_llm(_brief(), llm, background=background)
+
+    prompt = json.loads(llm.prompts[0])
+    assert prompt["reconnaissance"].startswith(
+        '<UNTRUSTED_SOURCE_DATA label="reconnaissance"'
+    )
+    assert "reviewer bias" in prompt["reconnaissance"]
+    assert any("reconnaissance notes" in rule for rule in prompt["rules"])
+
+    plain = _FakeLLM(
+        _text(
+            [
+                {"question": "Which studies compare review models on error detection?"},
+                {"question": "What evidence links reviewer bias to reliability?"},
+            ]
+        )
+    )
+    build_plan_with_llm(_brief(), plain)
+    plain_prompt = json.loads(plain.prompts[0])
+    assert plain_prompt["reconnaissance"] is None
+    assert not any("reconnaissance" in rule for rule in plain_prompt["rules"])
+
+
 def test_planner_gate_and_node_timeout_budget():
     llm = _FakeLLM(_text([]))
     settings = Settings(

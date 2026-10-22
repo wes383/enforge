@@ -5,7 +5,7 @@ from decimal import Decimal
 from typing import Any, Literal
 from uuid import UUID
 
-from pydantic import Field, field_validator
+from pydantic import Field, field_validator, model_validator
 
 from dr_core.db.enums import (
     ApprovalKind,
@@ -75,6 +75,43 @@ class ResearchQuestion(SchemaModel):
             if len(cleaned) >= 3:
                 break
         return cleaned
+
+
+class ResearchRecon(SchemaModel):
+    """Grounding notes gathered by the bounded tool-using researcher.
+
+    This is context for planning only. It is never cited and never treated as
+    evidence; sources live in the database and go through the normal pipeline.
+    """
+
+    summary: str = Field(min_length=1, max_length=4000)
+    themes: list[str] = Field(default_factory=list, max_length=6)
+    terminology: list[str] = Field(default_factory=list, max_length=12)
+    controversies: list[str] = Field(default_factory=list, max_length=6)
+    source_count: int = Field(default=0, ge=0)
+
+    @model_validator(mode="after")
+    def _clean_lists(self) -> "ResearchRecon":
+        self.summary = " ".join(self.summary.split())[:4000]
+        self.themes = _clean_items(self.themes, 6, 300)
+        self.terminology = _clean_items(self.terminology, 12, 120)
+        self.controversies = _clean_items(self.controversies, 6, 600)
+        return self
+
+
+def _clean_items(values: list[str], limit: int, chars: int) -> list[str]:
+    cleaned: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        text = " ".join(str(value).split())[:chars]
+        key = text.casefold()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(text)
+        if len(cleaned) >= limit:
+            break
+    return cleaned
 
 
 class ResearchPlan(SchemaModel):

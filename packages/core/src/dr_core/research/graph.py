@@ -43,6 +43,7 @@ from dr_core.research.nodes import (
     parse_documents,
     plan_research,
     rank_sources,
+    research_recon,
     revise_search_plan,
     route_after_gaps,
     route_after_outline_approval,
@@ -101,6 +102,10 @@ def build_research_graph(ctx: ResearchContext, checkpointer: PostgresSaver):
     builder.add_node(
         "parse_brief",
         _traced_node(ctx, "parse_brief", parse_brief(ctx)),
+    )
+    builder.add_node(
+        "research_recon",
+        _traced_node(ctx, "research_recon", research_recon(ctx)),
     )
     builder.add_node(
         "plan_research",
@@ -176,7 +181,8 @@ def build_research_graph(ctx: ResearchContext, checkpointer: PostgresSaver):
     )
 
     builder.add_edge(START, "parse_brief")
-    builder.add_edge("parse_brief", "plan_research")
+    builder.add_edge("parse_brief", "research_recon")
+    builder.add_edge("research_recon", "plan_research")
     builder.add_edge("plan_research", "await_plan_approval")
     builder.add_conditional_edges(
         "await_plan_approval",

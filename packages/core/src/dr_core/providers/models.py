@@ -250,12 +250,19 @@ class ParsedDocument(SchemaModel):
         return self
 
 
+class LLMToolCall(SchemaModel):
+    id: str = Field(min_length=1, max_length=200)
+    name: str = Field(min_length=1, max_length=64)
+    arguments: str = Field(default="{}", max_length=20000)
+
+
 class LLMResponse(SchemaModel):
     text: str
     model: str = Field(min_length=1, max_length=255)
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     finish_reason: str | None = Field(default=None, max_length=64)
+    tool_calls: list[LLMToolCall] = Field(default_factory=list, max_length=10)
 
 
 class SearchBundle(SchemaModel):

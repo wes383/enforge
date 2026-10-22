@@ -12,6 +12,7 @@ class ResearchState(TypedDict, total=False):
     """
 
     brief: dict[str, Any]
+    recon: dict[str, Any]
     plan: dict[str, Any]
     queries: list[dict[str, Any]]
     round_index: int

@@ -24,6 +24,7 @@ x-offline-environment: &offline-environment
   RESEARCH_LLM_PLANNING_ENABLED: "false"
   RESEARCH_LLM_WRITING_ENABLED: "false"
   RESEARCH_CLAIM_LLM_REVIEW: "false"
+  RESEARCH_LLM_RECON_ENABLED: "false"
   LANGFUSE_ENABLED: "false"
   LANGFUSE_PUBLIC_KEY: ""
   LANGFUSE_SECRET_KEY: ""

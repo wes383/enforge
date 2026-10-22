@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, Sequence, runtime_checkable
 
 from dr_core.db.enums import SearchProviderName
 from dr_core.providers.models import (
@@ -105,6 +105,23 @@ class LLMProvider(Protocol):
         prompt: str,
         *,
         system: str | None = None,
+        max_tokens: int | None = None,
+        temperature: float = 0.0,
+    ) -> LLMResponse: ...
+
+
+@runtime_checkable
+class ToolCallingLLM(Protocol):
+    """A model that can run one turn of a tool-calling conversation."""
+
+    @property
+    def name(self) -> str: ...
+
+    def chat(
+        self,
+        messages: Sequence[dict[str, Any]],
+        *,
+        tools: Sequence[dict[str, Any]] | None = None,
         max_tokens: int | None = None,
         temperature: float = 0.0,
     ) -> LLMResponse: ...

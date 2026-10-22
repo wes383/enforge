@@ -75,6 +75,79 @@ def test_generate_posts_chat_completion_and_parses_usage():
     assert body["temperature"] == 0.2
 
 
+def test_chat_sends_tools_and_parses_tool_calls():
+    def handler(request: httpx.Request) -> httpx.Response:
+        return httpx.Response(
+            200,
+            json={
+                "model": "fake-model",
+                "choices": [
+                    {
+                        "message": {
+                            "role": "assistant",
+                            "content": None,
+                            "tool_calls": [
+                                {
+                                    "id": "call_1",
+                                    "type": "function",
+                                    "function": {
+                                        "name": "search_sources",
+                                        "arguments": json.dumps(
+                                            {"query": "peer review"}
+                                        ),
+                                    },
+                                },
+                                {
+                                    "function": {
+                                        "name": "read_source",
+                                        "arguments": {"source_id": "abc"},
+                                    }
+                                },
+                            ],
+                        },
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 20, "completion_tokens": 5},
+            },
+        )
+
+    provider, requests = _provider(handler)
+    messages = [
+        {"role": "system", "content": "You are a researcher."},
+        {"role": "user", "content": "Find sources."},
+    ]
+    tools = [
+        {
+            "type": "function",
+            "function": {
+                "name": "search_sources",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+    response = provider.chat(messages, tools=tools, max_tokens=128)
+
+    assert response.text == ""
+    assert response.finish_reason == "tool_calls"
+    assert len(response.tool_calls) == 2
+    assert response.tool_calls[0].id == "call_1"
+    assert response.tool_calls[0].name == "search_sources"
+    assert json.loads(response.tool_calls[0].arguments) == {
+        "query": "peer review"
+    }
+    assert response.tool_calls[1].id == "call_auto_1"
+    assert response.tool_calls[1].name == "read_source"
+    assert json.loads(response.tool_calls[1].arguments) == {"source_id": "abc"}
+    assert response.input_tokens == 20
+
+    body = json.loads(requests[0].content)
+    assert body["messages"] == messages
+    assert body["tools"] == tools
+    assert body["tool_choice"] == "auto"
+    assert body["max_tokens"] == 128
+
+
 def test_generate_raises_on_http_and_malformed_payloads():
     failing, _ = _provider(lambda request: httpx.Response(500, json={}))
     with pytest.raises(ProviderUnavailable):

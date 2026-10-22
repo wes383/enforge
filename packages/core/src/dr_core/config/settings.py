@@ -12,6 +12,9 @@ LLM_SECTION_CALL_BUDGET = 12
 # Planning asks the model once per plan version, so a run that is revised by the
 # approver can make a couple of planning calls before searching starts.
 LLM_PLANNING_CALL_BUDGET = 2
+# The bounded researcher makes at most one call per tool round plus a final
+# digest call. Tool rounds are capped at three in settings.
+LLM_RECON_CALL_BUDGET = 4
 
 
 class Settings(BaseSettings):
@@ -111,6 +114,15 @@ class Settings(BaseSettings):
     research_llm_planning_enabled: bool = False
     research_llm_writing_enabled: bool = False
     research_claim_llm_review: bool = False
+    # Bounded reconnaissance before planning. The model may search and read
+    # ingested sources through tools; every result goes through the normal
+    # ingestion pipeline and can later back evidence and citations.
+    research_llm_recon_enabled: bool = False
+    research_recon_max_rounds: int = Field(default=2, ge=1, le=3)
+    research_recon_max_searches: int = Field(default=4, ge=1, le=8)
+    research_recon_max_tool_calls: int = Field(default=6, ge=1, le=12)
+    research_recon_max_sources: int = Field(default=6, ge=1, le=20)
+    research_recon_read_chars: int = Field(default=4000, ge=500, le=20000)
     # Caps paid model calls per run so verification time stays bounded.
     research_claim_llm_review_limit: int = Field(default=10, ge=1, le=500)
     max_active_runs_per_project: int = Field(default=3, ge=0, le=100)
@@ -143,6 +155,7 @@ class Settings(BaseSettings):
             self.research_llm_planning_enabled
             or self.research_llm_writing_enabled
             or self.research_claim_llm_review
+            or self.research_llm_recon_enabled
         )
 
     @property
@@ -168,6 +181,8 @@ class Settings(BaseSettings):
         calls = LLM_SECTION_CALL_BUDGET + self.research_claim_llm_review_limit
         if self.research_llm_planning_enabled:
             calls += LLM_PLANNING_CALL_BUDGET
+        if self.research_llm_recon_enabled:
+            calls += LLM_RECON_CALL_BUDGET
         return self.llm_call_budget_seconds * calls + self.research_node_timeout_seconds
 
     @property

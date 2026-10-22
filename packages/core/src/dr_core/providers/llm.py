@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+from collections.abc import Sequence
 from typing import Any
 
 import httpx
@@ -7,7 +9,7 @@ from pydantic import SecretStr
 
 from dr_core.providers.errors import ProviderResponseError
 from dr_core.providers.http import JsonHttpClient, RetryPolicy
-from dr_core.providers.models import LLMResponse
+from dr_core.providers.models import LLMResponse, LLMToolCall
 
 
 class OpenAICompatibleLLMProvider:
@@ -64,17 +66,34 @@ class OpenAICompatibleLLMProvider:
         max_tokens: int | None = None,
         temperature: float = 0.0,
     ) -> LLMResponse:
-        messages: list[dict[str, str]] = []
+        messages: list[dict[str, Any]] = []
         if system:
             messages.append({"role": "system", "content": system})
         messages.append({"role": "user", "content": prompt})
+        return self.chat(
+            messages,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+
+    def chat(
+        self,
+        messages: Sequence[dict[str, Any]],
+        *,
+        tools: Sequence[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
+        temperature: float = 0.0,
+    ) -> LLMResponse:
         payload: dict[str, Any] = {
             "model": self._model,
-            "messages": messages,
+            "messages": [dict(message) for message in messages],
             "temperature": temperature,
         }
         if max_tokens:
             payload["max_tokens"] = max_tokens
+        if tools:
+            payload["tools"] = list(tools)
+            payload["tool_choice"] = "auto"
         response = self._http.request_json(
             "POST",
             "/chat/completions",
@@ -92,8 +111,15 @@ def _parse_completion(payload: dict[str, Any], fallback_model: str) -> LLMRespon
         )
     choice = choices[0]
     message = choice.get("message") if isinstance(choice, dict) else None
-    content = message.get("content") if isinstance(message, dict) else None
-    if not isinstance(content, str) or not content.strip():
+    if not isinstance(message, dict):
+        raise ProviderResponseError(
+            "openai",
+            "chat completion response is missing message content",
+        )
+    content = message.get("content")
+    text = content if isinstance(content, str) else ""
+    tool_calls = _parse_tool_calls(message)
+    if not text.strip() and not tool_calls:
         raise ProviderResponseError(
             "openai",
             "chat completion response is missing message content",
@@ -101,11 +127,51 @@ def _parse_completion(payload: dict[str, Any], fallback_model: str) -> LLMRespon
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
     return LLMResponse(
-        text=content,
+        text=text,
         model=str(payload.get("model") or fallback_model),
         input_tokens=int(usage.get("prompt_tokens") or 0),
         output_tokens=int(usage.get("completion_tokens") or 0),
         finish_reason=(
             str(finish_reason)[:64] if isinstance(finish_reason, str) else None
         ),
+        tool_calls=tool_calls,
     )
+
+
+def _parse_tool_calls(message: dict[str, Any]) -> list[LLMToolCall]:
+    raw = message.get("tool_calls")
+    if raw is None:
+        return []
+    if not isinstance(raw, list):
+        raise ProviderResponseError("openai", "tool_calls must be a list")
+    calls: list[LLMToolCall] = []
+    for index, entry in enumerate(raw[:10]):
+        function = entry.get("function") if isinstance(entry, dict) else None
+        if not isinstance(function, dict):
+            raise ProviderResponseError("openai", "tool call is missing its function")
+        name = function.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise ProviderResponseError("openai", "tool call is missing a name")
+        arguments = function.get("arguments")
+        if isinstance(arguments, dict):
+            encoded = json.dumps(arguments, ensure_ascii=False)
+        elif isinstance(arguments, str):
+            encoded = arguments or "{}"
+        elif arguments is None:
+            encoded = "{}"
+        else:
+            raise ProviderResponseError(
+                "openai",
+                "tool call arguments must be JSON text or an object",
+            )
+        call_id = entry.get("id")
+        if not isinstance(call_id, str) or not call_id.strip():
+            call_id = f"call_auto_{index}"
+        calls.append(
+            LLMToolCall(
+                id=call_id[:200],
+                name=name[:64],
+                arguments=encoded[:20000],
+            )
+        )
+    return calls

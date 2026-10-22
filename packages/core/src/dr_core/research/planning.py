@@ -14,6 +14,7 @@ from typing import Any
 from dr_core.db.enums import ProjectLanguage
 from dr_core.providers.base import LLMProvider
 from dr_core.research.generation import default_priority, depth_question_limit
+from dr_core.research.llm_json import parse_llm_json
 from dr_core.research.models import ResearchBrief, ResearchPlan, ResearchQuestion
 from dr_core.research.text import tokenize
 from dr_core.security.prompt_injection import untrusted_rules, wrap_untrusted
@@ -66,6 +67,7 @@ def build_plan_with_llm(
     *,
     version: int = 1,
     feedback: str | None = None,
+    background: dict[str, Any] | None = None,
 ) -> ResearchPlan | None:
     limit = depth_question_limit(brief)
     language_name = (
@@ -83,6 +85,16 @@ def build_plan_with_llm(
         "Do not reuse the same angle twice.",
         "Questions guide retrieval only: do not state facts, numbers, "
         "conclusions, sources or citations.",
+        *(
+            [
+                "Use the reconnaissance notes only to pick terminology, angles "
+                "and search_terms.",
+                "Do not copy facts, numbers, source names or claims from the "
+                "reconnaissance notes into the questions.",
+            ]
+            if background
+            else []
+        ),
         "Add 1-3 search_terms to every question: short keyword phrases "
         "(2-6 words) that web search and academic indexes can match, not "
         "full sentences.",
@@ -135,6 +147,14 @@ def build_plan_with_llm(
                 if feedback
                 else None
             ),
+            "reconnaissance": (
+                wrap_untrusted(
+                    json.dumps(background, ensure_ascii=False)[:8000],
+                    label="reconnaissance",
+                )
+                if background
+                else None
+            ),
             "required": {
                 "questions": limit,
                 "write_in_language": language_name,
@@ -154,7 +174,7 @@ def build_plan_with_llm(
             max_tokens=max(600, 240 * limit),
             temperature=0.3,
         )
-        payload = _parse_llm_json(response.text)
+        payload = parse_llm_json(response.text)
     except Exception as exc:
         logger.warning("LLM planning failed: %s", exc)
         return None
@@ -304,14 +324,3 @@ def _in_expected_language(texts: list[str], brief: ResearchBrief) -> bool:
     else:
         matched = sum(1 for text in texts if _LATIN_RE.search(text))
     return matched * 2 >= len(texts)
-
-
-def _parse_llm_json(text: str) -> dict[str, Any]:
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-    value = json.loads(cleaned)
-    if not isinstance(value, dict):
-        raise ValueError("LLM planning output must be a JSON object")
-    return value

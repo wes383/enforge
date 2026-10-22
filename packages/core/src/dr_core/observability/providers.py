@@ -1,6 +1,8 @@
 from __future__ import annotations
 
-from typing import Any, Sequence
+import json
+from collections.abc import Callable, Sequence
+from typing import Any
 from urllib.parse import urlsplit
 
 from dr_core.observability.tracing import ResearchTracer, TraceSpan
@@ -320,8 +322,65 @@ class _TracedLLMProvider:
         }
         if self._tracer.include_content:
             metadata["input"] = prompt[:2000]
-        with self._tracer.generation(
+        return self._traced_call(
             "llm.generate",
+            metadata=metadata,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            call=lambda: self._provider.generate(
+                prompt,
+                system=system,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            ),
+        )
+
+    def chat(
+        self,
+        messages: Sequence[dict[str, Any]],
+        *,
+        tools: Sequence[dict[str, Any]] | None = None,
+        max_tokens: int | None = None,
+        temperature: float = 0.0,
+    ) -> LLMResponse:
+        metadata: dict[str, Any] = {
+            "provider": self._provider.name,
+            "operation": "llm.chat",
+            "message_count": len(messages),
+            "tool_count": len(tools or []),
+            "max_tokens": max_tokens,
+            "temperature": temperature,
+        }
+        if self._tracer.include_content:
+            metadata["input"] = json.dumps(
+                messages[-3:],
+                ensure_ascii=False,
+                default=str,
+            )[:2000]
+        return self._traced_call(
+            "llm.chat",
+            metadata=metadata,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            call=lambda: self._provider.chat(
+                messages,
+                tools=tools,
+                max_tokens=max_tokens,
+                temperature=temperature,
+            ),
+        )
+
+    def _traced_call(
+        self,
+        operation: str,
+        *,
+        metadata: dict[str, Any],
+        temperature: float,
+        max_tokens: int | None,
+        call: Callable[[], LLMResponse],
+    ) -> LLMResponse:
+        with self._tracer.generation(
+            operation,
             model=self._provider.name,
             metadata=metadata,
             model_parameters={
@@ -329,16 +388,13 @@ class _TracedLLMProvider:
                 "max_tokens": max_tokens,
             },
         ) as span:
-            response = self._provider.generate(
-                prompt,
-                system=system,
-                max_tokens=max_tokens,
-                temperature=temperature,
-            )
+            response = call()
             output: dict[str, Any] = {
                 "response_chars": len(response.text),
                 "finish_reason": response.finish_reason,
             }
+            if response.tool_calls:
+                output["tool_calls"] = len(response.tool_calls)
             if self._tracer.include_content:
                 output["output"] = response.text[:2000]
             span.update(

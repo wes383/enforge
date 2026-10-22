@@ -51,7 +51,7 @@ from dr_core.db.repositories import (
     SourceRepository,
     SourceVersionRepository,
 )
-from dr_core.normalization import normalize_doi, normalize_url, text_sha256
+from dr_core.normalization import text_sha256
 from dr_core.providers.errors import ProviderError
 from dr_core.providers.models import FetchStatus
 from dr_core.providers.orchestration import fetch_web_content
@@ -94,6 +94,7 @@ from dr_core.research.models import (
 )
 from dr_core.research.planning import build_plan_with_llm
 from dr_core.research.quality import build_evidence_matrix
+from dr_core.research.recon import run_recon
 from dr_core.research.reporting import (
     claim_status_counts,
     persist_report_artifacts,
@@ -102,7 +103,14 @@ from dr_core.research.reporting import (
     source_views,
 )
 from dr_core.research.retrieval import HybridRetriever, RetrievalFilters, RetrievalHit
+from dr_core.research.source_records import (
+    academic_source_record as _academic_source_record,
+    merge_source_record as _merge_source_record,
+    source_keys as _source_keys,
+    web_source_record as _web_source_record,
+)
 from dr_core.research.state import ResearchState
+from dr_core.research.tools import ResearchToolbox
 from dr_core.research.text import (
     best_sentence_span,
     citation_markers,
@@ -181,6 +189,79 @@ def parse_brief(ctx: ResearchContext):
     return node
 
 
+def research_recon(ctx: ResearchContext):
+    def node(state: ResearchState) -> ResearchState:
+        researcher = _llm_recon(ctx)
+        if researcher is None:
+            return {"current_node": "research_recon"}
+        with node_timeout(_recon_node_timeout(ctx)):
+            ctx.guard()
+            brief = _brief(state)
+            ctx.emit(
+                RunEventType.PHASE_STARTED,
+                message="Background research started",
+                dedupe_key="phase:recon:started",
+                stage=RunStatus.PLANNING,
+            )
+            toolbox = ResearchToolbox(
+                ctx,
+                brief,
+                max_sources=ctx.settings.research_recon_max_sources,
+                existing=_source_records(state),
+            )
+            outcome = run_recon(
+                brief,
+                researcher,
+                toolbox,
+                max_rounds=ctx.settings.research_recon_max_rounds,
+                max_tool_calls=ctx.settings.research_recon_max_tool_calls,
+            )
+            digest = outcome.digest
+            limitations = (
+                [
+                    _text(
+                        brief,
+                        "前置侦察未完成，研究问题仅依据项目简介生成。",
+                        "Background reconnaissance did not complete; research "
+                        "questions rely on the brief only.",
+                    )
+                ]
+                if digest is None
+                else []
+            )
+            if outcome.error:
+                logger.warning(
+                    "Reconnaissance for run %s ended early: %s",
+                    ctx.run_id,
+                    outcome.error,
+                )
+            ctx.emit(
+                RunEventType.PHASE_COMPLETED,
+                message="Background research completed",
+                payload={
+                    "sources": len(outcome.sources),
+                    "searches": outcome.searches,
+                    "tool_calls": outcome.tool_calls,
+                    "llm_calls": outcome.llm_calls,
+                    "completed": digest is not None,
+                },
+                dedupe_key="phase:recon:completed",
+                stage=RunStatus.PLANNING,
+            )
+            return {
+                "recon": (
+                    digest.model_dump(mode="json") if digest is not None else {}
+                ),
+                "sources": [
+                    record.model_dump(mode="json") for record in outcome.sources
+                ],
+                "limitations": _with_limitations(state, *limitations),
+                "current_node": "research_recon",
+            }
+
+    return node
+
+
 def plan_research(ctx: ResearchContext):
     def node(state: ResearchState) -> ResearchState:
         with node_timeout(_planning_node_timeout(ctx)):
@@ -190,6 +271,7 @@ def plan_research(ctx: ResearchContext):
             feedback_text = feedback_state.get("feedback")
             current_plan = _plan_or_none(state)
             version = 1 if current_plan is None else current_plan.version + 1
+            recon = state.get("recon") or None
             planner = _llm_planner(ctx)
             plan = (
                 build_plan_with_llm(
@@ -197,6 +279,7 @@ def plan_research(ctx: ResearchContext):
                     planner,
                     version=version,
                     feedback=feedback_text,
+                    background=recon,
                 )
                 if planner is not None
                 else None
@@ -226,6 +309,7 @@ def plan_research(ctx: ResearchContext):
                 payload={
                     "plan_version": plan.version,
                     "planner": "llm" if used_planner else "template",
+                    "recon_sources": int((recon or {}).get("source_count", 0)),
                     "question_ids": [
                         str(item.question_id) for item in plan.questions
                     ],
@@ -2305,99 +2389,6 @@ def _mark_query_failed(ctx: ResearchContext, query_id: UUID, error: str) -> None
         )
 
 
-def _web_source_record(ingested, result, question_id) -> SourceRecord:
-    return SourceRecord(
-        source_id=ingested.source_id,
-        source_version_id=ingested.version_id,
-        title=result.title,
-        url=result.url,
-        fetch_url=result.url,
-        authors=[],
-        published_at=result.published_at,
-        source_type=SourceType.WEB_PAGE,
-        source_origin=SourceOrigin.WEB_SEARCH,
-        provider=result.provider.value,
-        score=result.score,
-        snippet=result.snippet,
-        has_full_text=False,
-        parser_status=(
-            ingested.parser_status.value if ingested.parser_status else None
-        ),
-        question_ids=[question_id] if question_id else [],
-        rank=result.rank,
-    )
-
-
-def _academic_source_record(ingested, result, question_id) -> SourceRecord:
-    return SourceRecord(
-        source_id=ingested.source_id,
-        source_version_id=ingested.version_id,
-        title=result.title,
-        url=result.url,
-        fetch_url=result.open_access_url or result.url,
-        doi=result.doi,
-        authors=list(result.authors),
-        published_at=result.published_at,
-        source_type=_academic_source_type(result.work_type),
-        source_origin=SourceOrigin.ACADEMIC_SEARCH,
-        provider=result.provider.value,
-        score=result.score,
-        snippet=result.abstract,
-        has_full_text=False,
-        parser_status=(
-            ingested.parser_status.value if ingested.parser_status else None
-        ),
-        question_ids=[question_id] if question_id else [],
-        rank=result.rank,
-    )
-
-
-def _merge_source_record(
-    existing: SourceRecord,
-    candidate: SourceRecord,
-) -> SourceRecord:
-    updates = {}
-    for field in ("doi", "url", "fetch_url", "authors", "published_at", "snippet"):
-        if not getattr(existing, field) and getattr(candidate, field):
-            updates[field] = getattr(candidate, field)
-    if not existing.source_version_id and candidate.source_version_id:
-        updates["source_version_id"] = candidate.source_version_id
-    if existing.score is None or (
-        candidate.score is not None and candidate.score > existing.score
-    ):
-        updates["score"] = candidate.score
-    if existing.rank_score is None or (
-        candidate.rank_score is not None
-        and candidate.rank_score > (existing.rank_score or 0)
-    ):
-        updates["rank_score"] = candidate.rank_score
-    if candidate.has_full_text and not existing.has_full_text:
-        updates["has_full_text"] = True
-        updates["source_version_id"] = candidate.source_version_id
-        updates["parser_status"] = candidate.parser_status
-    merged_questions = list(
-        dict.fromkeys([*existing.question_ids, *candidate.question_ids])
-    )
-    if merged_questions != existing.question_ids:
-        updates["question_ids"] = merged_questions
-    return existing.model_copy(update=updates) if updates else existing
-
-
-def _source_keys(record: SourceRecord) -> list[str]:
-    keys = [f"id:{record.source_id}"]
-    if record.doi:
-        try:
-            keys.append(f"doi:{normalize_doi(record.doi)}")
-        except ValueError:
-            pass
-    if record.url:
-        try:
-            keys.append(f"url:{normalize_url(record.url)}")
-        except ValueError:
-            pass
-    return keys
-
-
 def _source_text(ctx: ResearchContext, record: SourceRecord, parser) -> str | None:
     with ctx.database.session() as session:
         version = SourceVersionRepository(session).get(
@@ -2674,6 +2665,33 @@ def _planning_node_timeout(ctx: ResearchContext) -> int:
     return _llm_node_timeout(ctx, 1)
 
 
+def _llm_recon(ctx: ResearchContext):
+    # Reconnaissance only exists to ground the model plan, and it needs a
+    # provider that can actually run a tool-calling turn.
+    if not (
+        ctx.settings.research_llm_recon_enabled
+        and ctx.settings.research_llm_planning_enabled
+    ):
+        return None
+    llm = ctx.registry.llm
+    if (
+        llm is None
+        or getattr(llm, "name", "") == "mock-llm"
+        or not callable(getattr(llm, "chat", None))
+    ):
+        return None
+    return UsageRecordingLLM(llm, ctx.record_usage)
+
+
+def _recon_node_timeout(ctx: ResearchContext) -> int:
+    if _llm_recon(ctx) is None:
+        return ctx.settings.research_node_timeout_seconds
+    return _llm_node_timeout(
+        ctx,
+        ctx.settings.research_recon_max_rounds + 1,
+    )
+
+
 def _writing_node_timeout(ctx: ResearchContext, state: ResearchState) -> int:
     if _llm_writer(ctx) is None:
         return ctx.settings.research_node_timeout_seconds
@@ -2783,20 +2801,3 @@ def _no_provider_message(brief: ResearchBrief) -> str:
 
 def _text(brief: ResearchBrief, zh: str, en: str) -> str:
     return zh if brief.language is ProjectLanguage.ZH else en
-
-
-def _academic_source_type(work_type: str | None) -> SourceType:
-    normalized = (work_type or "").casefold()
-    if "journal" in normalized:
-        return SourceType.JOURNAL_ARTICLE
-    if "proceedings" in normalized or "conference" in normalized:
-        return SourceType.CONFERENCE_PAPER
-    if "posted" in normalized or "preprint" in normalized:
-        return SourceType.PREPRINT
-    if "book" in normalized:
-        return SourceType.BOOK
-    if "report" in normalized:
-        return SourceType.REPORT
-    if "dataset" in normalized:
-        return SourceType.DATASET
-    return SourceType.WEB_PAGE

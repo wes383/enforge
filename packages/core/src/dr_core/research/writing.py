@@ -14,6 +14,7 @@ from dr_core.security.prompt_injection import (
     untrusted_rules,
     wrap_untrusted,
 )
+from dr_core.research.llm_json import parse_llm_json
 from dr_core.research.models import (
     EvidenceMatrix,
     EvidenceRow,
@@ -625,7 +626,7 @@ def _llm_section(
             max_tokens=max(400, section.target_words * 3),
             temperature=0.2,
         )
-        payload = _parse_llm_json(response.text)
+        payload = parse_llm_json(response.text)
         markdown = str(payload.get("markdown") or "").strip()
     except Exception as exc:
         logger.warning("LLM section generation failed: %s", exc)
@@ -707,17 +708,6 @@ def _allowed_numbers(evidence: list[Any], sources: dict[UUID, Any]) -> set[str]:
         if getattr(source, "published_at", None):
             numbers.add(str(source.published_at.year))
     return numbers
-
-
-def _parse_llm_json(text: str) -> dict[str, Any]:
-    cleaned = text.strip()
-    if cleaned.startswith("```"):
-        cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)
-        cleaned = re.sub(r"\s*```$", "", cleaned)
-    value = json.loads(cleaned)
-    if not isinstance(value, dict):
-        raise ValueError("LLM output must be a JSON object")
-    return value
 
 
 def _row_for_question(
