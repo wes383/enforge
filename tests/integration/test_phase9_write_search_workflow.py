@@ -199,6 +199,12 @@ def test_workflow_uses_write_time_supplemental_search(database):
             (prompt.get("search"), len(prompt.get("evidence", [])))
             for prompt in _WRITE_PROMPTS
         ]
+        first_prompt = _WRITE_PROMPTS[0]
+        assert first_prompt["prior_sections"]
+        assert first_prompt["prior_sections"][0]["summary"]
+        assert any(
+            "not evidence" in rule for rule in first_prompt["rules"]
+        )
 
         supplement_prompt = next(
             prompt

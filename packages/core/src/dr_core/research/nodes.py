@@ -117,7 +117,7 @@ from dr_core.research.text import best_sentence_span
 from dr_core.research.usage import UsageRecordingLLM
 from dr_core.research.verification import audit_section, verify_run_claims
 from dr_core.research.write_search import WriteSearchSession
-from dr_core.research.writing import compose_section
+from dr_core.research.writing import compose_section, summarize_section_content
 from dr_core.schemas import (
     DraftSectionCreate,
     ResearchQuestionCreate,
@@ -1694,6 +1694,7 @@ def write_sections(ctx: ResearchContext):
                 else 0
             )
             new_evidence_ids: set[str] = set()
+            prior_sections: list[dict] = []
             sections_state: list[dict] = []
             for position, section in enumerate(outline.sections):
                 ctx.guard()
@@ -1749,8 +1750,16 @@ def write_sections(ctx: ResearchContext):
                     llm=llm,
                     supplement=supplement,
                     max_search_requests=max_search_requests,
+                    prior_sections=prior_sections,
                 )
                 content = draft.content
+                prior_sections.append(
+                    {
+                        "index": section.index,
+                        "title": section.title,
+                        "summary": summarize_section_content(content),
+                    }
+                )
                 content_hash = text_sha256(content)
                 with ctx.database.session_scope() as session:
                     repo = DraftSectionRepository(session)

@@ -22,11 +22,19 @@ from dr_core.research.models import (
     ResearchBrief,
     ResearchGap,
 )
-from dr_core.research.text import citation_markers, tokenize
+from dr_core.research.text import (
+    citation_markers,
+    split_paragraphs,
+    split_sentences,
+    tokenize,
+)
 
 logger = logging.getLogger(__name__)
 
 _NUMBER_RE = re.compile(r"(?:19|20)\d{2}|\d+(?:[.,]\d+)?%?")
+_CITATION_RE = re.compile(r"\[S\d+\]")
+_PRIOR_SUMMARY_CHARS = 240
+_PRIOR_CONTEXT_CHARS = 4000
 _LIMITATION_TITLES = {
     "研究局限与未解决问题",
     "limitations and open questions",
@@ -55,6 +63,15 @@ class SectionDraft:
     evidence_ids: list[UUID]
     used_llm: bool = False
     notes: tuple[str, ...] = field(default_factory=tuple)
+
+
+def summarize_section_content(content: str) -> str:
+    cleaned = _CITATION_RE.sub(" ", content)
+    paragraphs = split_paragraphs(cleaned)
+    text = paragraphs[0] if paragraphs else cleaned
+    sentences = split_sentences(text)
+    summary = " ".join(sentences[:2]) if sentences else text
+    return " ".join(summary.split())[:_PRIOR_SUMMARY_CHARS]
 
 
 @dataclass(frozen=True, slots=True)
@@ -88,6 +105,7 @@ def compose_section(
     llm: LLMProvider | None = None,
     supplement: Callable[[list[WriteSearchRequest]], WriteSearchOutcome] | None = None,
     max_search_requests: int = 0,
+    prior_sections: list[dict[str, Any]] | None = None,
 ) -> SectionDraft:
     if llm is not None:
         llm_draft = _llm_section(
@@ -100,6 +118,7 @@ def compose_section(
             llm=llm,
             supplement=supplement,
             max_search_requests=max_search_requests,
+            prior_sections=prior_sections or [],
         )
         if llm_draft is not None:
             return llm_draft
@@ -563,6 +582,7 @@ def _llm_section(
     llm: LLMProvider,
     supplement: Callable[[list[WriteSearchRequest]], WriteSearchOutcome] | None = None,
     max_search_requests: int = 0,
+    prior_sections: list[dict[str, Any]] | None = None,
 ) -> SectionDraft | None:
     if section.index == 0 or section.title.casefold() in _LIMITATION_TITLES:
         return None
@@ -582,6 +602,7 @@ def _llm_section(
         injection_categories=injection_categories,
         next_section_title=next_section_title,
         max_search_requests=max_search_requests if can_search else 0,
+        prior_sections=prior_sections or [],
     )
     payload = _generate_section_payload(llm, prompt, section)
     if payload is None:
@@ -615,6 +636,7 @@ def _llm_section(
             injection_categories=injection_categories,
             next_section_title=next_section_title,
             max_search_requests=0,
+            prior_sections=prior_sections or [],
             supplement_note={
                 "searches": outcome.searches,
                 "sources_added": outcome.sources_added,
@@ -715,7 +737,9 @@ def _writing_prompt(
     next_section_title: str | None,
     max_search_requests: int,
     supplement_note: dict[str, Any] | None = None,
+    prior_sections: list[dict[str, Any]] | None = None,
 ) -> str:
+    prior_sections = prior_sections or []
     rules = [
         "Use only the supplied evidence; do not add external facts.",
         "Cite every factual sentence with one or more supplied markers such as [S3].",
@@ -750,6 +774,12 @@ def _writing_prompt(
             "No new evidence was found. Write only what the supplied evidence "
             "supports and state the remaining gap."
         )
+    if prior_sections:
+        rules.append(
+            "Use prior_sections only for continuity and to avoid repeating "
+            "earlier material. They are not evidence: do not cite them or copy "
+            "facts, numbers, or citations from them."
+        )
     rules.extend(untrusted_rules())
     rules.append("Return JSON only.")
     payload: dict[str, Any] = {
@@ -772,10 +802,39 @@ def _writing_prompt(
         "rules": rules,
         "untrusted_content_warnings": sorted(injection_categories),
         "next_section": next_section_title,
+        "prior_sections": _prior_prompt_sections(prior_sections),
     }
     if supplement_note is not None:
         payload["supplemental_search"] = supplement_note
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _prior_prompt_sections(
+    prior_sections: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    remaining = _PRIOR_CONTEXT_CHARS
+    rendered: list[dict[str, Any]] = []
+    for entry in reversed(prior_sections):
+        title = " ".join(str(entry.get("title") or "").split())[:200]
+        summary = " ".join(str(entry.get("summary") or "").split())
+        if summary and remaining > 0:
+            summary = summary[:remaining]
+            remaining -= len(summary)
+        else:
+            summary = ""
+        rendered.append(
+            {
+                "index": entry.get("index"),
+                "title": wrap_untrusted(title, label="prior_section_title"),
+                "summary": (
+                    wrap_untrusted(summary, label="prior_section_summary")
+                    if summary
+                    else None
+                ),
+            }
+        )
+    rendered.reverse()
+    return rendered
 
 
 def _generate_section_payload(

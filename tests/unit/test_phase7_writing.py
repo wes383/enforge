@@ -33,6 +33,7 @@ from dr_core.research.writing import (
     WriteSearchOutcome,
     compose_section,
     numeric_tokens,
+    summarize_section_content,
 )
 
 
@@ -104,6 +105,7 @@ def _section(
     numbering=None,
     supplement=None,
     max_search_requests=0,
+    prior_sections=None,
 ):
     support, refute = [], []
     for item in evidence:
@@ -162,6 +164,7 @@ def _section(
         llm=llm,
         supplement=supplement,
         max_search_requests=max_search_requests,
+        prior_sections=prior_sections,
     )
     return draft, sources, numbering, matrix
 
@@ -493,6 +496,58 @@ def test_llm_section_writes_with_existing_evidence_when_search_finds_nothing():
     assert any(
         "No new evidence was found" in rule for rule in second["rules"]
     )
+
+
+def test_llm_section_receives_prior_section_context():
+    question_id = uuid4()
+    support = _evidence(question_id, uuid4())
+    llm = _SequenceLLM(
+        [
+            {
+                "markdown": (
+                    "## Question\n\n"
+                    "Enforcement improves compliance [S1]."
+                )
+            }
+        ]
+    )
+
+    draft, _, _, _ = _section(
+        question_id,
+        title="Question",
+        evidence=[support],
+        llm=llm,
+        prior_sections=[
+            {
+                "index": 0,
+                "title": "Introduction",
+                "summary": "The introduction frames the enforcement debate.",
+            }
+        ],
+    )
+
+    assert draft.used_llm
+    prompt = json.loads(llm.prompts[0])
+    assert prompt["prior_sections"][0]["index"] == 0
+    assert "Introduction" in prompt["prior_sections"][0]["title"]
+    assert prompt["prior_sections"][0]["summary"].startswith(
+        '<UNTRUSTED_SOURCE_DATA label="prior_section_summary"'
+    )
+    assert any("not evidence" in rule for rule in prompt["rules"])
+
+
+def test_summarize_section_content_keeps_leading_sentences_without_markers():
+    summary = summarize_section_content(
+        "## Overview\n\n"
+        "Enforcement improves compliance among audited firms [S1]. "
+        "Costs increase for small firms [S2]. "
+        "A third sentence that should not appear in the summary. "
+    )
+
+    assert "Enforcement improves" in summary
+    assert "Costs increase" in summary
+    assert "third sentence" not in summary
+    assert "[S1]" not in summary
 
 
 def test_llm_section_falls_back_on_unsafe_output():
