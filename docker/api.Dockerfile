@@ -9,9 +9,8 @@ WORKDIR /app
 
 ARG INSTALL_DEV=false
 
-COPY packages/core /app/packages/core
-RUN pip install --no-cache-dir /app/packages/core
-
+# Third-party dependencies are keyed only on the manifests, so editing source
+# below never re-downloads pip packages.
 COPY services/api/requirements.txt /app/requirements.txt
 RUN pip install --no-cache-dir -r /app/requirements.txt
 
@@ -19,6 +18,13 @@ COPY services/api/requirements-dev.txt /app/requirements-dev.txt
 RUN if [ "$INSTALL_DEV" = "true" ]; then \
         pip install --no-cache-dir -r /app/requirements-dev.txt; \
     fi
+
+COPY packages/core/pyproject.toml /tmp/core/pyproject.toml
+RUN python -c "import tomllib; print(' '.join(tomllib.load(open('/tmp/core/pyproject.toml', 'rb'))['project']['dependencies']))" > /tmp/core-deps.txt \
+    && pip install --no-cache-dir -r /tmp/core-deps.txt
+
+COPY packages/core /app/packages/core
+RUN pip install --no-cache-dir --no-deps /app/packages/core
 
 COPY services/api/app /app/app
 COPY alembic.ini /app/alembic.ini

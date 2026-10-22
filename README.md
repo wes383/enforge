@@ -1013,6 +1013,20 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 docker compose up -d --force-recreate api worker
 ```
 
+### 什么时候需要重新 build
+
+| 改动 | 需要执行 |
+|---|---|
+| `packages/core/`、`services/api/app/`（后端代码） | `docker compose up -d --build api worker`；测试镜像 `run --rm --build test`（现在约 2–3 秒） |
+| `apps/web/`（前端代码） | `docker compose up -d --build web` |
+| `tests/`、`pytest.ini` | 不需要，测试服务只读挂载这些目录，直接 `run --rm test` |
+| `migrations/`、`alembic.ini` | 测试不需要；`migrate` 服务复用 api 镜像，部署时要重建 api |
+| `.env`、`docker-compose.yml` 里的环境变量 | 不需要 build，`docker compose up -d --force-recreate <service>` 即可 |
+| `pyproject.toml`、`requirements*.txt`、`package-lock.json`、Dockerfile | 需要 build（会重新安装依赖） |
+| README、文档 | 不需要 |
+
+`docker/api.Dockerfile` 先按清单安装 Python 依赖，再用 `--no-deps` 安装 core，因此改后端源码只重跑最后几层；只有依赖清单变化才会触发完整的 pip 安装。前端镜像的 `npm ci` 也位于源码复制之前，改页面只重跑 `next build`。
+
 阶段 9 测试内容：
 
 - Langfuse ingestion 客户端：Basic Auth、批量发送、207 部分失败与网络失败降级，均不抛出异常。
