@@ -80,7 +80,7 @@ class Settings(BaseSettings):
     # Model generation is far slower than search APIs (reasoning models spend tens
     # of seconds per section), so it gets its own timeout and retry budget instead
     # of inheriting the provider defaults.
-    llm_request_timeout_seconds: float = Field(default=120.0, gt=0, le=900)
+    llm_request_timeout_seconds: float = Field(default=240.0, gt=0, le=900)
     llm_max_retries: int = Field(default=0, ge=0, le=5)
 
     # Optional per-million-token prices for the configured endpoint. Cost stays 0

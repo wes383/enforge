@@ -764,6 +764,7 @@ def test_llm_section_receives_prior_section_context():
         '<UNTRUSTED_SOURCE_DATA label="prior_section_summary"'
     )
     assert any("not evidence" in rule for rule in prompt["rules"])
+    assert any("Paraphrase the evidence" in rule for rule in prompt["rules"])
 
 
 def test_summarize_section_content_keeps_leading_sentences_without_markers():

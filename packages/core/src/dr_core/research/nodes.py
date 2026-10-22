@@ -113,7 +113,7 @@ from dr_core.research.source_records import (
 )
 from dr_core.research.state import ResearchState
 from dr_core.research.tools import ResearchToolbox
-from dr_core.research.text import best_sentence_span
+from dr_core.research.text import best_sentence_span_for_queries
 from dr_core.research.usage import UsageRecordingLLM
 from dr_core.research.verification import audit_section, verify_run_claims
 from dr_core.research.write_search import WriteSearchSession
@@ -1108,48 +1108,54 @@ def extract_evidence(ctx: ResearchContext):
                     for question in plan.questions:
                         if total_evidence >= brief.max_evidence:
                             break
-                        result = retriever.search(
-                            question.question,
-                            filters=filters,
-                            limit=min(ctx.settings.research_retrieval_limit, 8),
-                        )
-                        retrieval_degraded = (
-                            retrieval_degraded or result.degraded_reason
-                        )
-                        retrieval_hits += len(result.hits)
+                        queries = _question_queries(question)
                         used_sources: set[UUID] = set()
-                        for hit in result.hits:
+                        for query in queries:
                             if total_evidence >= brief.max_evidence:
                                 break
-                            if hit.source_id in used_sources:
-                                continue
-                            matches = best_sentence_span(
-                                hit.text,
-                                question.question,
-                                limit=1,
+                            result = retriever.search(
+                                query,
+                                filters=filters,
+                                limit=min(
+                                    ctx.settings.research_retrieval_limit,
+                                    8,
+                                ),
                             )
-                            if not matches:
-                                continue
-                            sentence, _, start, end = matches[0]
-                            with ctx.database.session_scope() as session:
-                                item = EvidenceRepository(session).create(
-                                    ctx.project_id,
-                                    ctx.run_id,
-                                    _evidence_from_hit(
-                                        hit,
-                                        question_id=question.question_id,
-                                        sentence=sentence,
-                                        start=start,
-                                        end=end,
-                                    ),
-                                )
-                                if str(item.id) in evidence_ids:
+                            retrieval_degraded = (
+                                retrieval_degraded or result.degraded_reason
+                            )
+                            retrieval_hits += len(result.hits)
+                            for hit in result.hits:
+                                if total_evidence >= brief.max_evidence:
+                                    break
+                                if hit.source_id in used_sources:
                                     continue
-                                evidence_ids.add(str(item.id))
-                            total_evidence += 1
-                            created += 1
-                            used_sources.add(hit.source_id)
-                            retrieved_questions.add(question.question_id)
+                                match = best_sentence_span_for_queries(
+                                    hit.text,
+                                    queries,
+                                )
+                                if match is None:
+                                    continue
+                                sentence, _, start, end = match
+                                with ctx.database.session_scope() as session:
+                                    item = EvidenceRepository(session).create(
+                                        ctx.project_id,
+                                        ctx.run_id,
+                                        _evidence_from_hit(
+                                            hit,
+                                            question_id=question.question_id,
+                                            sentence=sentence,
+                                            start=start,
+                                            end=end,
+                                        ),
+                                    )
+                                    if str(item.id) in evidence_ids:
+                                        continue
+                                    evidence_ids.add(str(item.id))
+                                total_evidence += 1
+                                created += 1
+                                used_sources.add(hit.source_id)
+                                retrieved_questions.add(question.question_id)
 
             uncovered = [
                 question
@@ -1180,16 +1186,15 @@ def extract_evidence(ctx: ResearchContext):
                     for question in source_questions:
                         if total_evidence >= brief.max_evidence:
                             break
+                        queries = _question_queries(question)
                         match = None
                         matched_text = None
                         for text in texts:
-                            matches = best_sentence_span(
+                            match = best_sentence_span_for_queries(
                                 text,
-                                question.question,
-                                limit=1,
+                                queries,
                             )
-                            if matches:
-                                match = matches[0]
+                            if match is not None:
                                 matched_text = text
                                 break
                         if match is None or matched_text is None:
@@ -2303,6 +2308,19 @@ def _refresh_evidence_matrix(
                     project_id=ctx.project_id,
                 )
     return matrix
+
+
+def _question_queries(question: ResearchQuestion) -> list[str]:
+    queries: list[str] = []
+    seen: set[str] = set()
+    for value in [question.question, *question.search_terms]:
+        text = " ".join(str(value or "").split())
+        key = text.casefold()
+        if not text or key in seen:
+            continue
+        seen.add(key)
+        queries.append(text)
+    return queries
 
 
 def _source_records(state: ResearchState) -> list[SourceRecord]:

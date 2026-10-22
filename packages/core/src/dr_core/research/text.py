@@ -160,6 +160,34 @@ def best_sentence_span(
     return scored[: max(1, limit)]
 
 
+def best_sentence_span_for_queries(
+    text: str,
+    queries: Iterable[str],
+    *,
+    minimum_score: int = 1,
+) -> tuple[str, int, int, int] | None:
+    best: tuple[str, int, int, int] | None = None
+    seen: set[str] = set()
+    for query in queries:
+        normalized = " ".join(str(query or "").split())
+        key = normalized.casefold()
+        if not normalized or key in seen:
+            continue
+        seen.add(key)
+        matches = best_sentence_span(
+            text,
+            normalized,
+            limit=1,
+            minimum_score=minimum_score,
+        )
+        if not matches:
+            continue
+        candidate = matches[0]
+        if best is None or candidate[1] > best[1]:
+            best = candidate
+    return best
+
+
 def context_window(
     text: str,
     start: int,

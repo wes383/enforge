@@ -36,7 +36,7 @@
 - 论证型提纲：每个章节保存标题、写作目的、关联研究问题、关键主张、支持证据 ID、反对证据 ID、预期字数和 `planned/drafted/verified` 状态；提纲审批通过后，写作和核验阶段会回写章节状态。
 - 分章节长文写作：写作节点按章节选择数据库证据，并把证据综合成连续行文，而不是逐条罗列；引言交代范围与主线，各问题章节讨论支持证据、分歧与适用条件，结论只做综合而不重复前文；章节保存 `citation_map`、使用过的证据 ID 和版本，内容变化时自动生成新版本。
 - 可选的模型规划：打开 `RESEARCH_LLM_PLANNING_ENABLED=true` 后由大模型按项目简报生成研究问题，语言、深度（决定问题数）、范围、目标读者和上一轮审批反馈都进入提示词；每个问题同时产出 1–3 个短检索词，中文项目还会要求一条英文检索词供学术库使用；输出必须是 JSON，且要通过去重、数量、语言和题目相关性校验，否则回退到确定性模板并在研究局限中记录原因。
-- 可选的模型写作：配置 `OPENAI_API_KEY`（任意 OpenAI 兼容端点）并显式打开 `RESEARCH_LLM_WRITING_ENABLED=true` 时才启用；输出必须是 JSON，且通过引用标记、段落引用、数字和参考文献禁令校验，否则自动回退到确定性写作。写作提示词按引言/主体/结论分配角色，要求连续行文、综合论证，禁止“本节回答的问题是”“证据显示”和“下一节将讨论”这类报告腔；引言同样可以由模型撰写。写作模型发现当前章节证据不足时可以请求补充检索：服务端按请求执行有界搜索、正常入库、建立索引并抽取本节证据，然后让模型基于新证据重写一次；因此写作不再局限于提纲审批前已经收集到的材料。
+- 可选的模型写作：配置 `OPENAI_API_KEY`（任意 OpenAI 兼容端点）并显式打开 `RESEARCH_LLM_WRITING_ENABLED=true` 时才启用；输出必须是 JSON，且通过引用标记、段落引用、数字和参考文献禁令校验，否则自动回退到确定性写作。写作提示词按引言/主体/结论分配角色，要求连续行文、综合论证，并明确要求用自己的话转述证据、不得连续照抄原文长句，禁止“本节回答的问题是”“证据显示”和“下一节将讨论”这类报告腔；引言同样可以由模型撰写。写作模型发现当前章节证据不足时可以请求补充检索：服务端按请求执行有界搜索、正常入库、建立索引并抽取本节证据，然后让模型基于新证据重写一次；因此写作不再局限于提纲审批前已经收集到的材料。
 - 可选的前置侦察（有界 agent）：同时打开 `RESEARCH_LLM_RECON_ENABLED` 与 `RESEARCH_LLM_PLANNING_ENABLED` 后，模型可在规划前通过 `search_sources` / `read_source` 工具检索并阅读来源，最多 2 轮工具调用，最后返回主题、术语与争议摘要；检索结果先走正常入库管道再返回给模型，所以侦察来源之后仍可被证据抽取和引用。侦察摘要只作为不可信背景供规划选角度，不进入证据或参考文献。
 - 用量与成本记账：每次模型调用的 `usage` 累加到运行的 `input_tokens`/`output_tokens`/`cost_usd`，金额按可配置单价计算；单价为 0 时只显示 tokens。token/成本预算守卫读取同一组数值。
 - 主张核验：从正文抽取带引用和缺少引用的事实性、量化、因果、比较、规范与预测主张；确定性规则检查引用映射、来源存在性、原文定位、数字/年份一致性、词项支持、绝对化措辞和反驳证据，状态为 `SUPPORTED`/`PARTIAL`/`CONTRADICTED`/`UNSUPPORTED`/`UNVERIFIABLE`，失败的核验结果不会被自动升级。
@@ -46,7 +46,7 @@
 - SQLAlchemy 2.0 仓储层，覆盖项目、运行、研究问题、检索、来源、切片、证据、主张、提纲、章节、引用核验、审批、事件和导出文件。
 - Alembic 从空数据库初始化、重复升级、降级/再升级和 `alembic check` 均通过；Compose 中的 `migrate` 服务在 `api`、`worker` 启动前完成迁移。
 - 文件记录与实际文件对账工具，能够报告缺失文件和孤儿文件。
-- 容器内单元测试和集成测试，当前 `288 passed`（通过 `docker-compose.test.yml` 强制 mock，真实密钥不参与测试）。
+- 容器内单元测试和集成测试，当前 `289 passed`（通过 `docker-compose.test.yml` 强制 mock，真实密钥不参与测试）。
 - 不包含 MinIO、S3 或任何对象存储服务。
 
 ## 服务拓扑
@@ -419,7 +419,7 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 
 适配器 `OpenAICompatibleLLMProvider`（`packages/core/src/dr_core/providers/llm.py`）走 `POST {OPENAI_BASE_URL}/chat/completions`，把 `usage` 映射为 token 用量供观测记录。默认不注册：只有 `OPENAI_API_KEY` 非空时才进入 `ProviderRegistry`，因此没有 Key 时系统依旧完全离线、写作与核验保持确定性路径。
 
-模型生成远比搜索接口慢，所以它有独立的超时与重试预算（`LLM_REQUEST_TIMEOUT_SECONDS`，默认 120s；`LLM_MAX_RETRIES`，默认 0 次），不复用给搜索设的 20s/3 次重试——否则推理模型每节都会被超时打断并反复重试，最终把整个运行拖到 Celery 时限之外。实测参考：某推理模型生成一段约 600 字正文耗时 36.5s、`completion_tokens=1538`（其中 reasoning 1214）。
+模型生成远比搜索接口慢，所以它有独立的超时与重试预算（`LLM_REQUEST_TIMEOUT_SECONDS`，默认 240s；`LLM_MAX_RETRIES`，默认 0 次），不复用给搜索设的 20s/3 次重试——否则推理模型每节都会被超时打断并反复重试，最终把整个运行拖到 Celery 时限之外。实测参考：某推理模型生成一段约 600 字正文耗时 36.5s、`completion_tokens=1538`（其中 reasoning 1214）；开启推理的模型可能超过 120s，因此超时默认值留出了更大余量。
 
 每次成功的模型调用都会把返回的 `usage` 原子累加到运行记录（`research_runs.input_tokens / output_tokens / cost_usd`），运行页顶部与项目页运行列表据此显示 tokens 与金额。金额按 `LLM_COST_PER_1M_INPUT_TOKENS` / `LLM_COST_PER_1M_OUTPUT_TOKENS` 计算；单价留空或为 0 时只累计 tokens、金额保持 0（兼容端点的价格无法推断）。记账失败只写一条 WARNING，不会让已经付费的运行失败。`RESEARCH_TOKEN_BUDGET`、`RESEARCH_COST_BUDGET_USD` 和项目 `budget_usd` 的预算守卫读的就是这组数值，因此打开模型后预算上限才真正生效。
 
@@ -427,12 +427,12 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 
 | 层级 | 未启用模型 | 启用模型写作/复核（默认值） |
 |---|---|---|
-| 单次模型请求 | — | `LLM_REQUEST_TIMEOUT_SECONDS` × (`LLM_MAX_RETRIES`+1) = 120s |
-| `research_recon` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + (`RESEARCH_RECON_MAX_ROUNDS` + 1) × 120s（打开侦察时） |
-| `plan_research` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 120s（打开 `RESEARCH_LLM_PLANNING_ENABLED` 时） |
-| `write_sections` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 章节数 × 120s；写作模型可用且存在搜索提供商时为 90s + 章节数 × 2 × 120s（为补检后的重写预留一次调用） |
-| `verify_claims` 节点 | 90s | 90s + `RESEARCH_CLAIM_LLM_REVIEW_LIMIT` × 120s |
-| Celery 软/硬时限 | 300s / 360s | 4170s / 4230s；再打开侦察为 4650s / 4710s，同时打开规划与侦察为 4890s / 4950s（取配置值与推算下限的较大者，Worker 启动时打印一条 WARNING 说明实际生效值） |
+| 单次模型请求 | — | `LLM_REQUEST_TIMEOUT_SECONDS` × (`LLM_MAX_RETRIES`+1) = 240s |
+| `research_recon` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + (`RESEARCH_RECON_MAX_ROUNDS` + 1) × 240s（打开侦察时） |
+| `plan_research` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 240s（打开 `RESEARCH_LLM_PLANNING_ENABLED` 时） |
+| `write_sections` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 章节数 × 240s；写作模型可用且存在搜索提供商时为 90s + 章节数 × 2 × 240s（为补检后的重写预留一次调用） |
+| `verify_claims` 节点 | 90s | 90s + `RESEARCH_CLAIM_LLM_REVIEW_LIMIT` × 240s |
+| Celery 软/硬时限 | 300s / 360s | 8250s / 8310s；再打开侦察为 9210s / 9270s，同时打开规划与侦察为 9690s / 9750s（取配置值与推算下限的较大者，Worker 启动时打印一条 WARNING 说明实际生效值） |
 
 主张复核另有次数上限（`RESEARCH_CLAIM_LLM_REVIEW_LIMIT`，默认 10），超出的主张保留确定性核验状态并记录一条日志，避免费用与耗时随主张数量线性膨胀。单节模型调用超时或校验失败只影响该节，会回退到确定性写作并继续。
 
@@ -730,6 +730,7 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
 
 `write_sections` 按章节读取数据库证据，而不是把整个研究库交给模型：
 
+- 证据抽取对每个问题同时使用问题原文和规划阶段产出的 `search_terms` 做检索与句子匹配；中文问题配英文检索词时，英文期刊/预印本摘要也能产生证据，而不是只剩中文网页。
 - 问题章节优先使用提纲中该问题的支持/反对证据；引言、矛盾、局限与结论章节使用各自相应的证据集合。
 - 每节提示词附前面章节的标题和 1–2 句摘要（所有摘要合计不超过 4000 字符）。摘要优先使用写作模型在同一次调用中返回的 `summary` 字段（去掉引用标记并截断到 240 字符）；缺失或该节回退到确定性写作时，用正文前 1–2 句兜底。摘要不增加模型调用，只用于衔接和避免重复；提示词明确要求不得把前文当作证据、引用其中的事实或数字。
 - 正文按文章结构组织：引言交代问题的张力、范围与主线；问题章节围绕一个维度综合支持证据、反例与适用条件；结论只做综合并说明能得出什么、不能得出什么，不重复前文句子。
@@ -970,7 +971,7 @@ docker compose exec api python -m dr_core.maintenance
 | `OPENAI_API_KEY` | 空 | OpenAI 兼容端点密钥；非空时注册真实 LLM 适配器，为空则完全离线 |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | Chat Completions 基地址，可指向任意 OpenAI 兼容网关 |
 | `OPENAI_MODEL` | `gpt-4o-mini` | 规划、写作与主张复核使用的模型名 |
-| `LLM_REQUEST_TIMEOUT_SECONDS` | `120` | 单次模型请求读取超时；推理模型每节常需 30–60s，不要沿用搜索的 20s |
+| `LLM_REQUEST_TIMEOUT_SECONDS` | `240` | 单次模型请求读取超时；推理模型每节常需 30–60s，开启 reasoning 后可能超过 120s，不要沿用搜索的 20s |
 | `LLM_MAX_RETRIES` | `0` | 模型请求重试次数；超时的章节直接回退确定性写作，重试只会拖长运行 |
 | `LLM_COST_PER_1M_INPUT_TOKENS` | `0` | 输入 token 单价（美元 / 百万 token）；为 0 时只累计 tokens，不估算金额 |
 | `LLM_COST_PER_1M_OUTPUT_TOKENS` | `0` | 输出 token 单价（美元 / 百万 token）；与输入单价一起决定运行成本 |
@@ -1029,7 +1030,7 @@ docker compose exec api python -m dr_core.maintenance
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test up -d --build api worker
 
-# 2) 运行单元 + 集成 + 评测（288 passed）
+# 2) 运行单元 + 集成 + 评测（289 passed）
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -1153,7 +1154,7 @@ docker compose up -d --force-recreate api worker
 - 缺失文件与孤儿文件识别。
 - 原有健康检查、CORS、文件跨容器往返和 Celery 测试任务。
 
-当前结果：`288 passed`（阶段 9 新增观测、安全、限流、LLM 适配器与质量评测测试；测试全程不需要网络或真实 API Key）。质量评测也可以单独运行：
+当前结果：`289 passed`（阶段 9 新增观测、安全、限流、LLM 适配器与质量评测测试；测试全程不需要网络或真实 API Key）。质量评测也可以单独运行：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
@@ -1205,7 +1206,7 @@ docker compose exec -T postgres psql -U enforge -d enforge -c \
 | Compose 配置检查 | `docker compose config --quiet` | 通过 |
 | 镜像构建 | `docker compose up -d --build` | `postgres`、`redis`、`migrate`、`api`、`worker`、`web` 全部 healthy |
 | 数据库迁移 | `migrate` 服务执行 `alembic upgrade head` | 成功；`alembic check` 返回 `No new upgrade operations detected` |
-| Python 单元/集成/评测测试 | `docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test run --rm --build test` | `288 passed` |
+| Python 单元/集成/评测测试 | `docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test run --rm --build test` | `289 passed` |
 | 前端类型检查 | `npm run typecheck` | 通过 |
 | 前端代码检查 | `npm run lint` | 通过 |
 | 前端构建 | `npm run build` | Next.js 16.4 生产构建通过 |
@@ -1284,7 +1285,7 @@ Linux/macOS 的恢复命令同样将第二个卷参数改为 `-v "$PWD/backups:/
 - 当前为单用户本地 MVP，没有用户登录和多用户项目权限；“项目级权限”指项目存在且未软删除、所有运行/文件/审批/证据按 `project_id` 强制过滤，以及 `MAX_ACTIVE_RUNS_PER_PROJECT` 并发限制。对外暴露的部署必须在反向代理后启用认证；多用户访问控制不在本仓库阶段计划内。
 - Phase 1 冒烟接口和 `POST /dev/runs/{run_id}/fail` 仅用于验收，必须在非本地环境设置 `ENABLE_DEV_ENDPOINTS=false`。
 - 阶段 7 的提纲与章节正文默认由确定性生成器基于数据库中的研究问题与证据组织，保证离线可测、引用可追溯；确定性回退也会输出连续行文并综合证据摘要，但不会像真实模型那样重写和推理。可选的真实 LLM 写作/主张复核开关默认关闭，仓库已内置 OpenAI 兼容适配器（`OPENAI_API_KEY` 非空时注册），但未配置密钥或校验失败时不会调用模型。真实模型产出的质量与成本未纳入当前评测指标（评测集固定使用确定性 Mock 提供商）。
-- 启用模型写作后单次运行会显著变慢（每节一次模型调用，推理模型 30–60s/节），Celery 软/硬时限会按 `LLM_*` 与 `RESEARCH_CLAIM_LLM_REVIEW_LIMIT` 自动放大（默认 2730s/2790s），期间该运行会占用一个 Worker 并发槽位；被硬超时或 Worker 重启打断的运行会停在非终态，需要重新投递任务才会从 checkpoint 恢复或落定为 `cancelled`。
+- 启用模型写作后单次运行会显著变慢（每节一次模型调用，推理模型 30–60s/节，开启 reasoning 后可能更久），Celery 软/硬时限会按 `LLM_*` 与 `RESEARCH_CLAIM_LLM_REVIEW_LIMIT` 自动放大（默认约 8250s/8310s），期间该运行会占用一个 Worker 并发槽位；被硬超时或 Worker 重启打断的运行会停在非终态，需要重新投递任务才会从 checkpoint 恢复或落定为 `cancelled`。
 - 阶段 4 的提供商默认全部关闭；只有同时设置 `*_ENABLED=true` 和后端密钥才会启用。启用但缺少密钥时会记录警告并跳过，不影响服务启动。未配置任何第三方 API Key 时，系统仍可迁移、启动并通过全部测试（测试使用 Mock 提供商，不访问网络）。
 - Tavily、Exa、Firecrawl、Crossref、Semantic Scholar 均在后端调用，密钥不会下发浏览器；错误信息、日志和缓存键不包含密钥。Firecrawl 只接受通过 SSRF 校验的 HTTP/HTTPS 公网地址，并在重定向后再次校验最终 URL。
 - 网页全文依赖 Firecrawl；未启用时来源只保留搜索摘要。付费墙、仅摘要、屏蔽和超限响应会记录为不同抓取状态，不会当作全文入库；Crossref 不提供被引列表，因此不伪造引用关系。

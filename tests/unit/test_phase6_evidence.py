@@ -18,13 +18,18 @@ from dr_core.providers.models import (
 )
 from dr_core.research.indexing import chunk_document, snippet_chunks
 from dr_core.research.models import ResearchQuestion
+from dr_core.research.nodes import _question_queries
 from dr_core.research.quality import (
     assess_evidence_quality,
     assess_source_quality,
     build_evidence_matrix,
     source_identity,
 )
-from dr_core.research.text import best_sentence_span, context_window
+from dr_core.research.text import (
+    best_sentence_span,
+    best_sentence_span_for_queries,
+    context_window,
+)
 
 FakeSource = namedtuple(
     "FakeSource",
@@ -169,6 +174,28 @@ def test_sentence_span_and_context_are_traceable():
     before, after = context_window(text, start, end, window=30)
     assert before == ""
     assert "Costs increase" in after
+
+
+def test_sentence_matching_uses_search_terms_for_english_sources():
+    question = ResearchQuestion(
+        question="哪些证据讨论青少年社交媒体使用与心理健康的关系？",
+        search_terms=["adolescent social media mental health"],
+    )
+    text = (
+        "Research shows that social media use is associated with poorer "
+        "adolescent mental health, with stronger adverse consequences for girls."
+    )
+
+    assert best_sentence_span(text, question.question, limit=1) == []
+
+    queries = _question_queries(question)
+    assert queries == [
+        question.question,
+        "adolescent social media mental health",
+    ]
+    match = best_sentence_span_for_queries(text, queries)
+    assert match is not None
+    assert match[0].startswith("Research shows that social media use")
 
 
 def test_source_identity_groups_doi_and_republished_titles():
