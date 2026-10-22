@@ -97,7 +97,7 @@ web (Next.js) ──▶ api (FastAPI, :8000)
 Prerequisites: Docker Desktop, or Docker Engine with the Compose plugin. Python and Node.js are not required on the host.
 
 ```bash
-git clone <repo-url> && cd enforge
+git clone https://github.com/wes383/enforge.git && cd enforge
 cp .env.example .env      # optional; built-in development defaults are used without it
 docker compose up --build -d
 docker compose ps

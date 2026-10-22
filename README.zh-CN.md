@@ -97,7 +97,7 @@ web (Next.js) ──▶ api (FastAPI, :8000)
 前置条件：Docker Desktop，或 Docker Engine + Compose 插件。宿主机不需要安装 Python 或 Node.js。
 
 ```bash
-git clone <repo-url> && cd enforge
+git clone https://github.com/wes383/enforge.git && cd enforge
 cp .env.example .env      # 可选；不创建时使用内置开发默认值
 docker compose up --build -d
 docker compose ps
