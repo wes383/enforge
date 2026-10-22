@@ -1757,7 +1757,8 @@ def write_sections(ctx: ResearchContext):
                     {
                         "index": section.index,
                         "title": section.title,
-                        "summary": summarize_section_content(content),
+                        "summary": draft.summary
+                        or summarize_section_content(content),
                     }
                 )
                 content_hash = text_sha256(content)

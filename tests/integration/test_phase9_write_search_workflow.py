@@ -84,7 +84,8 @@ def _fake_llm_handler(request: httpx.Request) -> httpx.Response:
                 "markdown": (
                     f"## {title}\n\n"
                     f"The collected evidence supports this section [{marker}]."
-                )
+                ),
+                "summary": f"Summary of {title}.",
             }
         )
     )
@@ -204,6 +205,11 @@ def test_workflow_uses_write_time_supplemental_search(database):
         assert first_prompt["prior_sections"][0]["summary"]
         assert any(
             "not evidence" in rule for rule in first_prompt["rules"]
+        )
+        assert any(
+            entry["summary"] and "Summary of" in entry["summary"]
+            for prompt in _WRITE_PROMPTS
+            for entry in prompt.get("prior_sections", [])
         )
 
         supplement_prompt = next(

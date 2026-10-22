@@ -63,6 +63,7 @@ class SectionDraft:
     evidence_ids: list[UUID]
     used_llm: bool = False
     notes: tuple[str, ...] = field(default_factory=tuple)
+    summary: str = ""
 
 
 def summarize_section_content(content: str) -> str:
@@ -72,6 +73,16 @@ def summarize_section_content(content: str) -> str:
     sentences = split_sentences(text)
     summary = " ".join(sentences[:2]) if sentences else text
     return " ".join(summary.split())[:_PRIOR_SUMMARY_CHARS]
+
+
+def _normalize_summary(value: Any, content: str) -> str:
+    if isinstance(value, str):
+        text = _CITATION_RE.sub(" ", value)
+        text = re.sub(r"[#*_`>]+", " ", text)
+        text = " ".join(text.split())[:_PRIOR_SUMMARY_CHARS]
+        if text:
+            return text
+    return summarize_section_content(content)
 
 
 @dataclass(frozen=True, slots=True)
@@ -674,6 +685,7 @@ def _llm_section(
         citation_map=citation_map,
         evidence_ids=_unique_ids(used_ids),
         used_llm=True,
+        summary=_normalize_summary(payload.get("summary"), markdown),
     )
 
 
@@ -756,8 +768,9 @@ def _writing_prompt(
             "\"reason\": string}. Request only searches that fill a concrete gap."
         )
         rules.append(
-            "If the evidence is sufficient, return {\"markdown\": \"## Title\\n\\n...\"} "
-            "and no needs_sources."
+            "If the evidence is sufficient, return "
+            "{\"markdown\": \"## Title\\n\\n...\", \"summary\": "
+            "\"1-2 sentence summary\"} and no needs_sources."
         )
     else:
         rules.append(
@@ -780,6 +793,10 @@ def _writing_prompt(
             "earlier material. They are not evidence: do not cite them or copy "
             "facts, numbers, or citations from them."
         )
+    rules.append(
+        "When returning markdown, also return a 1-2 sentence `summary` for "
+        "later sections; do not put citation markers in the summary."
+    )
     rules.extend(untrusted_rules())
     rules.append("Return JSON only.")
     payload: dict[str, Any] = {

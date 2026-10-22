@@ -498,6 +498,46 @@ def test_llm_section_writes_with_existing_evidence_when_search_finds_nothing():
     )
 
 
+def test_llm_section_returns_model_summary_for_later_context():
+    question_id = uuid4()
+    support = _evidence(question_id, uuid4())
+    llm = _FakeLLM(
+        {
+            "markdown": "## Question\n\nEnforcement improves compliance [S1].",
+            "summary": "Enforcement improves compliance in audited firms.",
+        }
+    )
+
+    draft, _, _, _ = _section(
+        question_id,
+        title="Does enforcement work?",
+        evidence=[support],
+        llm=llm,
+    )
+
+    assert draft.used_llm
+    assert draft.summary == "Enforcement improves compliance in audited firms."
+
+
+def test_llm_section_summary_falls_back_to_the_opening_sentences():
+    question_id = uuid4()
+    support = _evidence(question_id, uuid4())
+    llm = _FakeLLM(
+        {"markdown": "## Question\n\nEnforcement improves compliance [S1]."}
+    )
+
+    draft, _, _, _ = _section(
+        question_id,
+        title="Does enforcement work?",
+        evidence=[support],
+        llm=llm,
+    )
+
+    assert draft.used_llm
+    assert draft.summary.startswith("Enforcement improves compliance")
+    assert "[S1]" not in draft.summary
+
+
 def test_llm_section_receives_prior_section_context():
     question_id = uuid4()
     support = _evidence(question_id, uuid4())
