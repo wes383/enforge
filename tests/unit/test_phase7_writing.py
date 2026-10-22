@@ -29,7 +29,11 @@ from dr_core.research.models import (
     ResearchPlan,
     ResearchQuestion,
 )
-from dr_core.research.writing import compose_section, numeric_tokens
+from dr_core.research.writing import (
+    WriteSearchOutcome,
+    compose_section,
+    numeric_tokens,
+)
 
 
 def _brief(**overrides) -> ResearchBrief:
@@ -98,6 +102,8 @@ def _section(
     llm=None,
     brief=None,
     numbering=None,
+    supplement=None,
+    max_search_requests=0,
 ):
     support, refute = [], []
     for item in evidence:
@@ -154,6 +160,8 @@ def _section(
         numbering=numbering,
         next_section_title=next_title,
         llm=llm,
+        supplement=supplement,
+        max_search_requests=max_search_requests,
     )
     return draft, sources, numbering, matrix
 
@@ -166,6 +174,21 @@ class _FakeLLM:
 
     def generate(self, prompt, *, system=None, max_tokens=None, temperature=0.0):
         return SimpleNamespace(text=self.text)
+
+
+class _SequenceLLM:
+    name = "fake-llm"
+
+    def __init__(self, payloads):
+        self.payloads = [
+            payload if isinstance(payload, str) else json.dumps(payload)
+            for payload in payloads
+        ]
+        self.prompts: list[str] = []
+
+    def generate(self, prompt, *, system=None, max_tokens=None, temperature=0.0):
+        self.prompts.append(prompt)
+        return SimpleNamespace(text=self.payloads.pop(0))
 
 
 def test_outline_populates_claims_evidence_and_target_words():
@@ -310,6 +333,166 @@ def test_llm_section_accepts_valid_markdown_with_only_supplied_markers():
     assert draft.content.startswith("## Question")
     assert draft.citation_map == {"S1": str(support.source_id)}
     assert draft.evidence_ids == [support.id]
+
+
+def test_llm_section_supplements_evidence_then_rewrites():
+    question_id = uuid4()
+    original = _evidence(question_id, uuid4())
+    added = _evidence(
+        question_id,
+        uuid4(),
+        claim_summary="A second study confirms the finding.",
+        quoted_text="A second study confirms the same compliance finding.",
+    )
+    numbering = {original.source_id: 1}
+    llm = _SequenceLLM(
+        [
+            {
+                "needs_sources": [
+                    {
+                        "query": "enforcement compliance second study",
+                        "kind": "academic",
+                        "reason": "only one source is available",
+                    }
+                ]
+            },
+            {
+                "markdown": (
+                    "## Question\n\n"
+                    "A second study confirms the finding [S2]."
+                )
+            },
+        ]
+    )
+    captured = []
+
+    def supplement(requests):
+        captured.extend(requests)
+        numbering[added.source_id] = 2
+        return WriteSearchOutcome(
+            evidence=[added],
+            sources_added=1,
+            evidence_added=1,
+            searches=1,
+            queries=(requests[0].query,),
+        )
+
+    draft, _, _, _ = _section(
+        question_id,
+        title="Does enforcement work?",
+        evidence=[original],
+        llm=llm,
+        numbering=numbering,
+        supplement=supplement,
+        max_search_requests=2,
+    )
+
+    assert captured[0].query == "enforcement compliance second study"
+    assert captured[0].kind == "academic"
+    assert draft.used_llm
+    assert draft.citation_map == {"S2": str(added.source_id)}
+    assert draft.evidence_ids == [added.id]
+    first = json.loads(llm.prompts[0])
+    second = json.loads(llm.prompts[1])
+    assert first["search"]["available"] is True
+    assert second["search"]["available"] is False
+    assert second["supplemental_search"]["evidence_added"] == 1
+
+
+def test_llm_section_requests_sources_when_the_section_has_no_evidence():
+    question_id = uuid4()
+    added = _evidence(question_id, uuid4())
+    numbering = {}
+    llm = _SequenceLLM(
+        [
+            {
+                "needs_sources": [
+                    {
+                        "query": "enforcement audits",
+                        "kind": "web",
+                        "reason": "no evidence supplied",
+                    }
+                ]
+            },
+            {
+                "markdown": (
+                    "## Unanswered question\n\n"
+                    "New evidence addresses the question [S1]."
+                )
+            },
+        ]
+    )
+
+    def supplement(requests):
+        numbering[added.source_id] = 1
+        return WriteSearchOutcome(
+            evidence=[added],
+            sources_added=1,
+            evidence_added=1,
+            searches=1,
+            queries=(requests[0].query,),
+        )
+
+    draft, _, _, _ = _section(
+        question_id,
+        title="Unanswered question",
+        evidence=[],
+        llm=llm,
+        numbering=numbering,
+        supplement=supplement,
+        max_search_requests=2,
+    )
+
+    assert draft.used_llm
+    assert draft.citation_map == {"S1": str(added.source_id)}
+    first = json.loads(llm.prompts[0])
+    assert first["evidence"] == []
+    assert first["search"]["available"] is True
+    assert json.loads(llm.prompts[1])["supplemental_search"]["evidence_added"] == 1
+
+
+def test_llm_section_writes_with_existing_evidence_when_search_finds_nothing():
+    question_id = uuid4()
+    support = _evidence(question_id, uuid4())
+    llm = _SequenceLLM(
+        [
+            {
+                "needs_sources": [
+                    {"query": "missing source", "kind": "web", "reason": "gap"}
+                ]
+            },
+            {
+                "markdown": (
+                    "## Question\n\n"
+                    "The available evidence is limited [S1]."
+                )
+            },
+        ]
+    )
+
+    def supplement(requests):
+        return WriteSearchOutcome(
+            searches=1,
+            queries=(requests[0].query,),
+            errors=("no results",),
+        )
+
+    draft, _, _, _ = _section(
+        question_id,
+        title="Question",
+        evidence=[support],
+        llm=llm,
+        supplement=supplement,
+        max_search_requests=2,
+    )
+
+    assert draft.used_llm
+    assert draft.citation_map == {"S1": str(support.source_id)}
+    second = json.loads(llm.prompts[1])
+    assert second["supplemental_search"]["evidence_added"] == 0
+    assert any(
+        "No new evidence was found" in rule for rule in second["rules"]
+    )
 
 
 def test_llm_section_falls_back_on_unsafe_output():

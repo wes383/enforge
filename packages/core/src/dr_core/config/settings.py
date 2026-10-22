@@ -9,6 +9,9 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 # Worst-case number of model calls the writing node can make in one run; used to
 # derive the Celery time-limit floor when model writing is enabled.
 LLM_SECTION_CALL_BUDGET = 12
+# A section may first ask for supplemental sources, then write once the new
+# evidence is available. The extra fallback call is budgeted separately.
+LLM_WRITE_SEARCH_CALL_BUDGET = 12
 # Planning asks the model once per plan version, so a run that is revised by the
 # approver can make a couple of planning calls before searching starts.
 LLM_PLANNING_CALL_BUDGET = 2
@@ -123,6 +126,15 @@ class Settings(BaseSettings):
     research_recon_max_tool_calls: int = Field(default=6, ge=1, le=12)
     research_recon_max_sources: int = Field(default=6, ge=1, le=20)
     research_recon_read_chars: int = Field(default=4000, ge=500, le=20000)
+    # Bounded supplemental retrieval triggered by the writing model when a
+    # section's evidence is insufficient. Enabled whenever model writing and a
+    # search provider are available; these caps only bound the extra work.
+    research_write_search_max_requests_per_section: int = Field(
+        default=2, ge=1, le=4
+    )
+    research_write_search_max_searches: int = Field(default=6, ge=1, le=20)
+    research_write_search_max_sources: int = Field(default=8, ge=1, le=50)
+    research_write_search_max_evidence: int = Field(default=12, ge=1, le=100)
     # Caps paid model calls per run so verification time stays bounded.
     research_claim_llm_review_limit: int = Field(default=10, ge=1, le=500)
     max_active_runs_per_project: int = Field(default=3, ge=0, le=100)
@@ -179,6 +191,8 @@ class Settings(BaseSettings):
     def llm_run_time_floor_seconds(self) -> int:
         """Ceiling a model-writing run needs before Celery may kill it."""
         calls = LLM_SECTION_CALL_BUDGET + self.research_claim_llm_review_limit
+        if self.research_llm_writing_enabled:
+            calls += LLM_WRITE_SEARCH_CALL_BUDGET
         if self.research_llm_planning_enabled:
             calls += LLM_PLANNING_CALL_BUDGET
         if self.research_llm_recon_enabled:

@@ -104,6 +104,7 @@ class ResearchToolbox:
         brief: ResearchBrief,
         *,
         max_sources: int,
+        max_searches: int | None = None,
         existing: Iterable[SourceRecord] = (),
     ) -> None:
         self._ctx = ctx
@@ -112,7 +113,11 @@ class ResearchToolbox:
             record.source_id: record for record in existing
         }
         self._max_sources = max(0, min(max_sources, brief.max_sources))
-        self._max_searches = ctx.settings.research_recon_max_searches
+        self._max_searches = (
+            ctx.settings.research_recon_max_searches
+            if max_searches is None
+            else max(0, max_searches)
+        )
         self._max_read_chars = ctx.settings.research_recon_read_chars
         self.searches = 0
         self.reads = 0

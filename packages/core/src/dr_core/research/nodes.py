@@ -19,8 +19,6 @@ from dr_core.db.enums import (
     CitationAuditStatus,
     CitationIssueType,
     DraftSectionStatus,
-    EvidenceType,
-    EvidenceVerificationStatus,
     OutlineStatus,
     ParserStatus,
     ProjectLanguage,
@@ -69,6 +67,10 @@ from dr_core.research.context import (
     RunFinished,
     node_timeout,
 )
+from dr_core.research.evidence_records import (
+    evidence_from_hit as _evidence_from_hit,
+    evidence_from_text as _evidence_from_text,
+)
 from dr_core.research.generation import (
     build_gap_queries,
     build_outline,
@@ -102,7 +104,7 @@ from dr_core.research.reporting import (
     report_markdown,
     source_views,
 )
-from dr_core.research.retrieval import HybridRetriever, RetrievalFilters, RetrievalHit
+from dr_core.research.retrieval import HybridRetriever, RetrievalFilters
 from dr_core.research.source_records import (
     academic_source_record as _academic_source_record,
     merge_source_record as _merge_source_record,
@@ -111,14 +113,10 @@ from dr_core.research.source_records import (
 )
 from dr_core.research.state import ResearchState
 from dr_core.research.tools import ResearchToolbox
-from dr_core.research.text import (
-    best_sentence_span,
-    citation_markers,
-    context_window,
-    sentence_spans,
-)
+from dr_core.research.text import best_sentence_span
 from dr_core.research.usage import UsageRecordingLLM
 from dr_core.research.verification import audit_section, verify_run_claims
+from dr_core.research.write_search import WriteSearchSession
 from dr_core.research.writing import compose_section
 from dr_core.schemas import (
     DraftSectionCreate,
@@ -1139,10 +1137,10 @@ def extract_evidence(ctx: ResearchContext):
                                     ctx.run_id,
                                     _evidence_from_hit(
                                         hit,
-                                        question,
-                                        sentence,
-                                        start,
-                                        end,
+                                        question_id=question.question_id,
+                                        sentence=sentence,
+                                        start=start,
+                                        end=end,
                                     ),
                                 )
                                 if str(item.id) in evidence_ids:
@@ -1203,11 +1201,11 @@ def extract_evidence(ctx: ResearchContext):
                                 ctx.run_id,
                                 _evidence_from_text(
                                     record,
-                                    question,
-                                    matched_text,
-                                    sentence,
-                                    start,
-                                    end,
+                                    question_id=question.question_id,
+                                    text=matched_text,
+                                    sentence=sentence,
+                                    start=start,
+                                    end=end,
                                 ),
                             )
                             if str(item.id) in evidence_ids:
@@ -1270,32 +1268,7 @@ def analyze_evidence(ctx: ResearchContext):
             ctx.guard()
             brief = _brief(state)
             plan = _plan(state)
-            with ctx.database.session_scope() as session:
-                evidence = EvidenceRepository(session).list_for_run(
-                    ctx.project_id,
-                    ctx.run_id,
-                )
-                sources = {
-                    source.id: source
-                    for source in SourceRepository(session).list_for_project(
-                        ctx.project_id,
-                        limit=500,
-                    )
-                }
-                matrix = build_evidence_matrix(
-                    plan.questions,
-                    evidence,
-                    sources,
-                    language=brief.language,
-                )
-                question_repo = ResearchQuestionRepository(session)
-                for row in matrix.rows:
-                    if row.question_id is not None:
-                        question_repo.update_coverage(
-                            row.question_id,
-                            row.coverage_status,
-                            project_id=ctx.project_id,
-                        )
+            matrix = _refresh_evidence_matrix(ctx, plan, brief)
             ctx.emit(
                 RunEventType.PROGRESS,
                 message="Evidence analysis completed",
@@ -1686,6 +1659,7 @@ def write_sections(ctx: ResearchContext):
             outline = Outline.model_validate(state.get("outline") or {})
             outline_id = _outline_id(state)
             _approve_outline(ctx, outline_id)
+            plan = _plan(state)
             with ctx.database.session_scope() as session:
                 evidence = EvidenceRepository(session).list_for_run(
                     ctx.project_id,
@@ -1700,6 +1674,26 @@ def write_sections(ctx: ResearchContext):
             ]
             limitations = list(state.get("limitations") or [])
             llm = _llm_writer(ctx)
+            parser = next(iter(ctx.registry.parsers), None)
+            search_session = (
+                WriteSearchSession(
+                    ctx,
+                    brief,
+                    parser=parser,
+                    numbering=numbering,
+                    sources=sources,
+                    existing=_source_records(state),
+                    evidence_count=len(evidence),
+                )
+                if llm is not None and _write_search_available(ctx)
+                else None
+            )
+            max_search_requests = (
+                ctx.settings.research_write_search_max_requests_per_section
+                if search_session is not None
+                else 0
+            )
+            new_evidence_ids: set[str] = set()
             sections_state: list[dict] = []
             for position, section in enumerate(outline.sections):
                 ctx.guard()
@@ -1708,6 +1702,40 @@ def write_sections(ctx: ResearchContext):
                     if position + 1 < len(outline.sections)
                     else None
                 )
+                supplement = None
+                if search_session is not None:
+
+                    def supplement(requests, current=section):
+                        nonlocal matrix
+                        outcome = search_session.supplement(current, requests)
+                        if (
+                            outcome.searches
+                            or outcome.sources_added
+                            or outcome.errors
+                        ):
+                            ctx.emit(
+                                RunEventType.PROGRESS,
+                                message="Supplemental sources retrieved while writing",
+                                payload={
+                                    "section_index": current.index,
+                                    "queries": list(outcome.queries),
+                                    "sources": outcome.sources_added,
+                                    "evidence": outcome.evidence_added,
+                                    "errors": list(outcome.errors[:3]),
+                                },
+                                dedupe_key=(
+                                    f"section:{current.index}:write-search"
+                                ),
+                                stage=RunStatus.WRITING,
+                            )
+                        if outcome.evidence:
+                            evidence.extend(outcome.evidence)
+                            new_evidence_ids.update(
+                                str(item.id) for item in outcome.evidence
+                            )
+                            matrix = _refresh_evidence_matrix(ctx, plan, brief)
+                        return outcome
+
                 draft = compose_section(
                     section=section,
                     brief=brief,
@@ -1719,6 +1747,8 @@ def write_sections(ctx: ResearchContext):
                     numbering=numbering,
                     next_section_title=next_title,
                     llm=llm,
+                    supplement=supplement,
+                    max_search_requests=max_search_requests,
                 )
                 content = draft.content
                 content_hash = text_sha256(content)
@@ -1786,11 +1816,21 @@ def write_sections(ctx: ResearchContext):
             outline_payload = outline.model_dump(mode="json")
             for item in outline_payload["sections"]:
                 item["status"] = "drafted"
-            return {
+            result: ResearchState = {
                 "sections": sections_state,
                 "outline": outline_payload,
                 "current_node": "write_sections",
             }
+            if new_evidence_ids:
+                result["evidence_ids"] = sorted(
+                    {
+                        str(value)
+                        for value in (state.get("evidence_ids") or [])
+                    }
+                    | new_evidence_ids
+                )
+                result["matrix"] = matrix.model_dump(mode="json")
+            return result
 
     return node
 
@@ -2247,6 +2287,34 @@ def _matrix(state: ResearchState) -> EvidenceMatrix:
     return EvidenceMatrix.model_validate(state.get("matrix") or {})
 
 
+def _refresh_evidence_matrix(
+    ctx: ResearchContext,
+    plan: ResearchPlan,
+    brief: ResearchBrief,
+) -> EvidenceMatrix:
+    with ctx.database.session_scope() as session:
+        evidence = EvidenceRepository(session).list_for_run(
+            ctx.project_id,
+            ctx.run_id,
+        )
+        sources = source_views(session, ctx.project_id)
+        matrix = build_evidence_matrix(
+            plan.questions,
+            evidence,
+            sources,
+            language=brief.language,
+        )
+        question_repo = ResearchQuestionRepository(session)
+        for row in matrix.rows:
+            if row.question_id is not None:
+                question_repo.update_coverage(
+                    row.question_id,
+                    row.coverage_status,
+                    project_id=ctx.project_id,
+                )
+    return matrix
+
+
 def _source_records(state: ResearchState) -> list[SourceRecord]:
     return [
         SourceRecord.model_validate(value)
@@ -2458,120 +2526,6 @@ def _index_source(
         )
 
 
-def _evidence_type(sentence: str) -> EvidenceType:
-    lowered = sentence.casefold()
-    refutation_terms = (
-        "however",
-        "but ",
-        "contradict",
-        "contrary",
-        "refute",
-        "相反",
-        "然而",
-        "但是",
-        "反驳",
-    )
-    if any(term in lowered for term in refutation_terms):
-        return EvidenceType.REFUTATION
-    if any(character.isdigit() for character in sentence):
-        return EvidenceType.STATISTIC
-    return EvidenceType.DIRECT_SUPPORT
-
-
-def _evidence_from_hit(
-    hit: RetrievalHit,
-    question,
-    sentence: str,
-    start: int,
-    end: int,
-):
-    from dr_core.schemas import EvidenceCreate
-
-    raw = hit.text[start:end]
-    verified = " ".join(raw.split()) == sentence
-    before, after = context_window(hit.text, start, end)
-    locator = {
-        **hit.locator,
-        "url": hit.url,
-        "source_title": hit.source_title,
-        "character_start": start,
-        "character_end": end,
-        "sentence_index": _sentence_index(hit.text, start),
-        "retrieval": {
-            "score": hit.score,
-            "keyword_score": hit.keyword_score,
-            "vector_score": hit.vector_score,
-            "keyword_rank": hit.keyword_rank,
-            "vector_rank": hit.vector_rank,
-        },
-    }
-    return EvidenceCreate(
-        source_id=hit.source_id,
-        source_version_id=hit.source_version_id,
-        research_question_id=question.question_id,
-        evidence_type=_evidence_type(sentence),
-        claim_summary=sentence[:1000],
-        quoted_text=sentence,
-        context_before=before or None,
-        context_after=after or None,
-        locator=locator,
-        verification_status=(
-            EvidenceVerificationStatus.VERIFIED
-            if verified
-            else EvidenceVerificationStatus.UNVERIFIED
-        ),
-    )
-
-
-def _evidence_from_text(
-    record: SourceRecord,
-    question,
-    text: str,
-    sentence: str,
-    start: int,
-    end: int,
-):
-    from dr_core.schemas import EvidenceCreate
-
-    raw = text[start:end]
-    verified = " ".join(raw.split()) == sentence
-    before, after = context_window(text, start, end)
-    locator = {
-        "kind": "search_snippet" if not record.has_full_text else "source_text",
-        "source_version_id": str(record.source_version_id),
-        "url": record.fetch_url or record.url,
-        "provider": record.provider,
-        "source_title": record.title,
-        "character_start": start,
-        "character_end": end,
-        "sentence_index": _sentence_index(text, start),
-        "text_length": len(text),
-    }
-    return EvidenceCreate(
-        source_id=record.source_id,
-        source_version_id=record.source_version_id,
-        research_question_id=question.question_id,
-        evidence_type=_evidence_type(sentence),
-        claim_summary=sentence[:1000],
-        quoted_text=sentence,
-        context_before=before or None,
-        context_after=after or None,
-        locator=locator,
-        verification_status=(
-            EvidenceVerificationStatus.VERIFIED
-            if verified
-            else EvidenceVerificationStatus.UNVERIFIED
-        ),
-    )
-
-
-def _sentence_index(text: str, start: int) -> int | None:
-    for index, (_, span_start, _) in enumerate(sentence_spans(text)):
-        if span_start == start:
-            return index
-    return None
-
-
 def _outline_create(outline: Outline, feedback: str | None) -> object:
     from dr_core.schemas import OutlineCreate
 
@@ -2702,7 +2656,18 @@ def _writing_node_timeout(ctx: ResearchContext, state: ResearchState) -> int:
         if isinstance(sections, list) and sections
         else LLM_SECTION_CALL_BUDGET
     )
+    if _write_search_available(ctx):
+        count *= 2
     return _llm_node_timeout(ctx, count)
+
+
+def _write_search_available(ctx: ResearchContext) -> bool:
+    registry = getattr(ctx, "registry", None)
+    providers = [
+        *(getattr(registry, "web_search", None) or []),
+        *(getattr(registry, "academic_search", None) or []),
+    ]
+    return any(getattr(provider, "enabled", False) for provider in providers)
 
 
 def _verification_node_timeout(ctx: ResearchContext) -> int:

@@ -216,7 +216,7 @@ def test_run_time_limits_expand_only_when_model_writing_is_on():
         research_node_timeout_seconds=90,
     )
     assert writing.llm_call_budget_seconds == 120
-    assert writing.effective_run_task_soft_time_limit_seconds == 120 * 22 + 90
+    assert writing.effective_run_task_soft_time_limit_seconds == 120 * 34 + 90
     assert (
         writing.effective_run_task_hard_time_limit_seconds
         == writing.effective_run_task_soft_time_limit_seconds + 60

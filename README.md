@@ -36,7 +36,7 @@
 - 论证型提纲：每个章节保存标题、写作目的、关联研究问题、关键主张、支持证据 ID、反对证据 ID、预期字数和 `planned/drafted/verified` 状态；提纲审批通过后，写作和核验阶段会回写章节状态。
 - 分章节长文写作：写作节点按章节选择数据库证据，正文包含本节问题、核心判断、证据、反方观点、局限和下一节衔接；章节保存 `citation_map`、使用过的证据 ID 和版本，内容变化时自动生成新版本。
 - 可选的模型规划：打开 `RESEARCH_LLM_PLANNING_ENABLED=true` 后由大模型按项目简报生成研究问题，语言、深度（决定问题数）、范围、目标读者和上一轮审批反馈都进入提示词；每个问题同时产出 1–3 个短检索词，中文项目还会要求一条英文检索词供学术库使用；输出必须是 JSON，且要通过去重、数量、语言和题目相关性校验，否则回退到确定性模板并在研究局限中记录原因。
-- 可选的模型写作：配置 `OPENAI_API_KEY`（任意 OpenAI 兼容端点）并显式打开 `RESEARCH_LLM_WRITING_ENABLED=true` 时才启用；输出必须是 JSON，且通过引用标记、段落引用、数字和参考文献禁令校验，否则自动回退到确定性写作。
+- 可选的模型写作：配置 `OPENAI_API_KEY`（任意 OpenAI 兼容端点）并显式打开 `RESEARCH_LLM_WRITING_ENABLED=true` 时才启用；输出必须是 JSON，且通过引用标记、段落引用、数字和参考文献禁令校验，否则自动回退到确定性写作。写作模型发现当前章节证据不足时可以请求补充检索：服务端按请求执行有界搜索、正常入库、建立索引并抽取本节证据，然后让模型基于新证据重写一次；因此写作不再局限于提纲审批前已经收集到的材料。
 - 可选的前置侦察（有界 agent）：同时打开 `RESEARCH_LLM_RECON_ENABLED` 与 `RESEARCH_LLM_PLANNING_ENABLED` 后，模型可在规划前通过 `search_sources` / `read_source` 工具检索并阅读来源，最多 2 轮工具调用，最后返回主题、术语与争议摘要；检索结果先走正常入库管道再返回给模型，所以侦察来源之后仍可被证据抽取和引用。侦察摘要只作为不可信背景供规划选角度，不进入证据或参考文献。
 - 用量与成本记账：每次模型调用的 `usage` 累加到运行的 `input_tokens`/`output_tokens`/`cost_usd`，金额按可配置单价计算；单价为 0 时只显示 tokens。token/成本预算守卫读取同一组数值。
 - 主张核验：从正文抽取带引用和缺少引用的事实性、量化、因果、比较、规范与预测主张；确定性规则检查引用映射、来源存在性、原文定位、数字/年份一致性、词项支持、绝对化措辞和反驳证据，状态为 `SUPPORTED`/`PARTIAL`/`CONTRADICTED`/`UNSUPPORTED`/`UNVERIFIABLE`，失败的核验结果不会被自动升级。
@@ -430,9 +430,9 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 | 单次模型请求 | — | `LLM_REQUEST_TIMEOUT_SECONDS` × (`LLM_MAX_RETRIES`+1) = 120s |
 | `research_recon` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + (`RESEARCH_RECON_MAX_ROUNDS` + 1) × 120s（打开侦察时） |
 | `plan_research` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 120s（打开 `RESEARCH_LLM_PLANNING_ENABLED` 时） |
-| `write_sections` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 章节数 × 120s |
+| `write_sections` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 章节数 × 120s；写作模型可用且存在搜索提供商时为 90s + 章节数 × 2 × 120s（为补检后的重写预留一次调用） |
 | `verify_claims` 节点 | 90s | 90s + `RESEARCH_CLAIM_LLM_REVIEW_LIMIT` × 120s |
-| Celery 软/硬时限 | 300s / 360s | 2730s / 2790s；再打开侦察为 3210s / 3270s，同时打开规划与侦察为 3450s / 3510s（取配置值与推算下限的较大者，Worker 启动时打印一条 WARNING 说明实际生效值） |
+| Celery 软/硬时限 | 300s / 360s | 4170s / 4230s；再打开侦察为 4650s / 4710s，同时打开规划与侦察为 4890s / 4950s（取配置值与推算下限的较大者，Worker 启动时打印一条 WARNING 说明实际生效值） |
 
 主张复核另有次数上限（`RESEARCH_CLAIM_LLM_REVIEW_LIMIT`，默认 10），超出的主张保留确定性核验状态并记录一条日志，避免费用与耗时随主张数量线性膨胀。单节模型调用超时或校验失败只影响该节，会回退到确定性写作并继续。
 
@@ -554,7 +554,7 @@ Embedding 仍需自行接入：注册真实 `EmbeddingProvider` 并保持 `EMBED
 | `revise_search_plan` | 轮次加一，记录补充检索原因；达到最大轮次或预算上限时停止循环 |
 | `generate_outline` | 生成结构化提纲；被拒绝后根据反馈生成新版本并加入反馈章节 |
 | `await_outline_approval` | 写入待审批记录并 `interrupt`；批准进入写作，拒绝重新生成提纲，修改后提纲生效 |
-| `write_sections` | 按提纲逐节选择数据库证据并生成正文，写入含引用映射、使用证据 ID 和版本的章节；可选 LLM 输出必须通过严格校验 |
+| `write_sections` | 按提纲逐节选择数据库证据并生成正文，写入含引用映射、使用证据 ID 和版本的章节；可选 LLM 输出必须通过严格校验，证据不足时可请求一次有界补检后重写 |
 | `verify_claims` | 抽取事实性主张，检查引用映射、原文定位、数字/年份、措辞和反驳证据，写入 `claims` 与 `claim_evidence` |
 | `verify_citations` | 校验正文引用标记、来源存在性和引用映射，写入 `citation_audits` 记录，并审计参考文献与未使用来源 |
 | `finalize_report` | 生成报告、参考文献列表、证据矩阵、证据与主张核验 artifact，写入完成事件并终止运行 |
@@ -736,6 +736,8 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
 - 没有证据的章节明确说明“不生成结论性陈述”，不会补充常识、统计数字或虚构引用。
 
 可选模型写作由 `RESEARCH_LLM_WRITING_ENABLED` 控制，默认关闭。只有在 `ProviderRegistry` 中存在真实 `LLMProvider`（配置 `OPENAI_API_KEY` 后自动注册 OpenAI 兼容适配器）时才会调用；Mock Provider 会被跳过。模型输出必须是 `{"markdown": ...}` JSON，且每个正文段落都要有引用标记、不能出现未提供的标记、不能包含参考文献章节，正文中的数字/年份必须能在所给证据中找到；任一校验失败都会回退到确定性写作。
+
+写时补检不需要额外开关：只要模型写作和至少一个搜索/学术提供商可用就生效，对所有章节一视同仁，不要求提纲被人工修改过。首轮提示词把当前证据、章节关键主张和可用搜索额度一起交给模型；如果模型判断证据不足，可以返回 `{"needs_sources": [{"query": "短关键词", "kind": "web"|"academic", "reason": "缺口说明"}]}` 而不是正文。服务端最多执行 `RESEARCH_WRITE_SEARCH_MAX_REQUESTS_PER_SECTION` 条请求（默认 2），每条经 `ResearchToolbox.search_sources` 正常入库，再对新来源建立切片索引，并用本节问题/关键主张做句子匹配、写入带定位信息的证据；随后把新证据（仍以 `[S*]` 标记）交给模型重写一次，并明确禁止继续请求搜索。补检来源和证据会计入来源页、证据页、证据矩阵与参考文献，编号在整次运行内只追加不重排；所有预算耗尽、没有匹配句或提供商失败时都不会中断运行，而是让模型基于现有证据写作或回退确定性模板。全程受 `RESEARCH_WRITE_SEARCH_MAX_SEARCHES`（默认 6）、`RESEARCH_WRITE_SEARCH_MAX_SOURCES`（默认 8）、`RESEARCH_WRITE_SEARCH_MAX_EVIDENCE`（默认 12）和 `RESEARCH_MAX_SOURCES` / `RESEARCH_MAX_EVIDENCE` 约束，且每个章节最多补检一次。
 
 研究问题本身也可以交给模型（`RESEARCH_LLM_PLANNING_ENABLED`，默认关闭）。`plan_research` 请求 `{"summary", "questions": [{"question", "priority", "search_terms"}]}` JSON，提示词带上项目语言、研究深度（决定问题数 3/4/5）、范围、目标读者、日期范围与上一轮审批反馈，简报和反馈文本按不可信内容包裹并附注入防御规则。返回的计划必须满足：摘要非空、问题清理（去列表前缀、合并空白、截断）后去重不少于 2 条、数量不超过深度上限、语言与项目一致（英文项目要含拉丁字母、中文项目要含中日韩字符）、至少一条问题与简报共享词元，且不得包含代码块或不可信标签；模型调用失败、JSON 非法或任一校验不通过都回退到 `generation.build_plan` 的确定性模板，并把回退原因写入 `limitations`（最终进入报告的局限章节）。阶段完成事件的 payload 带 `planner: "llm" | "template"`，用于区分本次计划来源。
 
@@ -941,6 +943,10 @@ docker compose exec api python -m dr_core.maintenance
 | `RESEARCH_RECON_MAX_TOOL_CALLS` | `6` | 单次侦察最多工具调用总数（1–12） |
 | `RESEARCH_RECON_MAX_SOURCES` | `6` | 侦察最多入库来源数，且受 `RESEARCH_MAX_SOURCES` 约束 |
 | `RESEARCH_RECON_READ_CHARS` | `4000` | `read_source` 返回给模型的最大字符数 |
+| `RESEARCH_WRITE_SEARCH_MAX_REQUESTS_PER_SECTION` | `2` | 单个章节最多请求的补检查询数（1–4） |
+| `RESEARCH_WRITE_SEARCH_MAX_SEARCHES` | `6` | 整次运行写时补检最多搜索调用数（1–20） |
+| `RESEARCH_WRITE_SEARCH_MAX_SOURCES` | `8` | 写时补检最多新增来源数，且受 `RESEARCH_MAX_SOURCES` 约束 |
+| `RESEARCH_WRITE_SEARCH_MAX_EVIDENCE` | `12` | 写时补检最多新增证据数，且受 `RESEARCH_MAX_EVIDENCE` 约束 |
 | `RESEARCH_CLAIM_LLM_REVIEW` | `false` | 是否允许真实 LLM 复核未通过的主张；需同时配置 `OPENAI_API_KEY`，只能降级或补充理由，不能升级为 `SUPPORTED` |
 | `RESEARCH_CLAIM_LLM_REVIEW_LIMIT` | `10` | 单次运行最多复核多少条主张，超出部分保留确定性状态，用于约束真实模型的耗时与费用 |
 | `MAX_ACTIVE_RUNS_PER_PROJECT` | `3` | 每个项目允许的非终态运行数；0 表示关闭限流 |
@@ -1054,6 +1060,7 @@ docker compose up -d --force-recreate api worker
 - LLM 生成研究问题（本地假端点）：打开 `RESEARCH_LLM_PLANNING_ENABLED` 后研究问题来自模型输出并按深度上限截断、`planner=llm`；模型返回非法内容或问题跑题/语言不符时回退确定性模板并记录局限、`planner=template`；`_llm_planner` 门禁跳过 Mock Provider，规划开启时节点与 Celery 时限各放大相应的模型调用预算。
 - 规划产出检索词：模型返回的 `search_terms` 会合并空白、去重并最多保留 3 个；中文计划的网页查询用中文词、学术查询用英文词，运行后 `search_queries` 里存的是检索词而不是整句问题；没有检索词时回退整句问题，缺口补充检索按中英文分别拼接对应后缀。
 - 有界前置侦察（本地假端点）：模型先调用 `search_sources`（网页 + 学术），工具结果入库后才返回 `source_id`；完成检索后返回摘要，规划提示词收到不可信的侦察背景，运行结束后侦察来源计入数据库来源、token 记账包含侦察的每次调用；来源/搜索/轮数上限生效，未检索或 JSON 非法时不影响规划完成，但会记录局限。
+- 写时补检（本地假端点 + Mock 搜索）：写作模型对某一节返回 `needs_sources` 后，服务端完成搜索、入库、切片索引和证据抽取，并把新证据交给模型重写；补检事件写入运行事件流，补检来源与证据可在数据库、证据矩阵和引用映射中追溯；搜索次数/来源数/证据数/单节请求数上限生效，预算耗尽或补检无结果时仍能完成运行。
 - 用量与成本记账：运行结束后 `input_tokens`/`output_tokens` 与假端点的每次调用（40/20）严格相等，`cost_usd` 按单价（2.5/10）累计为每次 0.0003；单价为 0 时成本保持 0；记账包装只在调用成功后上报，失败的调用不计数。
 - 模型时间预算：LLM 使用独立的超时/重试（不受 `PROVIDER_*` 影响）；未启用模型时节点与 Celery 时限保持原值，启用后按章节数与复核上限放大，且不会低于运维显式配置的更大值。
 - 质量评测集：10 类场景全部完成且断言通过，恢复成功率 1.0，指标达到阈值；人工复核比较函数统计一致率。
