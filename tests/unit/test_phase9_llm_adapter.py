@@ -12,7 +12,11 @@ from dr_core.providers.errors import ProviderResponseError, ProviderUnavailable
 from dr_core.providers.http import RetryPolicy
 from dr_core.providers.llm import OpenAICompatibleLLMProvider
 from dr_core.providers.registry import build_provider_registry
-from dr_core.research.nodes import _verification_node_timeout, _writing_node_timeout
+from dr_core.research.nodes import (
+    _polish_node_timeout,
+    _verification_node_timeout,
+    _writing_node_timeout,
+)
 
 
 def _provider(handler) -> tuple[OpenAICompatibleLLMProvider, list[httpx.Request]]:
@@ -273,3 +277,41 @@ def test_llm_node_timeouts_scale_with_expected_model_calls():
     )
     assert _writing_node_timeout(deterministic, state) == 90
     assert _verification_node_timeout(deterministic) == 90
+
+
+def test_polish_adds_exactly_one_model_call_to_the_time_budgets():
+    settings = Settings(
+        _env_file=None,
+        research_node_timeout_seconds=90,
+        llm_request_timeout_seconds=120,
+        llm_max_retries=0,
+    )
+    llm = OpenAICompatibleLLMProvider(
+        "sk-test-key",
+        model="fake-model",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={})
+            )
+        ),
+    )
+    offline = SimpleNamespace(
+        settings=settings,
+        registry=SimpleNamespace(llm=llm),
+        record_usage=lambda response: None,
+    )
+    assert settings.llm_workflow_enabled is False
+    assert _polish_node_timeout(offline) == 90
+
+    polishing = SimpleNamespace(
+        settings=settings.model_copy(update={"research_llm_polish_enabled": True}),
+        registry=SimpleNamespace(llm=llm),
+        record_usage=lambda response: None,
+    )
+    assert polishing.settings.llm_workflow_enabled is True
+    assert _polish_node_timeout(polishing) == 90 + 120
+    assert (
+        polishing.settings.llm_run_time_floor_seconds
+        - settings.llm_run_time_floor_seconds
+        == 120
+    )

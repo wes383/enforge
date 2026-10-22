@@ -11,7 +11,7 @@ from uuid import UUID
 from langgraph.types import interrupt
 from sqlalchemy import func, select
 
-from dr_core.config.settings import LLM_SECTION_CALL_BUDGET
+from dr_core.config.settings import LLM_POLISH_CALL_BUDGET, LLM_SECTION_CALL_BUDGET
 from dr_core.db.enums import (
     ApprovalKind,
     ApprovalStatus,
@@ -95,6 +95,10 @@ from dr_core.research.models import (
     SourceRecord,
 )
 from dr_core.research.planning import build_plan_with_llm
+from dr_core.research.polish import (
+    DraftArticleSection,
+    polish_draft_sections,
+)
 from dr_core.research.quality import build_evidence_matrix
 from dr_core.research.recon import run_recon
 from dr_core.research.reporting import (
@@ -1835,6 +1839,120 @@ def write_sections(ctx: ResearchContext):
     return node
 
 
+def polish_article(ctx: ResearchContext):
+    def node(state: ResearchState) -> ResearchState:
+        if state.get("article_polished"):
+            return {"current_node": "polish_article"}
+        llm = _llm_polisher(ctx)
+        if llm is None:
+            return {"current_node": "polish_article"}
+        with node_timeout(_polish_node_timeout(ctx)):
+            ctx.guard()
+            brief = _brief(state)
+            with ctx.database.session_scope() as session:
+                rows = DraftSectionRepository(session).list_latest_for_run(
+                    ctx.project_id,
+                    ctx.run_id,
+                )
+            drafts = [
+                DraftArticleSection(
+                    index=row.section_index,
+                    title=row.title,
+                    content=row.content_markdown,
+                )
+                for row in rows
+            ]
+            changes, reason = polish_draft_sections(
+                brief=brief,
+                sections=drafts,
+                llm=llm,
+                max_input_chars=ctx.settings.research_polish_max_input_chars,
+            )
+            result: ResearchState = {
+                "article_polished": True,
+                "current_node": "polish_article",
+            }
+            applied: list = []
+            if changes:
+                by_index = {row.section_index: row for row in rows}
+                with ctx.database.session_scope() as session:
+                    repo = DraftSectionRepository(session)
+                    for change in changes:
+                        ctx.guard()
+                        original = by_index[change.index]
+                        if text_sha256(change.content) == original.content_hash:
+                            continue
+                        applied.append(
+                            repo.create_version(
+                                ctx.project_id,
+                                ctx.run_id,
+                                DraftSectionCreate(
+                                    outline_id=original.outline_id,
+                                    section_index=original.section_index,
+                                    title=original.title,
+                                    content_markdown=change.content,
+                                    # The rewrite keeps the markers of its
+                                    # section, so the stored mapping still
+                                    # describes it.
+                                    citation_map=dict(original.citation_map or {}),
+                                    evidence_ids=list(original.evidence_ids or []),
+                                    generation_status=DraftSectionStatus.DRAFTED,
+                                ),
+                            )
+                        )
+            for section in applied:
+                ctx.emit(
+                    RunEventType.SECTION_GENERATED,
+                    message="Report section polished",
+                    payload={
+                        "section_index": section.section_index,
+                        "version": section.version,
+                        "citations": len(section.citation_map or {}),
+                        "used_llm": True,
+                        "polished": True,
+                    },
+                    dedupe_key=(
+                        f"section:{section.section_index}:polished:{section.version}"
+                    ),
+                    stage=RunStatus.WRITING,
+                )
+            ctx.emit(
+                RunEventType.PROGRESS,
+                message=(
+                    f"Article rewritten for fluency in {len(applied)} sections"
+                    if applied
+                    else (
+                        "Article kept as written; the rewrite changed nothing"
+                        if changes
+                        else "Article kept as written; polish rejected the rewrite"
+                    )
+                ),
+                payload={
+                    "sections": len(applied),
+                    "reason": reason or None,
+                },
+                dedupe_key="article:polished",
+                stage=RunStatus.WRITING,
+            )
+            if applied:
+                entries = {
+                    int(item["index"]): item
+                    for item in (state.get("sections") or [])
+                    if isinstance(item, dict) and "index" in item
+                }
+                for section in applied:
+                    entries[section.section_index] = {
+                        "section_id": str(section.id),
+                        "index": section.section_index,
+                        "title": section.title,
+                        "version": section.version,
+                    }
+                result["sections"] = [entries[key] for key in sorted(entries)]
+            return result
+
+    return node
+
+
 def verify_claims(ctx: ResearchContext):
     def node(state: ResearchState) -> ResearchState:
         with node_timeout(_verification_node_timeout(ctx)):
@@ -2609,6 +2727,10 @@ def _llm_writer(ctx: ResearchContext):
     return _llm_provider(ctx, ctx.settings.research_llm_writing_enabled)
 
 
+def _llm_polisher(ctx: ResearchContext):
+    return _llm_provider(ctx, ctx.settings.research_llm_polish_enabled)
+
+
 def _claim_reviewer(ctx: ResearchContext):
     return _llm_provider(ctx, ctx.settings.research_claim_llm_review)
 
@@ -2667,6 +2789,12 @@ def _writing_node_timeout(ctx: ResearchContext, state: ResearchState) -> int:
     if _write_search_available(ctx):
         count *= 2
     return _llm_node_timeout(ctx, count)
+
+
+def _polish_node_timeout(ctx: ResearchContext) -> int:
+    if _llm_polisher(ctx) is None:
+        return ctx.settings.research_node_timeout_seconds
+    return _llm_node_timeout(ctx, LLM_POLISH_CALL_BUDGET)
 
 
 def _write_search_available(ctx: ResearchContext) -> bool:

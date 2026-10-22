@@ -18,6 +18,8 @@ LLM_PLANNING_CALL_BUDGET = 2
 # The bounded researcher makes at most one call per tool round plus a final
 # digest call. Tool rounds are capped at three in settings.
 LLM_RECON_CALL_BUDGET = 4
+# One call rewrites the finished article for language and flow.
+LLM_POLISH_CALL_BUDGET = 1
 
 
 class Settings(BaseSettings):
@@ -117,6 +119,10 @@ class Settings(BaseSettings):
     research_llm_planning_enabled: bool = False
     research_llm_writing_enabled: bool = False
     research_claim_llm_review: bool = False
+    # One pass over the finished article that rewrites it for language and flow.
+    # Articles longer than the input cap keep the sections as written.
+    research_llm_polish_enabled: bool = False
+    research_polish_max_input_chars: int = Field(default=24000, ge=2000, le=200000)
     # Bounded reconnaissance before planning. The model may search and read
     # ingested sources through tools; every result goes through the normal
     # ingestion pipeline and can later back evidence and citations.
@@ -166,6 +172,7 @@ class Settings(BaseSettings):
         return (
             self.research_llm_planning_enabled
             or self.research_llm_writing_enabled
+            or self.research_llm_polish_enabled
             or self.research_claim_llm_review
             or self.research_llm_recon_enabled
         )
@@ -193,6 +200,8 @@ class Settings(BaseSettings):
         calls = LLM_SECTION_CALL_BUDGET + self.research_claim_llm_review_limit
         if self.research_llm_writing_enabled:
             calls += LLM_WRITE_SEARCH_CALL_BUDGET
+        if self.research_llm_polish_enabled:
+            calls += LLM_POLISH_CALL_BUDGET
         if self.research_llm_planning_enabled:
             calls += LLM_PLANNING_CALL_BUDGET
         if self.research_llm_recon_enabled:

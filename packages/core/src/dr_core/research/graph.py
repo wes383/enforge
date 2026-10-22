@@ -42,6 +42,7 @@ from dr_core.research.nodes import (
     parse_brief,
     parse_documents,
     plan_research,
+    polish_article,
     rank_sources,
     research_recon,
     revise_search_plan,
@@ -168,6 +169,10 @@ def build_research_graph(ctx: ResearchContext, checkpointer: PostgresSaver):
         _traced_node(ctx, "write_sections", write_sections(ctx)),
     )
     builder.add_node(
+        "polish_article",
+        _traced_node(ctx, "polish_article", polish_article(ctx)),
+    )
+    builder.add_node(
         "verify_claims",
         _traced_node(ctx, "verify_claims", verify_claims(ctx)),
     )
@@ -218,7 +223,8 @@ def build_research_graph(ctx: ResearchContext, checkpointer: PostgresSaver):
             "write_sections": "write_sections",
         },
     )
-    builder.add_edge("write_sections", "verify_claims")
+    builder.add_edge("write_sections", "polish_article")
+    builder.add_edge("polish_article", "verify_claims")
     builder.add_edge("verify_claims", "verify_citations")
     builder.add_edge("verify_citations", "finalize_report")
     builder.add_edge("finalize_report", END)
