@@ -20,7 +20,7 @@ RUN if [ "$INSTALL_DEV" = "true" ]; then \
     fi
 
 COPY packages/core/pyproject.toml /tmp/core/pyproject.toml
-RUN python -c "import tomllib; print(' '.join(tomllib.load(open('/tmp/core/pyproject.toml', 'rb'))['project']['dependencies']))" > /tmp/core-deps.txt \
+RUN python -c "import tomllib; print(chr(10).join(tomllib.load(open('/tmp/core/pyproject.toml', 'rb'))['project']['dependencies']))" > /tmp/core-deps.txt \
     && pip install --no-cache-dir -r /tmp/core-deps.txt
 
 COPY packages/core /app/packages/core
