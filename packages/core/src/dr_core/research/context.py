@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import signal
 import threading
 from contextlib import contextmanager
@@ -13,13 +14,15 @@ from dr_core.config import Settings
 from dr_core.db import Database
 from dr_core.db.enums import RunEventType, RunStatus
 from dr_core.db.models import ResearchProject, ResearchRun
-from dr_core.db.repositories import RunEventRepository
+from dr_core.db.repositories import RunEventRepository, RunRepository
 from dr_core.db.repositories.exceptions import EntityNotFound
 from dr_core.observability.tracing import ResearchTracer
 from dr_core.providers.registry import ProviderRegistry
 from dr_core.schemas import RunEventCreate
 from dr_core.services.runs import finalize_cancelled_run, lock_run, transition_run
 from dr_core.storage import FileStorage
+
+logger = logging.getLogger(__name__)
 
 
 class RunCancelled(Exception):
@@ -134,6 +137,28 @@ class ResearchContext:
                 current_run,
                 self.settings,
                 project.budget_usd,
+            )
+
+    def record_usage(self, response: Any) -> None:
+        """Bill one model call's tokens and cost to this run."""
+        input_tokens = max(0, int(getattr(response, "input_tokens", 0) or 0))
+        output_tokens = max(0, int(getattr(response, "output_tokens", 0) or 0))
+        cost = self.settings.llm_usage_cost(input_tokens, output_tokens)
+        if input_tokens == 0 and output_tokens == 0 and cost == 0:
+            return
+        try:
+            with self.database.session_scope() as session:
+                RunRepository(session).add_usage(
+                    self.run_id,
+                    project_id=self.project_id,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    cost_usd=cost,
+                )
+        except Exception as exc:
+            # Accounting must never sink a run that already paid for the call.
+            logger.warning(
+                "Unable to record LLM usage for run %s: %s", self.run_id, exc
             )
 
     def project(self) -> ResearchProject:

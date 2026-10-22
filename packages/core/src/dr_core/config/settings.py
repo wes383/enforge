@@ -1,3 +1,4 @@
+from decimal import Decimal
 from functools import lru_cache
 from pathlib import Path
 from typing import Literal
@@ -76,6 +77,11 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: float = Field(default=120.0, gt=0, le=900)
     llm_max_retries: int = Field(default=0, ge=0, le=5)
 
+    # Optional per-million-token prices for the configured endpoint. Cost stays 0
+    # when unset, but token usage is always recorded against the run.
+    llm_cost_per_1m_input_tokens: float = Field(default=0.0, ge=0)
+    llm_cost_per_1m_output_tokens: float = Field(default=0.0, ge=0)
+
     web_fetch_max_bytes: int = Field(default=2_000_000, gt=0)
     web_fetch_min_content_chars: int = Field(default=400, ge=0)
 
@@ -143,6 +149,18 @@ class Settings(BaseSettings):
     def llm_call_budget_seconds(self) -> int:
         """Worst-case wall time of one model call, retries included."""
         return int((self.llm_max_retries + 1) * self.llm_request_timeout_seconds)
+
+    def llm_usage_cost(self, input_tokens: int, output_tokens: int) -> Decimal:
+        """Cost of one model call, rounded to the run column's 6 decimals."""
+        input_rate = Decimal(str(self.llm_cost_per_1m_input_tokens))
+        output_rate = Decimal(str(self.llm_cost_per_1m_output_tokens))
+        if input_rate == 0 and output_rate == 0:
+            return Decimal("0")
+        cost = (
+            input_rate * max(0, input_tokens)
+            + output_rate * max(0, output_tokens)
+        ) / Decimal(1_000_000)
+        return cost.quantize(Decimal("0.000001"))
 
     @property
     def llm_run_time_floor_seconds(self) -> int:

@@ -12,6 +12,7 @@ from dr_core.providers.models import LLMResponse
 from dr_core.research.models import ResearchBrief
 from dr_core.research.nodes import _llm_planner, _planning_node_timeout
 from dr_core.research.planning import PLANNING_TASK, build_plan_with_llm
+from dr_core.research.usage import UsageRecordingLLM
 
 
 class _FakeLLM:
@@ -250,8 +251,14 @@ def test_planner_gate_and_node_timeout_budget():
         llm_request_timeout_seconds=120,
         llm_max_retries=1,
     )
-    ctx = SimpleNamespace(settings=settings, registry=SimpleNamespace(llm=llm))
-    assert _llm_planner(ctx) is llm
+    ctx = SimpleNamespace(
+        settings=settings,
+        registry=SimpleNamespace(llm=llm),
+        record_usage=lambda response: None,
+    )
+    planner = _llm_planner(ctx)
+    assert isinstance(planner, UsageRecordingLLM)
+    assert planner.name == llm.name
     assert _planning_node_timeout(ctx) == 90 + 2 * 120
 
     mock_only = SimpleNamespace(

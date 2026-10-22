@@ -108,6 +108,7 @@ from dr_core.research.text import (
     context_window,
     sentence_spans,
 )
+from dr_core.research.usage import UsageRecordingLLM
 from dr_core.research.verification import audit_section, verify_run_claims
 from dr_core.research.writing import compose_section
 from dr_core.schemas import (
@@ -2630,7 +2631,7 @@ def _llm_provider(ctx: ResearchContext, enabled: bool):
     llm = ctx.registry.llm
     if llm is None or getattr(llm, "name", "") == "mock-llm":
         return None
-    return llm
+    return UsageRecordingLLM(llm, ctx.record_usage)
 
 
 def _llm_planner(ctx: ResearchContext):

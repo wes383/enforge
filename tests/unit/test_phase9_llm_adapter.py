@@ -179,7 +179,11 @@ def test_llm_node_timeouts_scale_with_expected_model_calls():
             )
         ),
     )
-    ctx = SimpleNamespace(settings=settings, registry=SimpleNamespace(llm=llm))
+    ctx = SimpleNamespace(
+        settings=settings,
+        registry=SimpleNamespace(llm=llm),
+        record_usage=lambda response: None,
+    )
     state = {"outline": {"sections": [{}, {}, {}]}}
     assert _writing_node_timeout(ctx, state) == 90 + 3 * 120
     assert _verification_node_timeout(ctx) == 90 + 4 * 120

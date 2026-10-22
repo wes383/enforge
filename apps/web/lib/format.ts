@@ -38,6 +38,7 @@ export function formatCost(value: string | number | null | undefined): string {
   if (numeric === null || numeric === undefined || Number.isNaN(numeric)) {
     return "$0.0000";
   }
+  if (numeric > 0 && numeric < 0.0001) return "<$0.0001";
   return `$${numeric.toFixed(4)}`;
 }
 

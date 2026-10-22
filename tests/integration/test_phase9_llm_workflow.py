@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import uuid
+from decimal import Decimal
 from uuid import UUID
 
 import httpx
@@ -125,6 +126,8 @@ def test_workflow_uses_registered_openai_compatible_llm(database):
             "research_claim_llm_review_limit": review_limit,
             "research_provider_mode": "mock",
             "langfuse_enabled": False,
+            "llm_cost_per_1m_input_tokens": 2.5,
+            "llm_cost_per_1m_output_tokens": 10,
             "research_max_search_rounds": 1,
             "research_max_queries_per_round": 4,
             "research_max_sources": 8,
@@ -181,5 +184,12 @@ def test_workflow_uses_registered_openai_compatible_llm(database):
         review_calls = [task for task in _LLM_CALLS if _REVIEW_TASK in task]
         assert len(review_calls) <= review_limit
         assert len(_LLM_CALLS) == len(llm_sections) + len(review_calls)
+
+        with database.session() as session:
+            run_row = session.get(ResearchRun, run_id)
+        assert run_row is not None
+        assert run_row.input_tokens == 40 * len(_LLM_CALLS)
+        assert run_row.output_tokens == 20 * len(_LLM_CALLS)
+        assert run_row.cost_usd == Decimal("0.0003") * len(_LLM_CALLS)
     finally:
         _cleanup(database, project_id)

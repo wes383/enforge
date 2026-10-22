@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from decimal import Decimal
 from uuid import UUID
 
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.exc import IntegrityError
 
 from dr_core.db.enums import TERMINAL_RUN_STATUSES, RunStatus
@@ -143,3 +144,30 @@ class RunRepository(Repository):
         run.checkpoint_id = checkpoint_id
         self.session.flush()
         return run
+
+    def add_usage(
+        self,
+        run_id: UUID,
+        *,
+        input_tokens: int,
+        output_tokens: int,
+        cost_usd: Decimal,
+        project_id: UUID | None = None,
+    ) -> None:
+        """Atomically accumulate one model call's usage onto the run."""
+        if input_tokens <= 0 and output_tokens <= 0 and cost_usd <= 0:
+            return
+        statement = (
+            update(ResearchRun)
+            .where(ResearchRun.id == run_id)
+            .values(
+                input_tokens=ResearchRun.input_tokens + max(0, input_tokens),
+                output_tokens=ResearchRun.output_tokens + max(0, output_tokens),
+                cost_usd=ResearchRun.cost_usd + cost_usd,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if project_id is not None:
+            statement = statement.where(ResearchRun.project_id == project_id)
+        if self.session.execute(statement).rowcount == 0:
+            raise EntityNotFound("Research run not found")
