@@ -195,7 +195,7 @@ def _plan_from_payload(
     version: int,
     limit: int,
 ) -> ResearchPlan | None:
-    summary = _clean_text(payload.get("summary"), _MAX_TEXTS["summary"])
+    summary = clean_model_text(payload.get("summary"), _MAX_TEXTS["summary"])
     raw = payload.get("questions")
     if not summary or not isinstance(raw, list):
         return None
@@ -214,7 +214,7 @@ def _plan_from_payload(
         return None
     if not _on_topic(kept, brief):
         return None
-    if not _in_expected_language([text for text, _, _ in kept], brief):
+    if not in_expected_language([text for text, _, _ in kept], brief):
         return None
 
     questions = [
@@ -237,7 +237,7 @@ def _plan_from_payload(
 
 def _entry(value: Any) -> tuple[str, int | None, list[str]]:
     if isinstance(value, dict):
-        text = _clean_text(
+        text = clean_model_text(
             value.get("question") or value.get("text") or value.get("title"),
             _MAX_TEXTS["question"],
             min_chars=_MIN_QUESTION_CHARS,
@@ -245,7 +245,7 @@ def _entry(value: Any) -> tuple[str, int | None, list[str]]:
         priority_value = value.get("priority")
         terms_value = value.get("search_terms")
     else:
-        text = _clean_text(
+        text = clean_model_text(
             value,
             _MAX_TEXTS["question"],
             min_chars=_MIN_QUESTION_CHARS,
@@ -268,7 +268,7 @@ def _search_terms(value: Any) -> list[str]:
     terms: list[str] = []
     seen: set[str] = set()
     for item in raw:
-        term = _clean_text(
+        term = clean_model_text(
             item,
             _MAX_TEXTS["term"],
             min_chars=_MIN_TERM_CHARS,
@@ -283,7 +283,7 @@ def _search_terms(value: Any) -> list[str]:
     return terms
 
 
-def _clean_text(value: Any, limit: int, *, min_chars: int = 1) -> str:
+def clean_model_text(value: Any, limit: int, *, min_chars: int = 1) -> str:
     if not isinstance(value, str):
         return ""
     cleaned = _WHITESPACE_RE.sub(" ", value).strip()
@@ -318,7 +318,7 @@ def _on_topic(
     return any(tokenize(text) & brief_tokens for text, _, _ in kept)
 
 
-def _in_expected_language(texts: list[str], brief: ResearchBrief) -> bool:
+def in_expected_language(texts: list[str], brief: ResearchBrief) -> bool:
     if brief.language is ProjectLanguage.ZH:
         matched = sum(1 for text in texts if _CJK_RE.search(text))
     else:

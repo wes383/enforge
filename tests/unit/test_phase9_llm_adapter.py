@@ -13,6 +13,7 @@ from dr_core.providers.http import RetryPolicy
 from dr_core.providers.llm import OpenAICompatibleLLMProvider
 from dr_core.providers.registry import build_provider_registry
 from dr_core.research.nodes import (
+    _outline_node_timeout,
     _polish_node_timeout,
     _verification_node_timeout,
     _writing_node_timeout,
@@ -314,4 +315,42 @@ def test_polish_adds_exactly_one_model_call_to_the_time_budgets():
         polishing.settings.llm_run_time_floor_seconds
         - settings.llm_run_time_floor_seconds
         == 120
+    )
+
+
+def test_outline_adds_two_model_calls_to_the_run_budget():
+    settings = Settings(
+        _env_file=None,
+        research_node_timeout_seconds=90,
+        llm_request_timeout_seconds=120,
+        llm_max_retries=0,
+    )
+    llm = OpenAICompatibleLLMProvider(
+        "sk-test-key",
+        model="fake-model",
+        client=httpx.Client(
+            transport=httpx.MockTransport(
+                lambda request: httpx.Response(200, json={})
+            )
+        ),
+    )
+    ctx = SimpleNamespace(
+        settings=settings,
+        registry=SimpleNamespace(llm=llm),
+        record_usage=lambda response: None,
+    )
+    assert _outline_node_timeout(ctx) == 90
+
+    outlining = SimpleNamespace(
+        settings=settings.model_copy(update={"research_llm_outline_enabled": True}),
+        registry=SimpleNamespace(llm=llm),
+        record_usage=lambda response: None,
+    )
+    assert outlining.settings.llm_workflow_enabled is True
+    # one outline version per approval round, so the node keeps one call
+    assert _outline_node_timeout(outlining) == 90 + 120
+    assert (
+        outlining.settings.llm_run_time_floor_seconds
+        - settings.llm_run_time_floor_seconds
+        == 2 * 120
     )

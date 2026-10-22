@@ -15,6 +15,9 @@ LLM_WRITE_SEARCH_CALL_BUDGET = 12
 # Planning asks the model once per plan version, so a run that is revised by the
 # approver can make a couple of planning calls before searching starts.
 LLM_PLANNING_CALL_BUDGET = 2
+# Outlining asks once per outline version; the same budget as planning covers a
+# single regeneration after an approval rejection.
+LLM_OUTLINE_CALL_BUDGET = 2
 # The bounded researcher makes at most one call per tool round plus a final
 # digest call. Tool rounds are capped at three in settings.
 LLM_RECON_CALL_BUDGET = 4
@@ -119,6 +122,10 @@ class Settings(BaseSettings):
     research_llm_planning_enabled: bool = False
     research_llm_writing_enabled: bool = False
     research_claim_llm_review: bool = False
+    # The model orders and frames the article's body sections. Evidence
+    # assignment and the introduction/contradiction/limitations/conclusion frame
+    # stay deterministic, so a rejected outline only costs the call.
+    research_llm_outline_enabled: bool = False
     # One pass over the finished article that rewrites it for language and flow.
     # Articles longer than the input cap keep the sections as written.
     research_llm_polish_enabled: bool = False
@@ -172,6 +179,7 @@ class Settings(BaseSettings):
         return (
             self.research_llm_planning_enabled
             or self.research_llm_writing_enabled
+            or self.research_llm_outline_enabled
             or self.research_llm_polish_enabled
             or self.research_claim_llm_review
             or self.research_llm_recon_enabled
@@ -202,6 +210,8 @@ class Settings(BaseSettings):
             calls += LLM_WRITE_SEARCH_CALL_BUDGET
         if self.research_llm_polish_enabled:
             calls += LLM_POLISH_CALL_BUDGET
+        if self.research_llm_outline_enabled:
+            calls += LLM_OUTLINE_CALL_BUDGET
         if self.research_llm_planning_enabled:
             calls += LLM_PLANNING_CALL_BUDGET
         if self.research_llm_recon_enabled:

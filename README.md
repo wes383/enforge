@@ -36,6 +36,7 @@
 - 论证型提纲：每个章节保存标题、写作目的、关联研究问题、关键主张、支持证据 ID、反对证据 ID、预期字数和 `planned/drafted/verified` 状态；提纲审批通过后，写作和核验阶段会回写章节状态。
 - 分章节长文写作：写作节点按章节选择数据库证据，并把证据综合成连续行文，而不是逐条罗列；引言交代范围与主线，各问题章节讨论支持证据、分歧与适用条件，结论只做综合而不重复前文；章节保存 `citation_map`、使用过的证据 ID 和版本，内容变化时自动生成新版本。
 - 可选的模型规划：打开 `RESEARCH_LLM_PLANNING_ENABLED=true` 后由大模型按项目简报生成研究问题，语言、深度（决定问题数）、范围、目标读者和上一轮审批反馈都进入提示词；每个问题同时产出 1–3 个短检索词，中文项目还会要求一条英文检索词供学术库使用；输出必须是 JSON，且要通过去重、数量、语言和题目相关性校验，否则回退到确定性模板并在研究局限中记录原因。
+- 可选的模型提纲：打开 `RESEARCH_LLM_OUTLINE_ENABLED=true` 后，证据收集完成时由模型决定文章正文的次序与框架——把研究问题排成一条递进的论证线，给每节起主题式标题（不能是问句、不能重复）、写这节要解决什么与交给下一节什么、按证据多少分配字数，并给出一句话的全文主线追加到提纲摘要里。模型只能改动正文各节的这些文字字段：每节的证据 ID 与支持/反对证据分配仍由确定性提纲从数据库证据算出，引言、矛盾与反方证据、研究局限、结论和审批反馈节也仍由代码生成，提示词根本不出现证据 ID。返回必须不重不漏地覆盖全部研究问题，标题语言与项目一致，`key_claims` 里出现本节证据中没有的数字会被丢弃，`target_words` 超出 50–5000 则沿用模板值；任何结构问题（漏题、多题、未知问题 ID、问句标题、重名、非本项目语言）都整份拒绝并回退确定性模板，同时在研究局限中记录一句原因，`phase_completed` 事件 payload 用 `outliner: "llm" | "template"` 标明本次提纲来源。
 - 可选的模型写作：配置 `OPENAI_API_KEY`（任意 OpenAI 兼容端点）并显式打开 `RESEARCH_LLM_WRITING_ENABLED=true` 时才启用；输出必须是 JSON，且通过引用标记、段落引用、数字和参考文献禁令校验，否则自动回退到确定性写作。写作提示词按引言/主体/结论分配角色，要求连续行文、综合论证，并明确要求用自己的话转述证据、不得连续照抄原文长句，禁止“本节回答的问题是”“证据显示”和“下一节将讨论”这类报告腔；引言同样可以由模型撰写。写作模型发现当前章节证据不足时可以请求补充检索：服务端按请求执行有界搜索、正常入库、建立索引并抽取本节证据，然后让模型基于新证据重写一次；因此写作不再局限于提纲审批前已经收集到的材料。
 - 可选的全文润色：打开 `RESEARCH_LLM_POLISH_ENABLED=true` 后，章节写完、核验开始前用一次模型调用重写整篇文章，只做语言层面的工作——统一同一概念/研究/指标的术语、改善段落与章节之间的过渡、删去重复的句子和重复的结论。提示词把文章标记为不可信内容并要求只输出 JSON；输出按章节校验：标题行与章节顺序不变、每节的引用标记集合必须与原文完全一致、数字与原文双向一致（不得新增也不得丢失）、不得新增小节或参考文献、不得少于原文一半、不得把不可信包装标签写进正文、未加引用的段落数量不得增加。任何一节校验失败就保留该节原文，其余通过的章节写成新的版本再进入主张与引用核验；文章总字数超过 `RESEARCH_POLISH_MAX_INPUT_CHARS`（默认 24000）时跳过润色，事件里会说明原因。
 - 可选的前置侦察（有界 agent）：同时打开 `RESEARCH_LLM_RECON_ENABLED` 与 `RESEARCH_LLM_PLANNING_ENABLED` 后，模型可在规划前通过 `search_sources` / `read_source` 工具检索并阅读来源，最多 2 轮工具调用，最后返回主题、术语与争议摘要；检索结果先走正常入库管道再返回给模型，所以侦察来源之后仍可被证据抽取和引用。侦察摘要只作为不可信背景供规划选角度，不进入证据或参考文献。
@@ -47,7 +48,7 @@
 - SQLAlchemy 2.0 仓储层，覆盖项目、运行、研究问题、检索、来源、切片、证据、主张、提纲、章节、引用核验、审批、事件和导出文件。
 - Alembic 从空数据库初始化、重复升级、降级/再升级和 `alembic check` 均通过；Compose 中的 `migrate` 服务在 `api`、`worker` 启动前完成迁移。
 - 文件记录与实际文件对账工具，能够报告缺失文件和孤儿文件。
-- 容器内单元测试和集成测试，当前 `304 passed`（通过 `docker-compose.test.yml` 强制 mock，真实密钥不参与测试）。
+- 容器内单元测试和集成测试，当前 `317 passed`（通过 `docker-compose.test.yml` 强制 mock，真实密钥不参与测试）。
 - 不包含 MinIO、S3 或任何对象存储服务。
 
 ## 服务拓扑
@@ -416,7 +417,7 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 外部研究服务通过 `.env` 中的 `*_ENABLED` 开关与后端密钥启用（见“提供商开关与限制”），密钥只存在于后端环境变量，浏览器不可见。真实大模型写作只需要填环境变量，无需改代码：
 
 1. 在 `.env` 中设置 `OPENAI_API_KEY`；如使用兼容 OpenAI 协议的其他服务（Azure OpenAI 兼容网关、vLLM、Ollama、国内大模型的 OpenAI 兼容端点等），同时设置 `OPENAI_BASE_URL` 与 `OPENAI_MODEL`。
-2. 打开工作流开关：`RESEARCH_LLM_PLANNING_ENABLED=true`（生成研究问题）、`RESEARCH_LLM_WRITING_ENABLED=true`（章节写作）、`RESEARCH_LLM_POLISH_ENABLED=true`（全文润色）和/或 `RESEARCH_CLAIM_LLM_REVIEW=true`（主张复核）。如需先检索再提问，再打开 `RESEARCH_LLM_RECON_ENABLED=true`（它依赖规划开关）。
+2. 打开工作流开关：`RESEARCH_LLM_PLANNING_ENABLED=true`（生成研究问题）、`RESEARCH_LLM_OUTLINE_ENABLED=true`（文章提纲）、`RESEARCH_LLM_WRITING_ENABLED=true`（章节写作）、`RESEARCH_LLM_POLISH_ENABLED=true`（全文润色）和/或 `RESEARCH_CLAIM_LLM_REVIEW=true`（主张复核）。如需先检索再提问，再打开 `RESEARCH_LLM_RECON_ENABLED=true`（它依赖规划开关）。
 3. `docker compose up -d --force-recreate api worker` 让新配置生效。
 
 适配器 `OpenAICompatibleLLMProvider`（`packages/core/src/dr_core/providers/llm.py`）走 `POST {OPENAI_BASE_URL}/chat/completions`，把 `usage` 映射为 token 用量供观测记录。默认不注册：只有 `OPENAI_API_KEY` 非空时才进入 `ProviderRegistry`，因此没有 Key 时系统依旧完全离线、写作与核验保持确定性路径。
@@ -432,10 +433,11 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 | 单次模型请求 | — | `LLM_REQUEST_TIMEOUT_SECONDS` × (`LLM_MAX_RETRIES`+1) = 240s |
 | `research_recon` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + (`RESEARCH_RECON_MAX_ROUNDS` + 1) × 240s（打开侦察时） |
 | `plan_research` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 240s（打开 `RESEARCH_LLM_PLANNING_ENABLED` 时） |
+| `generate_outline` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 240s（打开 `RESEARCH_LLM_OUTLINE_ENABLED` 时；每个提纲版本一次调用） |
 | `write_sections` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 章节数 × 240s；写作模型可用且存在搜索提供商时为 90s + 章节数 × 2 × 240s（为补检后的重写预留一次调用） |
 | `polish_article` 节点 | `RESEARCH_NODE_TIMEOUT_SECONDS`（90s） | 90s + 240s（打开 `RESEARCH_LLM_POLISH_ENABLED` 时；整篇文章一次重写） |
 | `verify_claims` 节点 | 90s | 90s + `RESEARCH_CLAIM_LLM_REVIEW_LIMIT` × 240s |
-| Celery 软/硬时限 | 300s / 360s | 8250s / 8310s；再打开侦察为 9210s / 9270s，同时打开规划与侦察为 9690s / 9750s；打开润色按每次模型调用再加 240s（仅润色为 8490s / 8550s）（取配置值与推算下限的较大者，Worker 启动时打印一条 WARNING 说明实际生效值） |
+| Celery 软/硬时限 | 300s / 360s | 8250s / 8310s；再打开侦察为 9210s / 9270s，同时打开规划与侦察为 9690s / 9750s；打开润色按每次模型调用再加 240s（仅润色为 8490s / 8550s），打开提纲再加两次调用 480s（取配置值与推算下限的较大者，Worker 启动时打印一条 WARNING 说明实际生效值） |
 
 主张复核另有次数上限（`RESEARCH_CLAIM_LLM_REVIEW_LIMIT`，默认 10），超出的主张保留确定性核验状态并记录一条日志，避免费用与耗时随主张数量线性膨胀。单节模型调用超时或校验失败只影响该节，会回退到确定性写作并继续。
 
@@ -555,7 +557,7 @@ Embedding 仍需自行接入：注册真实 `EmbeddingProvider` 并保持 `EMBED
 | `analyze_evidence` | 构建证据矩阵，统计研究问题覆盖、支持/反驳数量与来源分布 |
 | `analyze_gaps` | 识别未覆盖问题、证据不足和缺少反方证据等缺口，生成定向补充查询 |
 | `revise_search_plan` | 轮次加一，记录补充检索原因；达到最大轮次或预算上限时停止循环 |
-| `generate_outline` | 生成结构化提纲；被拒绝后根据反馈生成新版本并加入反馈章节 |
+| `generate_outline` | 生成结构化提纲：默认按研究问题装配正文小节并固定引言/矛盾/局限/结论骨架，打开提纲开关后由模型决定正文小节的次序、标题、写作目的与字数分配；被拒绝后根据反馈生成新版本并加入反馈章节 |
 | `await_outline_approval` | 写入待审批记录并 `interrupt`；批准进入写作，拒绝重新生成提纲，修改后提纲生效 |
 | `write_sections` | 按提纲逐节选择数据库证据并生成正文，写入含引用映射、使用证据 ID 和版本的章节；可选 LLM 输出必须通过严格校验，证据不足时可请求一次有界补检后重写 |
 | `polish_article` | 打开润色开关时用一次模型调用重写全文的语言与行文（统一术语、改善过渡、去重）；按节校验引用标记与数字，通过的写成新版本，失败的保留原文；未开启或状态已标记完成时直接跳过 |
@@ -724,6 +726,7 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
 | 模块 | 职责 |
 |---|---|
 | `writing.py` | 逐节把证据综合成连续行文；构建引用映射；可选的严格校验 LLM 写作与写时补检 |
+| `outlining.py` | 可选的模型提纲：只重排与改写正文小节的标题、目的、关键主张与字数，证据分配与文章骨架仍来自 `generation.build_outline` |
 | `polish.py` | 整篇文章的语言润色：一次模型调用重写全文，按节校验标题、引用标记、数字与段落引用，任何一节不合格就保留该节原文 |
 | `claims.py` | 分句与主张抽取、确定性核验、保守的 LLM 复核、参考文献审计 |
 | `generation.py` | 论证型提纲生成，填充关键主张、支持/反对证据、预期字数和章节状态 |
@@ -732,6 +735,10 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
 ### 提纲与章节写作
 
 提纲中的每个章节保存 `title`、`purpose`、`question_id`（写作目的是回答哪个研究问题）、`key_claims`、`support_evidence_ids`、`refute_evidence_ids`、`evidence_ids`、`target_words` 和 `status`。状态随流程从 `planned` 变为 `drafted`，引用核验通过后变为 `verified`；未通过的章节保留 `drafted` 并记录审计失败。
+
+提纲默认由 `generation.build_outline` 装配：引言、每个研究问题一节、（有正反冲突时）矛盾与反方证据、（有缺口时）研究局限与未解决问题、结论，反馈版本再在结论前插入审批反馈节；每节的 `evidence_ids`/`support_evidence_ids`/`refute_evidence_ids` 都从数据库该问题的证据算出来，标题由 `_short_title` 去掉疑问框架变成主题短语，字数按项目 `target_words` 或研究深度分配。
+
+打开 `RESEARCH_LLM_OUTLINE_ENABLED` 后，`generate_outline` 先装配同一份提纲，再让模型只处理正文小节：返回 `{"line": string, "sections": [{"question_id", "title", "purpose", "key_claims", "target_words"}]}`，模型给出的顺序与文字覆盖到对应小节上，文章骨架与每节的证据 ID 原样保留，提示词里也不出现证据标识，因此模型无法引入任何未入库的来源。校验为不重不漏地覆盖全部 `question_id`（未知 ID、漏题、重复都整份拒绝），标题清理后必须非空、不以问号结尾、不重复且使用项目语言，`key_claims` 最多 6 条且其中数字必须出现在本节证据里（否则该条被丢弃并回退到模板主张），`target_words` 只接受 50–5000。`purpose` 不合格则沿用模板目的；模型的 `line` 通过语言校验后追加到提纲摘要末尾。任何一次调用失败、JSON 非法或结构不合格都回退到确定性提纲并写入一条研究局限，事件 payload 的 `outliner` 字段记录本次是 `llm` 还是 `template`；提纲内容与上一版相同（忽略版本号）时不新建版本。
 
 `write_sections` 按章节读取数据库证据，而不是把整个研究库交给模型：
 
@@ -948,6 +955,7 @@ docker compose exec api python -m dr_core.maintenance
 | `RESEARCH_CHUNK_MAX_CHARS` | `1200` | 单个文档切片的最大字符数 |
 | `RESEARCH_LLM_PLANNING_ENABLED` | `false` | 是否允许真实 LLM 生成研究问题；需同时配置 `OPENAI_API_KEY`，校验失败自动回退确定性模板 |
 | `RESEARCH_LLM_WRITING_ENABLED` | `false` | 是否允许真实 LLM 参与章节写作；需同时配置 `OPENAI_API_KEY`，校验失败自动回退确定性写作 |
+| `RESEARCH_LLM_OUTLINE_ENABLED` | `false` | 是否允许真实 LLM 排列与命名文章正文小节；需同时配置 `OPENAI_API_KEY`，结构校验失败自动回退确定性提纲，证据分配与文章骨架不受影响 |
 | `RESEARCH_LLM_POLISH_ENABLED` | `false` | 是否在写作完成后用一次模型调用润色整篇文章的语言与行文；需同时配置 `OPENAI_API_KEY`，被拒绝的章节保留原文 |
 | `RESEARCH_POLISH_MAX_INPUT_CHARS` | `24000` | 参与润色的文章最大字符数（2000–200000），超出则跳过润色 |
 | `RESEARCH_LLM_RECON_ENABLED` | `false` | 是否在规划前运行有界工具侦察；需同时配置 `OPENAI_API_KEY` 并打开 `RESEARCH_LLM_PLANNING_ENABLED` |
@@ -1039,7 +1047,7 @@ docker compose exec api python -m dr_core.maintenance
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test up -d --build api worker
 
-# 2) 运行单元 + 集成 + 评测（304 passed）
+# 2) 运行单元 + 集成 + 评测（317 passed）
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -1070,6 +1078,7 @@ docker compose up -d --force-recreate api worker
 - 项目级并发限流：达到上限返回 `ActiveRunLimitExceeded`（API 映射 429），重复幂等键不受限流影响，终态运行不占用额度。
 - OpenAI 兼容适配器：请求体与 `Authorization` 头、`usage` 映射为 token 用量、5xx 转 `ProviderUnavailable`、缺字段或空内容转 `ProviderResponseError`；只有 `OPENAI_API_KEY` 非空时才注册到 `ProviderRegistry`。
 - 真实 LLM 写作链路（本地假端点，不出网）：打开 `RESEARCH_LLM_WRITING_ENABLED` 后运行完成，章节事件 `used_llm=true`，引用标记仍全部来自数据库证据；主张复核调用次数不超过 `RESEARCH_CLAIM_LLM_REVIEW_LIMIT`。
+- 模型提纲链路（本地假端点，不出网）：打开 `RESEARCH_LLM_OUTLINE_ENABLED` 后运行完成，`phase_completed` 事件 `outliner=llm`，正文小节按模型顺序与模型标题落库并被 `write_sections` 使用、引言与结论仍在首尾；模型漏掉一个研究问题时提纲回退确定性模板且事件记为 `outliner=template`。
 - 全文润色链路（本地假端点，不出网）：打开 `RESEARCH_LLM_POLISH_ENABLED` 后只多一次模型调用，通过的章节写成新版本、引用映射与上一版一致，报告与引用核验使用润色后的正文；模型返回非法引用标记或凭空数字时，章节仍是第 1 版并写入一条说明原因的进度事件。
 - LLM 生成研究问题（本地假端点）：打开 `RESEARCH_LLM_PLANNING_ENABLED` 后研究问题来自模型输出并按深度上限截断、`planner=llm`；模型返回非法内容或问题跑题/语言不符时回退确定性模板并记录局限、`planner=template`；`_llm_planner` 门禁跳过 Mock Provider，规划开启时节点与 Celery 时限各放大相应的模型调用预算。
 - 规划产出检索词：模型返回的 `search_terms` 会合并空白、去重并最多保留 3 个；中文计划的网页查询用中文词、学术查询用英文词，运行后 `search_queries` 里存的是检索词而不是整句问题；没有检索词时回退整句问题，缺口补充检索按中英文分别拼接对应后缀。
@@ -1164,7 +1173,7 @@ docker compose up -d --force-recreate api worker
 - 缺失文件与孤儿文件识别。
 - 原有健康检查、CORS、文件跨容器往返和 Celery 测试任务。
 
-当前结果：`304 passed`（阶段 9 新增观测、安全、限流、LLM 适配器与质量评测测试；测试全程不需要网络或真实 API Key）。质量评测也可以单独运行：
+当前结果：`317 passed`（阶段 9 新增观测、安全、限流、LLM 适配器与质量评测测试；测试全程不需要网络或真实 API Key）。质量评测也可以单独运行：
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
@@ -1216,7 +1225,7 @@ docker compose exec -T postgres psql -U enforge -d enforge -c \
 | Compose 配置检查 | `docker compose config --quiet` | 通过 |
 | 镜像构建 | `docker compose up -d --build` | `postgres`、`redis`、`migrate`、`api`、`worker`、`web` 全部 healthy |
 | 数据库迁移 | `migrate` 服务执行 `alembic upgrade head` | 成功；`alembic check` 返回 `No new upgrade operations detected` |
-| Python 单元/集成/评测测试 | `docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test run --rm --build test` | `304 passed` |
+| Python 单元/集成/评测测试 | `docker compose -f docker-compose.yml -f docker-compose.test.yml --profile test run --rm --build test` | `317 passed` |
 | 前端类型检查 | `npm run typecheck` | 通过 |
 | 前端代码检查 | `npm run lint` | 通过 |
 | 前端构建 | `npm run build` | Next.js 16.4 生产构建通过 |
@@ -1297,6 +1306,7 @@ Linux/macOS 的恢复命令同样将第二个卷参数改为 `-v "$PWD/backups:/
 - 阶段 7 的提纲与章节正文默认由确定性生成器基于数据库中的研究问题与证据组织，保证离线可测、引用可追溯；确定性回退也会输出连续行文并综合证据摘要，但不会像真实模型那样重写和推理。可选的真实 LLM 写作/主张复核开关默认关闭，仓库已内置 OpenAI 兼容适配器（`OPENAI_API_KEY` 非空时注册），但未配置密钥或校验失败时不会调用模型。真实模型产出的质量与成本未纳入当前评测指标（评测集固定使用确定性 Mock 提供商）。
 - 启用模型写作后单次运行会显著变慢（每节一次模型调用，推理模型 30–60s/节，开启 reasoning 后可能更久），Celery 软/硬时限会按 `LLM_*` 与 `RESEARCH_CLAIM_LLM_REVIEW_LIMIT` 自动放大（默认约 8250s/8310s，打开润色约 8490s/8550s），期间该运行会占用一个 Worker 并发槽位；被硬超时或 Worker 重启打断的运行会停在非终态，需要重新投递任务才会从 checkpoint 恢复或落定为 `cancelled`。
 - 全文润色是一次针对整篇文章的模型调用：文章越长越接近输出上限，超过 `RESEARCH_POLISH_MAX_INPUT_CHARS` 时直接跳过；它只做语言层面的改动，无法保证跨章节的事实取舍（例如合并重复论断时删掉的句子），因此要求每节引用标记与数字双向一致，任何一点不满足就保留原文——润色只改善行文，不替作者承担改写的风险。
+- 模型提纲只能重排和命名正文小节，不能合并、拆分或删掉研究问题（覆盖校验要求每个问题恰好出现一次），也不会改动引言/矛盾/局限/结论的生成方式；真正的内容取舍仍发生在写作与润色阶段。字数分配只受 50–5000 约束，模型可能把预算压得偏向某几节。
 - 阶段 4 的提供商默认全部关闭；只有同时设置 `*_ENABLED=true` 和后端密钥才会启用。启用但缺少密钥时会记录警告并跳过，不影响服务启动。未配置任何第三方 API Key 时，系统仍可迁移、启动并通过全部测试（测试使用 Mock 提供商，不访问网络）。
 - Tavily、Exa、Firecrawl、Crossref、Semantic Scholar 均在后端调用，密钥不会下发浏览器；错误信息、日志和缓存键不包含密钥。Firecrawl 只接受通过 SSRF 校验的 HTTP/HTTPS 公网地址，并在重定向后再次校验最终 URL。
 - 网页全文依赖 Firecrawl；未启用时来源只保留搜索摘要。付费墙、仅摘要、屏蔽和超限响应会记录为不同抓取状态，不会当作全文入库；Crossref 不提供被引列表，因此不伪造引用关系。

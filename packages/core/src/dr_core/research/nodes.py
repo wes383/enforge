@@ -94,6 +94,7 @@ from dr_core.research.models import (
     SearchQuery as SearchQueryModel,
     SourceRecord,
 )
+from dr_core.research.outlining import build_outline_with_llm
 from dr_core.research.planning import build_plan_with_llm
 from dr_core.research.polish import (
     DraftArticleSection,
@@ -1501,7 +1502,7 @@ def revise_search_plan(ctx: ResearchContext):
 
 def generate_outline(ctx: ResearchContext):
     def node(state: ResearchState) -> ResearchState:
-        with node_timeout(ctx.settings.research_node_timeout_seconds):
+        with node_timeout(_outline_node_timeout(ctx)):
             ctx.guard()
             brief = _brief(state)
             plan = _plan(state)
@@ -1527,39 +1528,54 @@ def generate_outline(ctx: ResearchContext):
                         item.research_question_id,
                         [],
                     ).append(item)
-                repo = OutlineRepository(session)
-                latest = repo.latest(ctx.project_id, ctx.run_id)
-                candidate = build_outline(
-                    brief,
-                    plan,
-                    matrix,
-                    gaps,
-                    version=latest.version if latest else 1,
-                    evidence_by_question=by_question,
-                    feedback=feedback,
-                )
-                content = candidate.model_dump(mode="json")
-                if latest is not None and latest.content == content:
-                    outline = latest
-                else:
-                    next_version = (latest.version + 1) if latest else 1
-                    candidate = build_outline(
-                        brief,
-                        plan,
-                        matrix,
-                        gaps,
-                        version=next_version,
-                        evidence_by_question=by_question,
-                        feedback=feedback,
-                    )
-                    outline = repo.create_version(
+                latest = OutlineRepository(session).latest(ctx.project_id, ctx.run_id)
+                latest_id = latest.id if latest else None
+                latest_version = latest.version if latest else 0
+                latest_body = _outline_body(latest.content) if latest else None
+
+            version = (latest_version + 1) if latest_id else 1
+            candidate, outliner = _outline_candidate(
+                ctx,
+                brief,
+                plan,
+                matrix,
+                gaps,
+                version=version,
+                evidence_by_question=by_question,
+                feedback=feedback,
+            )
+            outline_payload = candidate.model_dump(mode="json")
+            if latest_id is not None and _outline_body(outline_payload) == latest_body:
+                # The same sections as the stored version: keep that row instead
+                # of writing a duplicate outline.
+                outline_id = latest_id
+                outline_payload["version"] = latest_version
+            else:
+                with ctx.database.session_scope() as session:
+                    outline = OutlineRepository(session).create_version(
                         ctx.project_id,
                         ctx.run_id,
                         _outline_create(candidate, feedback),
                     )
-                outline_id = outline.id
-                outline_payload = dict(outline.content)
-                outline_payload["version"] = outline.version
+                    outline_id = outline.id
+                    outline_payload["version"] = outline.version
+
+            result: ResearchState = {
+                "outline": outline_payload,
+                "outline_id": str(outline_id),
+                "feedback": {},
+                "current_node": "generate_outline",
+            }
+            if outliner == "template" and _llm_outliner(ctx) is not None:
+                result["limitations"] = _with_limitations(
+                    state,
+                    _text(
+                        brief,
+                        "报告提纲模型输出未通过校验，提纲改用确定性模板生成。",
+                        "The model outline failed validation, so the report outline "
+                        "came from the deterministic template.",
+                    ),
+                )
             ctx.emit(
                 RunEventType.PHASE_COMPLETED,
                 message="Report outline generated",
@@ -1567,16 +1583,12 @@ def generate_outline(ctx: ResearchContext):
                     "outline_id": str(outline_id),
                     "version": outline_payload["version"],
                     "sections": len(outline_payload.get("sections", [])),
+                    "outliner": outliner,
                 },
                 dedupe_key=f"outline:generated:{outline_payload['version']}",
                 stage=RunStatus.BUILDING_EVIDENCE,
             )
-            return {
-                "outline": outline_payload,
-                "outline_id": str(outline_id),
-                "feedback": {},
-                "current_node": "generate_outline",
-            }
+            return result
 
     return node
 
@@ -2652,6 +2664,50 @@ def _index_source(
         )
 
 
+def _outline_body(content: dict) -> dict:
+    """Compare outline content ignoring the version counter itself."""
+    return {key: value for key, value in content.items() if key != "version"}
+
+
+def _outline_candidate(
+    ctx: ResearchContext,
+    brief: ResearchBrief,
+    plan: ResearchPlan,
+    matrix: EvidenceMatrix,
+    gaps: list[ResearchGap],
+    *,
+    version: int,
+    evidence_by_question: dict,
+    feedback: str | None,
+) -> tuple[Outline, str]:
+    outliner = _llm_outliner(ctx)
+    if outliner is not None:
+        outline = build_outline_with_llm(
+            brief,
+            plan,
+            matrix,
+            gaps,
+            version=version,
+            evidence_by_question=evidence_by_question,
+            llm=outliner,
+            feedback=feedback,
+        )
+        if outline is not None:
+            return outline, "llm"
+    return (
+        build_outline(
+            brief,
+            plan,
+            matrix,
+            gaps,
+            version=version,
+            evidence_by_question=evidence_by_question,
+            feedback=feedback,
+        ),
+        "template",
+    )
+
+
 def _outline_create(outline: Outline, feedback: str | None) -> object:
     from dr_core.schemas import OutlineCreate
 
@@ -2723,6 +2779,10 @@ def _llm_planner(ctx: ResearchContext):
     return _llm_provider(ctx, ctx.settings.research_llm_planning_enabled)
 
 
+def _llm_outliner(ctx: ResearchContext):
+    return _llm_provider(ctx, ctx.settings.research_llm_outline_enabled)
+
+
 def _llm_writer(ctx: ResearchContext):
     return _llm_provider(ctx, ctx.settings.research_llm_writing_enabled)
 
@@ -2745,6 +2805,12 @@ def _llm_node_timeout(ctx: ResearchContext, calls: int) -> int:
 
 def _planning_node_timeout(ctx: ResearchContext) -> int:
     if _llm_planner(ctx) is None:
+        return ctx.settings.research_node_timeout_seconds
+    return _llm_node_timeout(ctx, 1)
+
+
+def _outline_node_timeout(ctx: ResearchContext) -> int:
+    if _llm_outliner(ctx) is None:
         return ctx.settings.research_node_timeout_seconds
     return _llm_node_timeout(ctx, 1)
 
