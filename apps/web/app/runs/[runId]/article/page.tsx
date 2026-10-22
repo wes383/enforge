@@ -332,8 +332,8 @@ export default function ArticlePage() {
       setActionError(
         pick(
           locale,
-          "请先保存当前章节，再生成最终报告。",
-          "Save the current section before generating the final report.",
+          "请先保存当前章节，再重新生成报告。",
+          "Save the current section before regenerating the report.",
         ),
       );
       return;
@@ -456,7 +456,7 @@ export default function ArticlePage() {
             disabled={!terminal || !sections?.length || dirty}
           >
             <FileText className="h-4 w-4" />
-            {pick(locale, "生成最终报告", "Generate final report")}
+            {pick(locale, "重新生成报告", "Regenerate report")}
           </Button>
         </div>
       </Card>
@@ -977,8 +977,8 @@ export default function ArticlePage() {
                       <p className="mt-2 text-xs text-foreground-subtle">
                         {pick(
                           locale,
-                          "生成最终报告后显示整体核验结果。",
-                          "Generate the final report to see the overall audit.",
+                          "重新生成报告后显示整体核验结果。",
+                          "Regenerate the report to see the overall audit.",
                         )}
                       </p>
                     )}
