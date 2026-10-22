@@ -221,12 +221,16 @@ export default function RunOverviewPage() {
     active,
     onEvent: (event) => {
       if (
+        event.event_type === "run_created" ||
+        event.event_type === "phase_started" ||
         event.event_type === "phase_completed" ||
         event.event_type === "phase_failed" ||
         event.event_type === "awaiting_approval" ||
         event.event_type === "approval_decided" ||
         event.event_type === "error" ||
         event.event_type === "run_cancelled" ||
+        event.event_type === "cancel_requested" ||
+        event.event_type === "retry_scheduled" ||
         event.event_type === "citation_audit_failed" ||
         event.event_type === "section_generated"
       ) {
@@ -249,12 +253,6 @@ export default function RunOverviewPage() {
     const interval = window.setInterval(() => void loadApprovals(), 8000);
     return () => window.clearInterval(interval);
   }, [active, loadApprovals]);
-
-  useEffect(() => {
-    if (!active || stream.status === "live") return;
-    const interval = window.setInterval(() => void reload(), 4000);
-    return () => window.clearInterval(interval);
-  }, [active, reload, stream.status]);
 
   useEffect(() => {
     return () => {

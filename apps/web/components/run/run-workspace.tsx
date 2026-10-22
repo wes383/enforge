@@ -111,6 +111,12 @@ export function RunWorkspaceLayout({ children }: { children: ReactNode }) {
     overview && !TERMINAL_RUN_STATUSES.has(overview.run.status),
   );
 
+  useEffect(() => {
+    if (!active) return;
+    const interval = window.setInterval(() => void reload(), 4000);
+    return () => window.clearInterval(interval);
+  }, [active, reload]);
+
   const cancelRun = useCallback(async () => {
     setCancelling(true);
     setCancelError(null);

@@ -26,6 +26,7 @@ import {
   evidenceVerificationLabel,
   evidenceVerificationVariant,
   sourceTypeLabel,
+  TERMINAL_RUN_STATUSES,
 } from "@/lib/labels";
 import { pick, useLocale } from "@/lib/locale";
 import type {
@@ -64,6 +65,10 @@ export default function EvidencePage() {
   const [sourceFilter, setSourceFilter] = useState("all");
   const [query, setQuery] = useState("");
 
+  const activeRun = Boolean(
+    overview && !TERMINAL_RUN_STATUSES.has(overview.run.status),
+  );
+
   const loadInitial = useCallback(async () => {
     try {
       const [evidenceData, questionData] = await Promise.all([
@@ -89,6 +94,15 @@ export default function EvidencePage() {
   }, [loadInitial]);
 
   useEffect(() => registerRefresh(refresh), [refresh, registerRefresh]);
+
+  // Evidence rows land as the extraction pass runs. Once the reader has paged
+  // past the first page the poll stops: reloading page one would shrink the
+  // list under them, and the refresh button still covers that case.
+  useEffect(() => {
+    if (!activeRun || items.length > PAGE_SIZE) return;
+    const interval = window.setInterval(() => void loadInitial(), 4000);
+    return () => window.clearInterval(interval);
+  }, [activeRun, items.length, loadInitial]);
 
   const loadMore = useCallback(async () => {
     setLoadingMore(true);
@@ -149,10 +163,6 @@ export default function EvidencePage() {
         .includes(normalized);
     });
   }, [items, query, questionFilter, relationFilter, sourceFilter, typeFilter]);
-
-  const activeRun = overview
-    ? !["completed", "failed", "cancelled"].includes(overview.run.status)
-    : false;
 
   return (
     <div className="flex flex-col gap-4">

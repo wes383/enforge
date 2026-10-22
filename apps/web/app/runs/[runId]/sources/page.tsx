@@ -25,6 +25,7 @@ import {
   parserStatusLabel,
   parserStatusVariant,
   sourceTypeLabel,
+  TERMINAL_RUN_STATUSES,
 } from "@/lib/labels";
 import { pick, useLocale } from "@/lib/locale";
 import type {
@@ -50,6 +51,10 @@ export default function SourcesPage() {
   const [questionFilter, setQuestionFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [query, setQuery] = useState("");
+
+  const activeRun = Boolean(
+    overview && !TERMINAL_RUN_STATUSES.has(overview.run.status),
+  );
 
   const load = useCallback(async () => {
     try {
@@ -77,6 +82,14 @@ export default function SourcesPage() {
   }, [load]);
 
   useEffect(() => registerRefresh(refresh), [refresh, registerRefresh]);
+
+  // Sources are fetched and parsed while the run is walking through the phase,
+  // so the list needs its own poll; the workspace header only reloads itself.
+  useEffect(() => {
+    if (!activeRun) return;
+    const interval = window.setInterval(() => void load(), 4000);
+    return () => window.clearInterval(interval);
+  }, [activeRun, load]);
 
   useEffect(() => {
     const initial = new URLSearchParams(window.location.search).get("question");
@@ -136,10 +149,6 @@ export default function SourcesPage() {
         .includes(normalizedQuery);
     });
   }, [query, questionFilter, sources, statusFilter]);
-
-  const activeRun = overview
-    ? !["completed", "failed", "cancelled"].includes(overview.run.status)
-    : false;
 
   return (
     <div className="flex flex-col gap-4">

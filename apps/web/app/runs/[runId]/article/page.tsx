@@ -129,6 +129,7 @@ export default function ArticlePage() {
   const terminal = overview
     ? TERMINAL_RUN_STATUSES.has(overview.run.status)
     : false;
+  const activeRun = Boolean(overview) && !terminal;
 
   const load = useCallback(async () => {
     try {
@@ -164,13 +165,27 @@ export default function ArticlePage() {
 
   useEffect(() => registerRefresh(refresh), [refresh, registerRefresh]);
 
+  // Sections are generated one by one and verification lands after them, so the
+  // panels need their own poll while the run is active. It pauses over an unsaved
+  // draft and while a save is in flight so a reload never races the editor.
   useEffect(() => {
-    if (!sections || sections.length === 0 || selectedId) return;
-    const first = sections[0];
-    setSelectedId(first.id);
-    setTitle(first.title);
-    setContent(first.content_markdown);
-  }, [sections, selectedId]);
+    if (!activeRun || dirty || saving) return;
+    const interval = window.setInterval(() => void load(), 8000);
+    return () => window.clearInterval(interval);
+  }, [activeRun, dirty, load, saving]);
+
+  useEffect(() => {
+    if (!sections || sections.length === 0) return;
+    const shown =
+      sections.find((section) => section.id === selectedId) ?? sections[0];
+    if (shown.id !== selectedId) {
+      setSelectedId(shown.id);
+      return;
+    }
+    if (dirty || saving) return;
+    setTitle(shown.title);
+    setContent(shown.content_markdown);
+  }, [dirty, saving, sections, selectedId]);
 
   const selectedSection = useMemo(
     () => sections?.find((section) => section.id === selectedId) ?? null,
