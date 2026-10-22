@@ -160,6 +160,8 @@
     --z-base: 0;
     --z-sticky: 30;
     --z-dropdown: 40;
+    --z-drawer-overlay: 45;
+    --z-drawer: 46;
     --z-tooltip: 40;
     --z-popover: 50;
     --z-modal: 60;
@@ -339,8 +341,12 @@
     --sidebar-width: 13rem;
   }
 
-  html[data-sidebar="collapsed"] {
-    --sidebar-width: 3.5rem;
+  /* The stored collapse preference only applies to the desktop sidebar. On
+     mobile the off-canvas drawer always uses its full layout width. */
+  @media (min-width: 1024px) {
+    html[data-sidebar="collapsed"] {
+      --sidebar-width: 3.5rem;
+    }
   }
 
   html {

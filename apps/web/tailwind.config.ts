@@ -176,6 +176,8 @@ const config: Config = {
         base: "var(--z-base)",
         dropdown: "var(--z-dropdown)",
         sticky: "var(--z-sticky)",
+        "drawer-overlay": "var(--z-drawer-overlay)",
+        drawer: "var(--z-drawer)",
         tooltip: "var(--z-tooltip)",
         popover: "var(--z-popover)",
         modal: "var(--z-modal)",

@@ -127,7 +127,7 @@ export function AppSidebar() {
 
       {open ? (
         <div
-          className="fixed inset-0 z-dropdown bg-overlay lg:hidden"
+          className="fixed inset-0 z-drawer-overlay bg-overlay lg:hidden"
           onClick={() => setOpen(false)}
           aria-hidden
         />
@@ -137,7 +137,7 @@ export function AppSidebar() {
         aria-label={pick(locale, "侧边导航", "Sidebar navigation")}
         data-collapsed={collapsed ? "true" : "false"}
         className={cn(
-          "fixed inset-y-0 left-0 z-sticky flex w-[var(--sidebar-width)] flex-col border-r border-border bg-sidebar transition-[width,transform] duration-base ease-out lg:translate-x-0",
+          "fixed inset-y-0 left-0 z-drawer flex w-64 max-w-[85vw] flex-col overflow-hidden border-r border-border bg-sidebar transition-[width,transform] duration-base ease-out lg:w-[var(--sidebar-width)] lg:max-w-none lg:translate-x-0",
           open ? "translate-x-0" : "-translate-x-full",
         )}
       >
@@ -185,7 +185,7 @@ export function AppSidebar() {
 
         <nav
           className={cn(
-            "flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto px-3 pb-2",
+            "flex min-h-0 flex-1 flex-col gap-0.5 overflow-y-auto overscroll-contain px-3 pb-2",
             collapsed && "lg:px-1",
           )}
         >
