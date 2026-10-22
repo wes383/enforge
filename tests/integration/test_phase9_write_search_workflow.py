@@ -52,7 +52,7 @@ def _fake_llm_handler(request: httpx.Request) -> httpx.Response:
     body = json.loads(request.content)
     prompt = json.loads(body["messages"][-1]["content"])
     task = str(prompt.get("task", ""))
-    if not task.startswith("Write one report section"):
+    if not task.startswith("Write one section"):
         raise AssertionError(f"unexpected model request: {task[:120]}")
     _WRITE_PROMPTS.append(prompt)
     if (
@@ -200,11 +200,15 @@ def test_workflow_uses_write_time_supplemental_search(database):
             (prompt.get("search"), len(prompt.get("evidence", [])))
             for prompt in _WRITE_PROMPTS
         ]
-        first_prompt = _WRITE_PROMPTS[0]
-        assert first_prompt["prior_sections"]
-        assert first_prompt["prior_sections"][0]["summary"]
+        prompt_with_prior = next(
+            prompt
+            for prompt in _WRITE_PROMPTS
+            if prompt.get("prior_sections")
+        )
+        assert prompt_with_prior["prior_sections"][0]["summary"]
         assert any(
-            "not evidence" in rule for rule in first_prompt["rules"]
+            "not evidence" in rule
+            for rule in prompt_with_prior["rules"]
         )
         assert any(
             entry["summary"] and "Summary of" in entry["summary"]

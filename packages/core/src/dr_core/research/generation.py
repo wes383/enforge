@@ -245,7 +245,7 @@ def build_outline(
             OutlineSection(
                 index=0,
                 title="引言",
-                purpose="说明研究问题、范围与方法，并概述主要发现。",
+                purpose="引出研究问题、范围与文章主线，不罗列证据清单。",
                 key_claims=[item.claim_summary[:300] for item in all_items[:3]],
                 support_evidence_ids=[item.id for item in all_items[:3]],
                 evidence_ids=[item.id for item in all_items[:3]],
@@ -259,7 +259,7 @@ def build_outline(
                 OutlineSection(
                     index=len(sections),
                     title=_short_title(question.question),
-                    purpose="围绕子问题整理支持证据、反方证据与证据强度。",
+                    purpose="综合证据解释这一维度，并交代证据强度与适用条件。",
                     question_id=question.question_id,
                     key_claims=[item.claim_summary[:300] for item in support[:3]],
                     evidence_ids=[item.id for item in [*support, *refute]],
@@ -310,7 +310,7 @@ def build_outline(
                 index=len(sections),
                 title="结论",
                 purpose="综合证据回答主问题，并说明适用边界。",
-                key_claims=[row.conclusion for row in matrix.rows][:3],
+                key_claims=[item.claim_summary[:300] for item in all_items[:3]],
                 evidence_ids=[item.id for item in all_items],
                 support_evidence_ids=[
                     evidence_id
@@ -330,7 +330,7 @@ def build_outline(
             OutlineSection(
                 index=0,
                 title="Introduction",
-                purpose="Frame the research question, scope, method, and key findings.",
+                purpose="Frame the stakes, scope, and line of argument without listing evidence.",
                 key_claims=[item.claim_summary[:300] for item in all_items[:3]],
                 support_evidence_ids=[item.id for item in all_items[:3]],
                 evidence_ids=[item.id for item in all_items[:3]],
@@ -345,7 +345,8 @@ def build_outline(
                     index=len(sections),
                     title=_short_title(question.question),
                     purpose=(
-                        "Synthesize supporting and opposing evidence and assess its strength."
+                        "Interpret this dimension of the evidence and explain "
+                        "its strength and conditions of applicability."
                     ),
                     question_id=question.question_id,
                     key_claims=[item.claim_summary[:300] for item in support[:3]],
@@ -397,7 +398,7 @@ def build_outline(
                 index=len(sections),
                 title="Conclusion",
                 purpose="Answer the main question and state boundary conditions.",
-                key_claims=[row.conclusion for row in matrix.rows][:3],
+                key_claims=[item.claim_summary[:300] for item in all_items[:3]],
                 evidence_ids=[item.id for item in all_items],
                 support_evidence_ids=[
                     evidence_id
@@ -508,7 +509,33 @@ def _target_words(
 
 
 def _short_title(question: str) -> str:
-    cleaned = question.strip().rstrip("？?。.")
-    if len(cleaned) <= 60:
+    cleaned = " ".join(question.strip().split())
+    cleaned = cleaned.rstrip("？?。.")
+    if re.match(r"^[\x00-\x7f]+$", cleaned):
+        cleaned = re.sub(
+            r"^(what|which|who|where|when|why|how)\s+"
+            r"(is|are|was|were|does|do|did|can|could|should|would|has|have)\s+",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+        cleaned = re.sub(
+            r"^(what|which|how|why|when|where|who|does|do|is|are|can|should|could|would)\b[\s:,-]*",
+            "",
+            cleaned,
+            flags=re.IGNORECASE,
+        )
+    for phrase in ("包括哪些", "存在哪些", "有哪些", "是什么", "为什么", "怎么样", "怎样"):
+        cleaned = cleaned.replace(phrase, "")
+    if cleaned.startswith("如何"):
+        cleaned = cleaned[2:]
+    cleaned = " ".join(cleaned.split()).strip("，,；;：: ")
+    if cleaned.endswith("的"):
+        cleaned = cleaned[:-1].rstrip()
+    if not cleaned:
+        cleaned = " ".join(question.strip().split()).rstrip("？?。.")
+    if cleaned and cleaned[0].islower():
+        cleaned = cleaned[0].upper() + cleaned[1:]
+    if len(cleaned) <= 80:
         return cleaned
-    return cleaned[:57] + "..."
+    return cleaned[:77] + "..."

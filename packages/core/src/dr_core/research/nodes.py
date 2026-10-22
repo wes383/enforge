@@ -1411,15 +1411,6 @@ def analyze_gaps(ctx: ResearchContext):
                         "The cost budget was exhausted; further research stopped.",
                     ),
                 )
-            if gaps and budget_stopped:
-                limitations = _with_limitations(
-                    {"limitations": limitations},
-                    _text(
-                        brief,
-                        "部分研究问题未完全覆盖，相关结论按现有证据强度表述。",
-                        "Some research questions remain incomplete; conclusions reflect current evidence strength.",
-                    ),
-                )
             ctx.emit(
                 RunEventType.PROGRESS,
                 message="Research gaps analyzed",
@@ -1696,13 +1687,8 @@ def write_sections(ctx: ResearchContext):
             new_evidence_ids: set[str] = set()
             prior_sections: list[dict] = []
             sections_state: list[dict] = []
-            for position, section in enumerate(outline.sections):
+            for section in outline.sections:
                 ctx.guard()
-                next_title = (
-                    outline.sections[position + 1].title
-                    if position + 1 < len(outline.sections)
-                    else None
-                )
                 supplement = None
                 if search_session is not None:
 
@@ -1746,7 +1732,6 @@ def write_sections(ctx: ResearchContext):
                     evidence=_section_evidence(section, evidence),
                     sources=sources,
                     numbering=numbering,
-                    next_section_title=next_title,
                     llm=llm,
                     supplement=supplement,
                     max_search_requests=max_search_requests,
@@ -2172,13 +2157,8 @@ def finalize_report(ctx: ResearchContext):
                 )
                 report = report_markdown(
                     brief,
-                    matrix,
                     sections,
                     references,
-                    citations,
-                    limitations,
-                    claims=claim_records,
-                    reference_audit=reference_audit,
                 )
                 reference_list = "\n".join(
                     [f"# {_text(brief, '参考文献', 'References')}", "", *references]

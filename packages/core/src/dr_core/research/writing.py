@@ -17,13 +17,13 @@ from dr_core.security.prompt_injection import (
 from dr_core.research.llm_json import parse_llm_json
 from dr_core.research.models import (
     EvidenceMatrix,
-    EvidenceRow,
     OutlineSection,
     ResearchBrief,
     ResearchGap,
 )
 from dr_core.research.text import (
     citation_markers,
+    is_low_value_sentence,
     split_paragraphs,
     split_sentences,
     tokenize,
@@ -53,6 +53,23 @@ _TRANSITION_PREFIXES = (
     "下一节",
     "接下来",
     "下一",
+)
+_PROCESS_LIMITATIONS = re.compile(
+    r"最大来源数量|最大检索轮数|token 预算|费用预算|语义检索不可用"
+    r"|检索已降级|停止补充检索|停止进一步研究|补充检索"
+    r"|maximum source|maximum search|token budget|cost budget"
+    r"|semantic retrieval|keyword search|stopped further research"
+    r"|参考文献元数据不完整|未在正文中引用|未通过引用核验"
+    r"|无法映射到来源的引用标记"
+    r"|references? have incomplete metadata|were not cited in the report"
+    r"|failed citation verification|citation markers without a source mapping",
+    re.IGNORECASE,
+)
+_LEAD_IN = re.compile(
+    r"^(?:however|but|yet|still|moreover|furthermore|in addition|additionally"
+    r"|meanwhile|by contrast|conversely|同时|然而|但是|此外|另外|而且|不过"
+    r"|与此同时|相反)\s*[，,;；:：]\s*",
+    re.IGNORECASE,
 )
 
 
@@ -112,12 +129,16 @@ def compose_section(
     evidence: list[Any],
     sources: dict[UUID, Any],
     numbering: dict[UUID, int],
-    next_section_title: str | None,
     llm: LLMProvider | None = None,
     supplement: Callable[[list[WriteSearchRequest]], WriteSearchOutcome] | None = None,
     max_search_requests: int = 0,
     prior_sections: list[dict[str, Any]] | None = None,
 ) -> SectionDraft:
+    evidence = [
+        item
+        for item in evidence
+        if not is_low_value_sentence(getattr(item, "quoted_text", "") or "")
+    ]
     if llm is not None:
         llm_draft = _llm_section(
             section=section,
@@ -125,7 +146,6 @@ def compose_section(
             evidence=evidence,
             sources=sources,
             numbering=numbering,
-            next_section_title=next_section_title,
             llm=llm,
             supplement=supplement,
             max_search_requests=max_search_requests,
@@ -142,9 +162,7 @@ def compose_section(
         gaps=gaps,
         limitations=limitations,
         evidence=evidence,
-        sources=sources,
         numbering=numbering,
-        next_section_title=next_section_title,
     )
 
 
@@ -161,9 +179,7 @@ def _deterministic_section(
     gaps: list[ResearchGap],
     limitations: list[str],
     evidence: list[Any],
-    sources: dict[UUID, Any],
     numbering: dict[UUID, int],
-    next_section_title: str | None,
 ) -> SectionDraft:
     title_key = section.title.casefold()
     if title_key in _LIMITATION_TITLES or "局限" in title_key:
@@ -173,7 +189,6 @@ def _deterministic_section(
             matrix,
             gaps,
             limitations,
-            next_section_title,
         )
     if title_key in _CONTRADICTION_TITLES or "矛盾" in title_key:
         return _contradiction_section(
@@ -182,7 +197,6 @@ def _deterministic_section(
             matrix,
             evidence,
             numbering,
-            next_section_title,
         )
     if title_key in _CONCLUSION_TITLES:
         return _conclusion_section(
@@ -191,7 +205,6 @@ def _deterministic_section(
             matrix,
             evidence,
             numbering,
-            next_section_title,
         )
     if title_key in _FEEDBACK_TITLES:
         return _feedback_section(section, brief)
@@ -201,18 +214,13 @@ def _deterministic_section(
             brief,
             matrix,
             evidence,
-            sources,
             numbering,
-            next_section_title,
         )
     return _question_section(
         section,
         brief,
-        matrix,
         evidence,
-        sources,
         numbering,
-        next_section_title,
     )
 
 
@@ -221,67 +229,91 @@ def _intro_section(
     brief: ResearchBrief,
     matrix: EvidenceMatrix,
     evidence: list[Any],
-    sources: dict[UUID, Any],
     numbering: dict[UUID, int],
-    next_section_title: str | None,
 ) -> SectionDraft:
     zh = brief.language is ProjectLanguage.ZH
     lines = [f"## {section.title}", ""]
-    if zh:
-        lines.append(
-            f"本报告围绕“{brief.topic}”展开，按 {len(matrix.rows)} 个研究问题组织"
-            f"证据，共使用 {matrix.source_count} 个来源和 {matrix.total_evidence} 条"
-            f"可追溯证据，问题覆盖率为 {matrix.coverage_ratio:.0%}。"
-        )
-        if brief.research_scope:
-            lines.append(f"研究范围限定为：{brief.research_scope}。")
-    else:
-        lines.append(
-            f"This report examines “{brief.topic}” across {len(matrix.rows)} "
-            f"research questions using {matrix.source_count} sources and "
-            f"{matrix.total_evidence} traceable evidence items; question coverage "
-            f"is {matrix.coverage_ratio:.0%}."
-        )
-        if brief.research_scope:
-            lines.append(f"The scope is limited to: {brief.research_scope}.")
     citation_map: dict[str, str] = {}
     used_ids: list[UUID] = []
     used_sources: set[UUID] = set()
-    findings: list[Any] = []
+    highlights: list[tuple[str, str]] = []
     for item in evidence:
         if item.source_id in used_sources:
             continue
-        if _marker_for(item, numbering) is None:
+        summary = _evidence_fragment(item)
+        if not summary:
+            continue
+        marker = _cite(item, numbering, citation_map, used_ids)
+        if marker is None:
             continue
         used_sources.add(item.source_id)
-        findings.append(item)
-        if len(findings) >= 3:
+        highlights.append((summary, marker))
+        if len(highlights) >= 2:
             break
-    if findings:
+
+    if highlights:
         if zh:
-            lines.append("主要发现包括：")
+            body = "；".join(
+                f"{summary} [{marker}]" for summary, marker in highlights
+            )
+            lines.append(
+                f"关于“{brief.topic}”，已有研究提供了若干彼此关联的线索：{body}。"
+                "这些材料勾勒出问题的轮廓，也留下了仍需辨析的分歧。"
+            )
         else:
-            lines.append("Key findings include:")
-        for item in findings:
-            marker = _marker_for(item, numbering)
-            if marker is None:
-                continue
-            citation_map[marker] = str(item.source_id)
-            used_ids.append(item.id)
-            summary = _summary(item)
-            lines.append(f"- {summary} [{marker}]")
-    if zh:
-        lines.append(
-            "本报告优先采用可追溯的数据库来源，保留相反证据，并在证据不足时明确"
-            "标注局限，而不是补写结论。"
-        )
+            body = "; ".join(
+                f"{summary} [{marker}]" for summary, marker in highlights
+            )
+            lines.append(
+                f"Research on “{brief.topic}” offers several connected but not "
+                f"uniform findings: {body}. Together they sketch the contours of "
+                "the debate while leaving important disagreements unresolved."
+            )
     else:
         lines.append(
-            "The report prioritizes traceable database sources, retains contrary "
-            "evidence, and marks gaps explicitly instead of filling them with "
-            "unsupported conclusions."
+            f"“{brief.topic}”仍是一个有待辨析的问题，但当前没有可引用的研究材料"
+            "足以展开判断。"
+            if zh
+            else (
+                f"“{brief.topic}” remains an open question, but the available "
+                "material does not yet support a substantive judgment."
+            )
         )
-    _append_transition(lines, brief, next_section_title)
+
+    questions = [
+        _sentence_fragment(row.question) for row in matrix.rows if row.question
+    ][:4]
+    if zh:
+        scope = _sentence_fragment(brief.research_scope) if brief.research_scope else ""
+        opening = (
+            f"本文的关注范围限定于{scope}。"
+            if scope
+            else "本文关注现有研究能够说明的部分。"
+        )
+        if questions:
+            quoted = "、".join(f"“{question}”" for question in questions)
+            lines.append(
+                f"{opening}围绕{quoted}等问题，下文讨论已有证据"
+                "支持什么、分歧在哪里，以及这些判断成立的条件。"
+            )
+        else:
+            lines.append(opening)
+    else:
+        scope = _sentence_fragment(brief.research_scope) if brief.research_scope else ""
+        opening = (
+            f"This article focuses on {scope}."
+            if scope
+            else "This article focuses on what the available research can establish."
+        )
+        if questions:
+            lines.append(
+                f"{opening} Across questions such as {', '.join(questions)}, it "
+                "examines what the evidence supports, where accounts diverge, and "
+                "under which conditions the emerging judgments hold."
+            )
+        else:
+            lines.append(opening)
+
     lines.append("")
     return SectionDraft(
         content="\n".join(lines),
@@ -293,11 +325,8 @@ def _intro_section(
 def _question_section(
     section: OutlineSection,
     brief: ResearchBrief,
-    matrix: EvidenceMatrix,
     evidence: list[Any],
-    sources: dict[UUID, Any],
     numbering: dict[UUID, int],
-    next_section_title: str | None,
 ) -> SectionDraft:
     zh = brief.language is ProjectLanguage.ZH
     support = [
@@ -306,109 +335,91 @@ def _question_section(
     refute = [
         item for item in evidence if item.evidence_type is EvidenceType.REFUTATION
     ]
-    row = _row_for_question(matrix, section.question_id)
     ordered = _order_by_key_claims(support, section.key_claims)
     citation_map: dict[str, str] = {}
     used_ids: list[UUID] = []
     lines = [f"## {section.title}", ""]
+    paragraphs: list[str] = []
 
-    if section.question_id is not None:
-        lines.append(
-            f"本节回答的问题是：{section.title}。"
-            if zh
-            else f"This section addresses: {section.title}."
-        )
-    if section.purpose:
-        lines.append(
-            f"写作目的：{section.purpose}"
-            if zh
-            else f"Purpose: {section.purpose}"
-        )
-    lines.append("")
+    claims: list[tuple[str, str]] = []
+    seen_claims: set[str] = set()
+    for item in ordered[:4]:
+        summary = _evidence_fragment(item)
+        key = summary.casefold()
+        if not summary or key in seen_claims:
+            continue
+        marker = _cite(item, numbering, citation_map, used_ids)
+        if marker is None:
+            continue
+        seen_claims.add(key)
+        claims.append((summary, marker))
 
-    if ordered:
-        core = ordered[0]
-        marker = _cite(core, numbering, citation_map, used_ids)
-        if marker:
-            lines.append(
-                f"现有证据支持的核心判断是：{_summary(core)} [{marker}]。"
-                if zh
-                else f"The central evidence-backed claim is: {_summary(core)} [{marker}]."
-            )
-        detail_items = ordered[:4]
-        for item in detail_items:
-            marker = _cite(item, numbering, citation_map, used_ids)
-            if marker is None:
-                continue
-            source = sources.get(item.source_id)
-            source_note = _source_note(source, zh)
-            lines.append(
-                f"{source_note}提供的证据指出：{_quote(item)} [{marker}]。"
-                if zh
-                else f"Evidence from {source_note} states: {_quote(item)} [{marker}]."
-            )
-        if row is not None:
-            if row.independent_source_count >= 2:
-                lines.append(
-                    f"上述判断得到 {row.independent_source_count} 个独立来源的支持，"
-                    "但来源质量与适用条件仍需结合下文判断。"
-                    if zh
-                    else (
-                        f"The judgment is supported by {row.independent_source_count} "
-                        "independent sources; source quality and applicability still "
-                        "require consideration."
-                    )
+    if claims:
+        if zh:
+            connectors = ("", "进一步看，", "与此同时，", "此外，")
+            paragraphs.append(
+                "".join(
+                    f"{connectors[position]}{summary} [{marker}]。"
+                    for position, (summary, marker) in enumerate(claims)
                 )
-            else:
-                lines.append(
-                    "上述判断目前仅有一个独立来源支持，应视为初步结论。"
-                    if zh
-                    else (
-                        "The judgment is currently supported by only one independent "
-                        "source and should be treated as provisional."
-                    )
-                )
-    else:
-        lines.append(
-            "该部分尚无可用证据，因此不生成结论性陈述。"
-            if zh
-            else "No evidence is available for this section, so no conclusion is asserted."
-        )
-
-    if refute:
-        lines.append("")
-        lines.append(
-            "相反证据与不同观点：" if zh else "Contrary evidence and competing views:"
-        )
-        for item in refute[:2]:
-            marker = _cite(item, numbering, citation_map, used_ids)
-            if marker is None:
-                continue
-            source_note = _source_note(sources.get(item.source_id), zh)
-            lines.append(
-                f"- {source_note}提出：{_quote(item)} [{marker}]"
-                if zh
-                else f"- {source_note} argues: {_quote(item)} [{marker}]"
             )
-        lines.append(
-            "这些反例说明结论存在边界，不能简单外推。"
+        else:
+            connectors = ("", "Further, ", "At the same time, ", "Moreover, ")
+            paragraphs.append(
+                " ".join(
+                    f"{connectors[position]}{summary} [{marker}]."
+                    for position, (summary, marker) in enumerate(claims)
+                )
+            )
+
+    counterpoints: list[tuple[str, str]] = []
+    seen_counterpoints: set[str] = set()
+    for item in refute[:2]:
+        summary = _evidence_fragment(item)
+        key = summary.casefold()
+        if not summary or key in seen_counterpoints:
+            continue
+        marker = _cite(item, numbering, citation_map, used_ids)
+        if marker is None:
+            continue
+        seen_counterpoints.add(key)
+        counterpoints.append((summary, marker))
+
+    if counterpoints:
+        if zh:
+            body = "；".join(
+                f"{summary} [{marker}]" for summary, marker in counterpoints
+            )
+            lead = (
+                "不过，这一判断并非没有争议。"
+                if claims
+                else "现有研究更多从反面揭示了这一问题的复杂性。"
+            )
+            paragraphs.append(
+                f"{lead}{body}。这些反例提示，相关结论只在特定条件下成立。"
+            )
+        else:
+            body = "; ".join(
+                f"{summary} [{marker}]" for summary, marker in counterpoints
+            )
+            lead = (
+                "The judgment is not uncontested, however. "
+                if claims
+                else "The available research mainly exposes the complexity of the question. "
+            )
+            paragraphs.append(
+                f"{lead}{body}. These counterexamples suggest that the conclusion "
+                "holds only under particular conditions."
+            )
+
+    if not paragraphs:
+        paragraphs.append(
+            "现有材料尚不足以对这一问题作出有根据的判断。"
             if zh
-            else "These counterexamples show that the conclusion has boundaries and cannot be generalized without qualification."
-        )
-    elif support:
-        lines.append("")
-        lines.append(
-            "现有证据中未发现明确的反例，但这不等于不存在反例。"
-            if zh
-            else "No explicit counterexample was found in the available evidence; this does not prove that none exists."
+            else "The available material does not yet support a grounded judgment on this question."
         )
 
-    if row is not None and row.limitations:
-        lines.append("")
-        lines.append("证据局限：" if zh else "Evidence limitations:")
-        lines.extend(f"- {item}" for item in row.limitations[:4])
-
-    _append_transition(lines, brief, next_section_title)
+    lines.extend(paragraphs)
     lines.append("")
     return SectionDraft(
         content="\n".join(lines),
@@ -423,7 +434,6 @@ def _contradiction_section(
     matrix: EvidenceMatrix,
     evidence: list[Any],
     numbering: dict[UUID, int],
-    next_section_title: str | None,
 ) -> SectionDraft:
     zh = brief.language is ProjectLanguage.ZH
     by_id = {item.id: item for item in evidence}
@@ -433,50 +443,62 @@ def _contradiction_section(
     rows = [row for row in matrix.rows if row.support_count and row.refute_count]
     if not rows:
         lines.append(
-            "当前证据中未发现明确的正反冲突。"
+            "现有材料并未呈现正反两方的直接交锋，分歧更多体现在侧重点与适用条件上。"
             if zh
-            else "No explicit supporting-versus-refuting conflict was found."
+            else (
+                "The available material contains no direct clash between "
+                "supporting and opposing findings; differences lie mainly in "
+                "emphasis and conditions of applicability."
+            )
         )
     for row in rows[:4]:
-        lines.append(
-            f"关于“{row.question}”："
-            if zh
-            else f"On “{row.question}”:"
-        )
+        sentences: list[str] = []
         support_items = _items_by_ids(row.support_evidence_ids, by_id)
         refute_items = _items_by_ids(row.refute_evidence_ids, by_id)
         if support_items:
-            item = support_items[0]
-            marker = _cite(item, numbering, citation_map, used_ids)
+            summary = _evidence_fragment(support_items[0])
+            marker = (
+                _cite(support_items[0], numbering, citation_map, used_ids)
+                if summary
+                else None
+            )
             if marker:
-                lines.append(
-                    f"- 支持方指出：{_summary(item)} [{marker}]"
+                sentences.append(
+                    f"支持这一判断的研究指出，{summary} [{marker}]。"
                     if zh
-                    else f"- Supporting evidence: {_summary(item)} [{marker}]"
+                    else f"Supporting research finds that {summary} [{marker}]."
                 )
         if refute_items:
-            item = refute_items[0]
-            marker = _cite(item, numbering, citation_map, used_ids)
+            summary = _evidence_fragment(refute_items[0])
+            marker = (
+                _cite(refute_items[0], numbering, citation_map, used_ids)
+                if summary
+                else None
+            )
             if marker:
-                lines.append(
-                    f"- 反对方指出：{_summary(item)} [{marker}]"
+                sentences.append(
+                    f"相反的证据则强调，{summary} [{marker}]。"
                     if zh
-                    else f"- Opposing evidence: {_summary(item)} [{marker}]"
+                    else f"Opposing evidence emphasizes that {summary} [{marker}]."
                 )
-        if row.source_quality:
-            levels = {quality.level for quality in row.source_quality}
+        if not sentences:
+            continue
+        if zh:
+            lines.append(f"围绕“{_sentence_fragment(row.question)}”，{''.join(sentences)}")
+            lines.append("")
             lines.append(
-                f"- 双方来源质量等级分布：{', '.join(sorted(levels))}；分歧可能来自"
-                "来源类型、发布时间或适用条件差异。"
-                if zh
-                else (
-                    f"- Source quality levels involved: {', '.join(sorted(levels))}; "
-                    "the disagreement may reflect differences in source type, date, "
-                    "or applicability conditions."
-                )
+                "双方的分歧可能来自来源类型、发布时间或适用条件的差异，"
+                "不能简单以一方否定另一方。"
+            )
+        else:
+            lines.append(f"On “{_sentence_fragment(row.question)},” {''.join(sentences)}")
+            lines.append("")
+            lines.append(
+                "The disagreement may reflect differences in source type, "
+                "publication date, or conditions of applicability; one side does "
+                "not simply refute the other."
             )
         lines.append("")
-    _append_transition(lines, brief, next_section_title)
     lines.append("")
     return SectionDraft(
         content="\n".join(lines),
@@ -491,31 +513,51 @@ def _limitations_section(
     matrix: EvidenceMatrix,
     gaps: list[ResearchGap],
     limitations: list[str],
-    next_section_title: str | None,
 ) -> SectionDraft:
     zh = brief.language is ProjectLanguage.ZH
     lines = [f"## {section.title}", ""]
-    entries = list(dict.fromkeys([*limitations, *(gap.reason for gap in gaps)]))
-    for row in matrix.rows:
-        entries.extend(row.limitations)
-    entries = list(dict.fromkeys(entry for entry in entries if entry.strip()))
+    entries = _article_limitations(
+        [
+            *limitations,
+            *(gap.reason for gap in gaps),
+            *(item for row in matrix.rows for item in row.limitations),
+        ],
+        limit=6,
+    )
     if not entries:
-        entries = [
-            "未发现需要单独列出的重大局限。"
+        lines.append(
+            "目前没有发现需要单独列出的重大局限。"
             if zh
             else "No material limitations were identified."
-        ]
-    lines.extend(f"- {entry}" for entry in entries[:12])
+        )
+        lines.append("")
+    else:
+        for position in range(0, len(entries), 3):
+            chunk = entries[position : position + 3]
+            if zh:
+                prefix = "现有研究仍受若干条件限制。" if position == 0 else "此外，"
+                lines.append(f"{prefix}{'；'.join(chunk)}。")
+            else:
+                prefix = (
+                    "The available research is subject to several constraints. "
+                    if position == 0
+                    else "In addition, "
+                )
+                lines.append(f"{prefix}{'; '.join(chunk)}.")
+            lines.append("")
+
     if matrix.duplicate_source_groups and not any(
         "independent" in entry.casefold() or "独立" in entry for entry in entries
     ):
         lines.append(
-            "- 部分来源可能转述同一原始研究，独立性已按 DOI 或标题合并。"
+            "部分来源可能转述同一原始研究，独立性已按 DOI 或标题合并。"
             if zh
-            else "- Some sources may report the same original work; independence was adjusted by DOI or title."
+            else (
+                "Some sources may report the same original work; independence "
+                "was adjusted by DOI or title."
+            )
         )
-    _append_transition(lines, brief, next_section_title)
-    lines.append("")
+        lines.append("")
     return SectionDraft(content="\n".join(lines), citation_map={}, evidence_ids=[])
 
 
@@ -525,39 +567,106 @@ def _conclusion_section(
     matrix: EvidenceMatrix,
     evidence: list[Any],
     numbering: dict[UUID, int],
-    next_section_title: str | None,
 ) -> SectionDraft:
     zh = brief.language is ProjectLanguage.ZH
     lines = [f"## {section.title}", ""]
     citation_map: dict[str, str] = {}
     used_ids: list[UUID] = []
     by_id = {item.id: item for item in evidence}
+    statements: list[tuple[str, str]] = []
+    seen_sources: set[UUID] = set()
+    seen_text: set[str] = set()
     for row in matrix.rows:
-        lines.append(row.conclusion)
-        support_items = _items_by_ids(row.support_evidence_ids, by_id)
-        if support_items:
-            marker = _cite(support_items[0], numbering, citation_map, used_ids)
-            if marker:
-                lines.append(
-                    f"该判断的主要依据见 [{marker}]。"
-                    if zh
-                    else f"The main basis for this judgment is [{marker}]."
-                )
-        lines.append("")
-    if matrix.duplicate_source_groups:
-        lines.append(
-            "需要注意，部分来源可能来自同一原始研究，独立来源数已相应调整。"
-            if zh
-            else "Note that some sources may derive from the same original work, so the independent source count was adjusted."
+        items = [
+            *_items_by_ids(row.support_evidence_ids, by_id),
+            *_items_by_ids(row.refute_evidence_ids, by_id),
+        ]
+        for item in items:
+            summary = _evidence_fragment(item)
+            key = summary.casefold()
+            if (
+                item.source_id in seen_sources
+                or not summary
+                or key in seen_text
+            ):
+                continue
+            marker = _cite(item, numbering, citation_map, used_ids)
+            if marker is None:
+                continue
+            seen_sources.add(item.source_id)
+            seen_text.add(key)
+            statements.append((summary, marker))
+            break
+        if len(statements) >= 3:
+            break
+
+    if statements:
+        if zh:
+            body = "；".join(
+                f"{summary} [{marker}]" for summary, marker in statements
+            )
+            lines.append(
+                f"综合来看，{body}。这些判断相互印证，也共同界定了现有证据"
+                "能够支持的范围。"
+            )
+        else:
+            body = "; ".join(
+                f"{summary} [{marker}]" for summary, marker in statements
+            )
+            lines.append(
+                f"Taken together, {body}. These judgments reinforce one another "
+                "and mark out what the available evidence can support."
+            )
+    else:
+        fallback = _article_limitations(
+            [row.conclusion for row in matrix.rows],
+            limit=2,
         )
-    if matrix.coverage_ratio < 1.0:
-        lines.append(
-            "部分研究问题尚未完全覆盖，相关结论仅按现有证据强度表述。"
-            if zh
-            else "Some research questions remain incomplete; conclusions reflect the current strength of evidence."
-        )
-    _append_transition(lines, brief, next_section_title)
+        if fallback:
+            separator = "；" if zh else "; "
+            ending = "。" if zh else "."
+            lines.append(separator.join(fallback) + ending)
+        else:
+            lines.append(
+                "现有材料尚不足以形成明确结论。"
+                if zh
+                else "The available material does not yet support a clear conclusion."
+            )
     lines.append("")
+
+    notes: list[str] = []
+    if matrix.duplicate_source_groups and matrix.coverage_ratio < 1.0:
+        notes.append(
+            "上述判断建立在有限的独立来源和尚未完全覆盖的证据之上，"
+            "应视为阶段性结论。"
+            if zh
+            else (
+                "The judgments rest on a limited set of independent sources and "
+                "incomplete coverage, so they should be read as provisional."
+            )
+        )
+    elif matrix.duplicate_source_groups:
+        notes.append(
+            "部分来源可能源自同一研究，上述判断的独立支持强度有限。"
+            if zh
+            else (
+                "Some sources may derive from the same study, so the independent "
+                "support behind these judgments is limited."
+            )
+        )
+    elif matrix.coverage_ratio < 1.0:
+        notes.append(
+            "由于部分问题尚缺少充分证据，上述判断应视为阶段性结论。"
+            if zh
+            else (
+                "Because some questions still lack sufficient evidence, these "
+                "judgments should be read as provisional."
+            )
+        )
+    lines.extend(notes)
+    if notes:
+        lines.append("")
+
     return SectionDraft(
         content="\n".join(lines),
         citation_map=citation_map,
@@ -589,15 +698,16 @@ def _llm_section(
     evidence: list[Any],
     sources: dict[UUID, Any],
     numbering: dict[UUID, int],
-    next_section_title: str | None,
     llm: LLMProvider,
     supplement: Callable[[list[WriteSearchRequest]], WriteSearchOutcome] | None = None,
     max_search_requests: int = 0,
     prior_sections: list[dict[str, Any]] | None = None,
 ) -> SectionDraft | None:
-    if section.index == 0 or section.title.casefold() in _LIMITATION_TITLES:
+    if section.title.casefold() in _LIMITATION_TITLES | _FEEDBACK_TITLES:
         return None
     can_search = supplement is not None and max_search_requests > 0
+    if section.index == 0:
+        evidence = _representative_evidence(evidence)
     evidence_lines, allowed_markers, injection_categories = _evidence_prompt_lines(
         evidence,
         sources,
@@ -611,7 +721,6 @@ def _llm_section(
         section=section,
         evidence_lines=evidence_lines,
         injection_categories=injection_categories,
-        next_section_title=next_section_title,
         max_search_requests=max_search_requests if can_search else 0,
         prior_sections=prior_sections or [],
     )
@@ -645,7 +754,6 @@ def _llm_section(
             section=section,
             evidence_lines=evidence_lines,
             injection_categories=injection_categories,
-            next_section_title=next_section_title,
             max_search_requests=0,
             prior_sections=prior_sections or [],
             supplement_note={
@@ -740,25 +848,77 @@ def _evidence_prompt_lines(
     return evidence_lines, allowed_markers, injection_categories
 
 
+def _representative_evidence(
+    evidence: list[Any],
+    *,
+    limit: int = 8,
+) -> list[Any]:
+    selected: list[Any] = []
+    seen: set[UUID] = set()
+    for item in evidence:
+        if item.source_id in seen:
+            continue
+        seen.add(item.source_id)
+        selected.append(item)
+        if len(selected) >= limit:
+            break
+    return selected or list(evidence[:limit])
+
+
 def _writing_prompt(
     *,
     brief: ResearchBrief,
     section: OutlineSection,
     evidence_lines: list[dict[str, Any]],
     injection_categories: set[str],
-    next_section_title: str | None,
     max_search_requests: int,
     supplement_note: dict[str, Any] | None = None,
     prior_sections: list[dict[str, Any]] | None = None,
 ) -> str:
     prior_sections = prior_sections or []
+    role = (
+        "introduction"
+        if section.index == 0
+        else "conclusion"
+        if section.title.casefold() in _CONCLUSION_TITLES
+        else "body"
+    )
     rules = [
         "Use only the supplied evidence; do not add external facts.",
         "Cite every factual sentence with one or more supplied markers such as [S3].",
         "Preserve numbers, years, and author names exactly as supplied.",
         "Do not output a reference list or invent new markers.",
+        "Write a section of one continuous article, not a research report, "
+        "evidence log, or question-and-answer entry.",
+        "Never call the output a report, and do not label paragraphs as "
+        "supporting evidence, opposing evidence, or limitations.",
+        "Do not write 'this section addresses', 'the purpose of this section', "
+        "'evidence from X states', 'the next section will discuss', or mention "
+        "source counts, databases, or the research process.",
+        "Synthesize the evidence into an argument; cite claims without "
+        "enumerating sources one by one.",
+        "Write flowing paragraphs rather than a list of findings, and vary "
+        "sentence openings instead of repeating the same formula in every section.",
         "Include a short treatment of limitations or counter-evidence when supplied.",
     ]
+    if role == "introduction":
+        rules.append(
+            "Open with the topic's stakes and central tension, frame the scope "
+            "and line of argument, and preview what follows. Do not list evidence "
+            "or key findings as bullets."
+        )
+    elif role == "conclusion":
+        rules.append(
+            "Synthesize the article's argument, state what can and cannot be "
+            "concluded, and do not repeat sentences from earlier sections or "
+            "introduce new facts."
+        )
+    else:
+        rules.append(
+            "Open with a substantive claim, develop it across 2-4 paragraphs, "
+            "integrate counter-evidence, and connect back to the article's "
+            "main question."
+        )
     if max_search_requests > 0:
         rules.append(
             "If the supplied evidence cannot support the section's key claims, "
@@ -800,9 +960,10 @@ def _writing_prompt(
     rules.extend(untrusted_rules())
     rules.append("Return JSON only.")
     payload: dict[str, Any] = {
-        "task": "Write one report section in Markdown using only the supplied evidence.",
+        "task": "Write one section of a continuous research article in Markdown using only the supplied evidence.",
         "language": brief.language.value,
         "topic": brief.topic,
+        "role": role,
         "section": {
             "title": section.title,
             "purpose": section.purpose,
@@ -818,7 +979,6 @@ def _writing_prompt(
         ),
         "rules": rules,
         "untrusted_content_warnings": sorted(injection_categories),
-        "next_section": next_section_title,
         "prior_sections": _prior_prompt_sections(prior_sections),
     }
     if supplement_note is not None:
@@ -966,16 +1126,6 @@ def _allowed_numbers(evidence: list[Any], sources: dict[UUID, Any]) -> set[str]:
     return numbers
 
 
-def _row_for_question(
-    matrix: EvidenceMatrix,
-    question_id: UUID | None,
-) -> EvidenceRow | None:
-    for row in matrix.rows:
-        if row.question_id == question_id:
-            return row
-    return None
-
-
 def _order_by_key_claims(items: list[Any], key_claims: list[str]) -> list[Any]:
     if not key_claims:
         return list(items)
@@ -1033,38 +1183,27 @@ def _quote(item: Any) -> str:
     return text[:400]
 
 
-def _source_note(source: Any, zh: bool) -> str:
-    if source is None:
-        return "该来源" if zh else "the source"
-    title = getattr(source, "title", "") or ""
-    source_type = getattr(source, "source_type", None)
-    published_at = getattr(source, "published_at", None)
-    details = ", ".join(
-        part
-        for part in (
-            source_type.value if source_type else "",
-            str(published_at.year) if published_at else "",
-        )
-        if part
-    )
-    if zh:
-        return f"《{title}》" + (f"（{details}）" if details else "")
-    return f"“{title}”" + (f" ({details})" if details else "")
+def _sentence_fragment(text: str) -> str:
+    return " ".join(str(text or "").split()).rstrip("。！？；.!?;")
 
 
-def _append_transition(
-    lines: list[str],
-    brief: ResearchBrief,
-    next_section_title: str | None,
-) -> None:
-    if not next_section_title:
-        return
-    lines.append("")
-    lines.append(
-        f"下一节将讨论：{next_section_title}。"
-        if brief.language is ProjectLanguage.ZH
-        else f"The next section discusses: {next_section_title}."
-    )
+def _evidence_fragment(item: Any) -> str:
+    return _LEAD_IN.sub("", _sentence_fragment(_summary(item)))
+
+
+def _article_limitations(entries: list[Any], *, limit: int) -> list[str]:
+    seen: set[str] = set()
+    result: list[str] = []
+    for entry in entries:
+        text = _sentence_fragment(entry)
+        key = text.casefold()
+        if not text or key in seen or _PROCESS_LIMITATIONS.search(text):
+            continue
+        seen.add(key)
+        result.append(text)
+        if len(result) >= limit:
+            break
+    return result
 
 
 def _unique_ids(values: list[UUID]) -> list[UUID]:

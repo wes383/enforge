@@ -1,21 +1,15 @@
 from __future__ import annotations
 
-from datetime import UTC, datetime
 from types import SimpleNamespace
-from typing import Any
 from uuid import UUID
 
-from dr_core.db.enums import ArtifactType, CitationAuditStatus
+from dr_core.db.enums import ArtifactType
 from dr_core.db.repositories import (
     ArtifactRepository,
     SourceRepository,
 )
 from dr_core.normalization import text_sha256
-from dr_core.research.models import (
-    EvidenceMatrix,
-    ReferenceAudit,
-    ResearchBrief,
-)
+from dr_core.research.models import ResearchBrief
 from dr_core.research.text import format_reference
 from dr_core.schemas import ArtifactCreate
 
@@ -69,79 +63,20 @@ def reference_lines(brief, sections, sources) -> list[str]:
 
 def report_markdown(
     brief: ResearchBrief,
-    matrix: EvidenceMatrix,
     sections,
     references: list[str],
-    citations,
-    limitations: list[str],
-    *,
-    claims: list[dict] | None = None,
-    reference_audit: ReferenceAudit | None = None,
 ) -> str:
-    lines = [
-        f"# {brief.title}",
-        "",
-        _text(brief, "## 研究摘要", "## Research Summary"),
-        "",
-        _text(
-            brief,
-            f"本报告围绕“{brief.topic}”生成。共分析 {matrix.source_count} 个来源、"
-            f"{matrix.total_evidence} 条证据，问题覆盖率为 {matrix.coverage_ratio:.0%}。",
-            f"This report examines “{brief.topic}” using {matrix.source_count} sources "
-            f"and {matrix.total_evidence} evidence items; question coverage is "
-            f"{matrix.coverage_ratio:.0%}.",
-        ),
-        "",
-        _text(
-            brief,
-            f"- 生成时间：{datetime.now(tz=UTC).isoformat()}",
-            f"- Generated at: {datetime.now(tz=UTC).isoformat()}",
-        ),
-        _text(
-            brief,
-            f"- 引用格式：{brief.citation_style.value.upper()}",
-            f"- Citation style: {brief.citation_style.value.upper()}",
-        ),
-        "",
-    ]
-    lines.extend(
-        [
-            _text(brief, "## 证据覆盖", "## Evidence Coverage"),
-            "",
-            _text(
-                brief,
-                "| 研究问题 | 覆盖状态 | 支持证据 | 相反证据 | 独立来源 |",
-                "| Question | Coverage | Supporting | Counter | Independent sources |",
-            ),
-            "| --- | --- | --- | --- | --- |",
-        ]
-    )
-    for row in matrix.rows:
-        question = row.question.replace("|", "\\|")[:500]
-        lines.append(
-            f"| {question} | {row.coverage_status.value} | "
-            f"{row.support_count} | {row.refute_count} | "
-            f"{row.independent_source_count} |"
-        )
-    if matrix.duplicate_source_groups:
-        lines.extend(
-            [
-                "",
-                _text(
-                    brief,
-                    "以下来源可能转述同一项原始工作，未按独立来源计数：",
-                    "The following sources appear to report the same original work "
-                    "and were not counted as independent:",
-                ),
-            ]
-        )
-        lines.extend(
-            f"- {group}" for group in matrix.duplicate_source_groups[:10]
-        )
-    lines.append("")
+    """Render the reader-facing article.
+
+    Coverage tables, claim checks and citation audits stay in the verification
+    artifacts and the workbench; mixing them into the article makes the export
+    read like an internal report instead of a finished piece.
+    """
+    lines = [f"# {brief.title}", ""]
     for section in sections:
-        lines.append(section.content_markdown.rstrip())
-        lines.append("")
+        content = section.content_markdown.rstrip()
+        if content:
+            lines.extend([content, ""])
     lines.append(_text(brief, "## 参考文献", "## References"))
     lines.append("")
     if references:
@@ -153,80 +88,6 @@ def report_markdown(
                 "没有可核验的参考文献。",
                 "No verifiable references were available.",
             )
-        )
-    lines.extend(["", _text(brief, "## 引用核验", "## Citation Audit"), ""])
-    failed = sum(1 for audit in citations if audit.status is CitationAuditStatus.FAILED)
-    warnings = sum(
-        1 for audit in citations if audit.status is CitationAuditStatus.WARNING
-    )
-    lines.append(
-        _text(
-            brief,
-            f"共记录 {len(citations)} 条核验结果：失败 {failed}，警告 {warnings}。",
-            f"{len(citations)} audit records: {failed} failed, {warnings} warnings.",
-        )
-    )
-    if claims:
-        counts = claim_status_counts(claims)
-        lines.extend(["", _text(brief, "## 事实核验", "## Claim Verification"), ""])
-        lines.append(
-            _text(
-                brief,
-                f"共抽取 {counts.get('total', 0)} 条事实主张："
-                f"有支持 {counts.get('supported', 0)}，部分支持 {counts.get('partial', 0)}，"
-                f"矛盾 {counts.get('contradicted', 0)}，无支持 {counts.get('unsupported', 0)}，"
-                f"无法核验 {counts.get('unverifiable', 0)}。",
-                f"{counts.get('total', 0)} claims extracted: "
-                f"{counts.get('supported', 0)} supported, "
-                f"{counts.get('partial', 0)} partial, "
-                f"{counts.get('contradicted', 0)} contradicted, "
-                f"{counts.get('unsupported', 0)} unsupported, "
-                f"{counts.get('unverifiable', 0)} unverifiable.",
-            )
-        )
-        flagged = [
-            claim
-            for claim in claims
-            if claim.get("status") not in {"SUPPORTED"}
-        ]
-        if flagged:
-            lines.extend(
-                [
-                    "",
-                    _text(
-                        brief,
-                        "未完全通过核验的主张：",
-                        "Claims that did not fully pass verification:",
-                    ),
-                ]
-            )
-            for claim in flagged[:10]:
-                lines.append(
-                    f"- [{claim.get('status')}] {claim.get('claim_text', '')[:300]}"
-                )
-    if reference_audit is not None:
-        lines.extend(["", _text(brief, "## 参考文献审计", "## Reference Audit"), ""])
-        lines.append(
-            _text(
-                brief,
-                f"正文引用来源 {len(reference_audit.cited_source_ids)} 个，"
-                f"未引用证据来源 {len(reference_audit.unused_source_ids)} 个，"
-                f"元数据不完整 {len(reference_audit.invalid_metadata_source_ids)} 个，"
-                f"悬空标记 {len(reference_audit.dangling_markers)} 个。",
-                f"{len(reference_audit.cited_source_ids)} sources cited, "
-                f"{len(reference_audit.unused_source_ids)} evidence sources unused, "
-                f"{len(reference_audit.invalid_metadata_source_ids)} with incomplete metadata, "
-                f"{len(reference_audit.dangling_markers)} dangling markers.",
-            )
-        )
-        if reference_audit.issues:
-            lines.extend(f"- {issue}" for issue in reference_audit.issues[:10])
-    lines.extend(["", _text(brief, "## 研究局限", "## Limitations"), ""])
-    if limitations:
-        lines.extend(f"- {item}" for item in list(dict.fromkeys(limitations)))
-    else:
-        lines.append(
-            _text(brief, "未记录额外的研究局限。", "No additional limitations were recorded.")
         )
     lines.append("")
     return "\n".join(lines)

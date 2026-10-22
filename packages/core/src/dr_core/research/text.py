@@ -9,6 +9,34 @@ _SENTENCE_SPLIT = re.compile(r"(?<=[.!?。！？])\s*|\n+")
 _SENTENCE_SPAN = re.compile(r"[^.!?。！？\n]+[.!?。！？]?")
 _MARKDOWN_NOISE = re.compile(r"[`*_>#\[\]()]")
 _CITATION_MARKER = re.compile(r"\[S(\d+)\]")
+_LOW_VALUE_SENTENCE = re.compile(
+    r"关键词\s*[:：]"
+    r"|中图分类号|文献标识码|文章编号|论文编号|收稿日期|修回日期|录用日期"
+    r"|基金项目|作者简介|通信作者|责任编辑|引用本文|本文链接|下载\s*pdf"
+    r"|版权所有|免责声明|隐私政策|网站地图|上一篇|下一篇|相关阅读|扫码关注"
+    r"|\bcopyright\b|\ball rights reserved\b"
+    r"|\bkeywords?\s*[:：]|\bcorresponding author\b"
+    r"|\bdoi\b|\bissn\b|\bisbn\b"
+    r"|\breceived\s*[:：]|\baccepted\s*[:：]|\bpublished\s*[:：]"
+    r"|\bdownloaded from\b|\bjournal homepage\b|\bsubscribe\b|\bsign in\b"
+    r"|^(?:首页|登录|注册|关于我们|联系我们|网站首页)\s*$",
+    re.IGNORECASE,
+)
+_LOW_VALUE_PREFIX = re.compile(
+    r"^(?:share|share this|read more|related articles|table of contents|"
+    r"share this article|follow us|advertisement)\b",
+    re.IGNORECASE,
+)
+
+
+def is_low_value_sentence(text: str) -> bool:
+    cleaned = " ".join(text.split())
+    if not cleaned:
+        return True
+    return bool(
+        _LOW_VALUE_SENTENCE.search(cleaned)
+        or _LOW_VALUE_PREFIX.search(cleaned)
+    )
 _STOPWORDS = frozenset(
     {
         "and",
@@ -91,7 +119,7 @@ def split_sentences(text: str) -> list[str]:
     sentences = []
     for part in _SENTENCE_SPLIT.split(candidate):
         sentence = " ".join(part.split())
-        if 20 <= len(sentence) <= 2000:
+        if 20 <= len(sentence) <= 2000 and not is_low_value_sentence(sentence):
             sentences.append(sentence)
     return sentences
 
@@ -105,6 +133,8 @@ def sentence_spans(text: str) -> list[tuple[str, int, int]]:
             continue
         cleaned = " ".join(stripped.split())
         if not 20 <= len(cleaned) <= 2000:
+            continue
+        if is_low_value_sentence(cleaned):
             continue
         start = match.start() + (len(raw) - len(raw.lstrip()))
         spans.append((cleaned, start, start + len(stripped)))

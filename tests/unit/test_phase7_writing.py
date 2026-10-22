@@ -35,6 +35,7 @@ from dr_core.research.writing import (
     numeric_tokens,
     summarize_section_content,
 )
+from dr_core.research.text import is_low_value_sentence, sentence_spans
 
 
 def _brief(**overrides) -> ResearchBrief:
@@ -97,7 +98,6 @@ def _section(
     index=1,
     title="Question",
     key_claims=None,
-    next_title=None,
     evidence=(),
     matrix=None,
     llm=None,
@@ -106,6 +106,8 @@ def _section(
     supplement=None,
     max_search_requests=0,
     prior_sections=None,
+    limitations=(),
+    gaps=(),
 ):
     support, refute = [], []
     for item in evidence:
@@ -155,12 +157,11 @@ def _section(
         section=draft_section,
         brief=brief or _brief(),
         matrix=matrix,
-        gaps=[],
-        limitations=[],
+        gaps=list(gaps),
+        limitations=list(limitations),
         evidence=list(evidence),
         sources=sources,
         numbering=numbering,
-        next_section_title=next_title,
         llm=llm,
         supplement=supplement,
         max_search_requests=max_search_requests,
@@ -274,7 +275,7 @@ def test_outline_populates_claims_evidence_and_target_words():
     assert deep.sections[1].target_words > quick.sections[1].target_words
 
 
-def test_deterministic_section_cites_only_selected_evidence_and_transitions():
+def test_deterministic_section_writes_narrative_without_report_scaffolding():
     question_id = uuid4()
     source_a = _source(title="Support study")
     source_b = _source(title="Refuting study")
@@ -290,16 +291,17 @@ def test_deterministic_section_cites_only_selected_evidence_and_transitions():
         question_id,
         title="Does enforcement work?",
         key_claims=[support.claim_summary],
-        next_title="Conclusion",
         evidence=[support, refute],
     )
 
     assert draft.content.startswith("## Does enforcement work?")
-    assert "This section addresses:" in draft.content
+    assert "This section addresses:" not in draft.content
+    assert "Purpose:" not in draft.content
+    assert "Key findings include:" not in draft.content
+    assert "The next section discusses" not in draft.content
     assert support.claim_summary[:40] in draft.content
     assert "Counter-evidence" not in draft.content
-    assert "Contrary evidence and competing views:" in draft.content
-    assert "The next section discusses: Conclusion." in draft.content
+    assert "The judgment is not uncontested, however." in draft.content
     assert not draft.used_llm
     assert set(draft.citation_map) == {
         f"S{numbering[source_a.id]}",
@@ -311,10 +313,198 @@ def test_deterministic_section_cites_only_selected_evidence_and_transitions():
         assert f"[{marker}]" in draft.content
 
 
+def test_deterministic_intro_frames_the_article_without_report_statistics():
+    question_id = uuid4()
+    source_a = _source(title="First study")
+    source_b = _source(title="Second study")
+    first = _evidence(question_id, source_a.id)
+    second = _evidence(
+        question_id,
+        source_b.id,
+        claim_summary="Small firms face higher compliance costs.",
+        quoted_text="Small firms face higher compliance costs after audits.",
+    )
+    draft, _, numbering, _ = _section(
+        question_id,
+        index=0,
+        title="Introduction",
+        evidence=[first, second],
+    )
+
+    assert draft.content.startswith("## Introduction")
+    assert "This report examines" not in draft.content
+    assert "Key findings include:" not in draft.content
+    assert "The next section discusses" not in draft.content
+    assert "- " not in draft.content
+    assert first.claim_summary[:40] in draft.content
+    assert f"[S{numbering[source_a.id]}]" in draft.content
+    assert f"[S{numbering[source_b.id]}]" in draft.content
+
+
+def test_deterministic_conclusion_deduplicates_repeated_row_conclusions():
+    question_id = uuid4()
+    items = [
+        _evidence(
+            question_id,
+            uuid4(),
+            claim_summary=f"Finding {index} about enforcement effects.",
+            quoted_text=f"Finding {index} about enforcement effects across firms.",
+        )
+        for index in range(3)
+    ]
+    repeated = "3 independent sources support a provisional conclusion."
+    matrix = EvidenceMatrix(
+        rows=[
+            EvidenceRow(
+                question_id=question_id,
+                question=f"Question {index}?",
+                support_count=1,
+                independent_source_count=1,
+                conclusion=repeated,
+                support_evidence_ids=[item.id],
+            )
+            for index, item in enumerate(items)
+        ],
+        total_evidence=3,
+        source_count=3,
+        independent_source_count=3,
+        coverage_ratio=1.0,
+    )
+    draft, _, _, _ = _section(
+        question_id,
+        title="Conclusion",
+        evidence=items,
+        matrix=matrix,
+    )
+
+    assert draft.content.count("Taken together") == 1
+    assert repeated not in draft.content
+    for item in items:
+        assert draft.content.count(item.claim_summary.rstrip(".")) == 1
+
+
+def test_limitations_section_drops_process_notes_and_deduplicates():
+    question_id = uuid4()
+    evidence_row = EvidenceRow(
+        question_id=question_id,
+        question="Question?",
+        support_count=1,
+        independent_source_count=1,
+        conclusion="Limited support.",
+        limitations=[
+            "Only one independent source supports this question; treat the conclusion as provisional.",
+            "Only one independent source supports this question; treat the conclusion as provisional.",
+            "Some sources lack a publication date, so temporal relevance cannot be judged.",
+        ],
+    )
+    matrix = EvidenceMatrix(
+        rows=[evidence_row],
+        total_evidence=1,
+        source_count=1,
+        independent_source_count=1,
+        coverage_ratio=0.5,
+    )
+    draft, _, _, _ = _section(
+        question_id,
+        title="Limitations and Open Questions",
+        evidence=[],
+        matrix=matrix,
+        limitations=[
+            "Reached the maximum source count (20).",
+            "The model token budget was exhausted; further research stopped.",
+            "6 references have incomplete metadata; warnings were recorded instead of inventing fields.",
+            "Semantic retrieval is unavailable; keyword search is active.",
+        ],
+    )
+
+    assert draft.content.count("Only one independent source supports") == 1
+    assert "publication date" in draft.content
+    for process_note in (
+        "maximum source count",
+        "token budget",
+        "incomplete metadata",
+        "Semantic retrieval",
+    ):
+        assert process_note not in draft.content
+    assert "- " not in draft.content
+
+
+def test_metadata_sentences_are_filtered_from_evidence():
+    text = (
+        "关键词：生成式人工智能；学习效果；元分析；实验研究 "
+        "【中图分类号】G40-057 【文献标识码】A "
+        "【论文编号】1009-8097（2025）08-0036-10。"
+        "This study reports a substantive finding about student learning outcomes."
+    )
+    assert is_low_value_sentence(
+        "关键词：生成式人工智能；学习效果；元分析；实验研究"
+    )
+    spans = sentence_spans(text)
+    assert len(spans) == 1
+    assert spans[0][0].startswith("This study reports")
+
+    question_id = uuid4()
+    metadata = _evidence(
+        question_id,
+        uuid4(),
+        claim_summary="关键词：生成式人工智能；学习效果；元分析；实验研究",
+        quoted_text="关键词：生成式人工智能；学习效果；元分析；实验研究",
+    )
+    substantive = _evidence(question_id, uuid4())
+    draft, _, numbering, _ = _section(
+        question_id,
+        title="Evidence",
+        evidence=[metadata, substantive],
+    )
+
+    assert "关键词" not in draft.content
+    assert metadata.id not in draft.evidence_ids
+    assert set(draft.citation_map) == {f"S{numbering[substantive.source_id]}"}
+
+
+def test_outline_titles_are_topic_phrases_not_questions():
+    question_id = uuid4()
+    question = "生成式人工智能提升大学生学习效果的证据有哪些？"
+    support = _evidence(question_id, uuid4())
+    plan = ResearchPlan(
+        summary="Plan",
+        questions=[
+            ResearchQuestion(question_id=question_id, question=question)
+        ],
+    )
+    matrix = EvidenceMatrix(
+        rows=[
+            EvidenceRow(
+                question_id=question_id,
+                question=question,
+                support_count=1,
+                independent_source_count=1,
+                conclusion="Limited support.",
+                support_evidence_ids=[support.id],
+            )
+        ],
+        total_evidence=1,
+        source_count=1,
+        independent_source_count=1,
+        coverage_ratio=0.5,
+    )
+    outline = build_outline(
+        _brief(language=ProjectLanguage.ZH),
+        plan,
+        matrix,
+        [],
+        version=1,
+        evidence_by_question={question_id: [support]},
+    )
+    titles = [section.title for section in outline.sections]
+    assert "生成式人工智能提升大学生学习效果的证据" in titles
+    assert all(not title.endswith("？") for title in titles)
+
+
 def test_section_without_evidence_does_not_assert_conclusions():
     draft, _, _, _ = _section(uuid4(), title="Unanswered question", evidence=[])
 
-    assert "No evidence is available" in draft.content
+    assert "does not yet support a grounded judgment" in draft.content
     assert not draft.citation_map
     assert not draft.evidence_ids
 

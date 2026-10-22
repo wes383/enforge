@@ -367,7 +367,7 @@ def test_project_options_and_research_workbench(client, project_factory):
         f"{API}/runs/{run['id']}/artifacts/{reference_list['id']}/download"
     )
     assert reference_download.status_code == 200
-    assert b"[S1]" in reference_download.content
+    assert re.search(rb"\[S\d+\]", reference_download.content)
 
     verification = client.get(f"{API}/runs/{run['id']}/verification")
     assert verification.status_code == 200, verification.text

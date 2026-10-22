@@ -241,21 +241,11 @@ def export_run(
             sources,
             evidence_source_ids,
         )
-        limitations = [
-            issue
-            for issue in reference_audit.issues
-            if "not normalized" in issue or "incomplete" in issue
-        ]
         references = reference_lines(brief, sections, sources)
         report = report_markdown(
             brief,
-            matrix,
             sections,
             references,
-            audits,
-            limitations,
-            claims=claim_records,
-            reference_audit=reference_audit,
         )
         reference_list = "\n".join(
             [f"# {_text(brief, '参考文献', 'References')}", "", *references]

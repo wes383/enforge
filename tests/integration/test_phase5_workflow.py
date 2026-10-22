@@ -448,10 +448,10 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
     )
     content = get_file_storage().read(report.storage_key).decode("utf-8")
     assert "Phase 5 workflow test" in content
-    assert "## Evidence Coverage" in content
     assert "## References" in content
-    assert "## Claim Verification" in content
-    assert "## Reference Audit" in content
+    assert "## Evidence Coverage" not in content
+    assert "## Claim Verification" not in content
+    assert "## Reference Audit" not in content
     body, reference_block = content.split("## References", 1)
     cited = set(re.findall(r"\[S(\d+)\]", body))
     listed = set(re.findall(r"\[S(\d+)\]", reference_block))
@@ -675,9 +675,17 @@ def test_cost_budget_stops_research_and_is_reported(
     assert report is not None
     assert max_round == 1
     content = get_file_storage().read(report.storage_key).decode("utf-8")
-    assert "cost budget was exhausted" in content
+    assert "cost budget was exhausted" not in content
+
+    events = _events(client, str(run_id))
+    budget_event = next(
+        event
+        for event in events
+        if event.get("payload", {}).get("budget_stopped") is True
+    )
+    assert budget_event["message"] == "Research gaps analyzed"
 
     event_messages = " ".join(
-        event.get("message") or "" for event in _events(client, str(run_id))
+        event.get("message") or "" for event in events
     )
     assert "Search round 2" not in event_messages
