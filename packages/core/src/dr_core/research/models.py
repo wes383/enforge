@@ -99,6 +99,37 @@ class ResearchRecon(SchemaModel):
         return self
 
 
+class ResearchMapSection(SchemaModel):
+    title: str = Field(min_length=1, max_length=500)
+    purpose: str = Field(default="", max_length=1000)
+    question_index: int | None = Field(default=None, ge=0)
+
+
+class ResearchMap(ResearchRecon):
+    """What the research agent learned before committing to a plan.
+
+    The outline here is provisional: it records the framing suggested by the
+    material the agent actually read. The final outline is still assembled from
+    stored evidence by the deterministic pipeline.
+    """
+
+    outline: list[ResearchMapSection] = Field(default_factory=list, max_length=12)
+    gaps: list[str] = Field(default_factory=list, max_length=10)
+    next_steps: list[str] = Field(default_factory=list, max_length=10)
+    completed: bool = False
+
+    @model_validator(mode="after")
+    def _clean_map(self) -> "ResearchMap":
+        self.gaps = _clean_items(self.gaps, 10, 600)
+        self.next_steps = _clean_items(self.next_steps, 10, 600)
+        self.outline = [
+            section
+            for section in self.outline
+            if section.title.strip()
+        ][:12]
+        return self
+
+
 def _clean_items(values: list[str], limit: int, chars: int) -> list[str]:
     cleaned: list[str] = []
     seen: set[str] = set()

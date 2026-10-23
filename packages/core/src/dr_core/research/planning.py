@@ -185,7 +185,7 @@ def build_plan_with_llm(
         logger.warning("LLM planning failed: %s", exc)
         return None
 
-    plan = _plan_from_payload(payload, brief, version=version, limit=limit)
+    plan = plan_from_payload(payload, brief, version=version, limit=limit)
     if plan is None:
         logger.warning(
             "Rejected LLM research plan for project %s; using the deterministic plan",
@@ -194,7 +194,7 @@ def build_plan_with_llm(
     return plan
 
 
-def _plan_from_payload(
+def plan_from_payload(
     payload: dict[str, Any],
     brief: ResearchBrief,
     *,

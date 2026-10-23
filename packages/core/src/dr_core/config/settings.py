@@ -21,6 +21,9 @@ LLM_OUTLINE_CALL_BUDGET = 2
 # The bounded researcher makes at most one call per tool round plus a final
 # digest call. Tool rounds are capped at three in settings.
 LLM_RECON_CALL_BUDGET = 4
+# The research agent runs a whole tool loop before committing to a plan. The
+# budget follows the default six tool rounds plus the forced final turn.
+LLM_RESEARCH_AGENT_CALL_BUDGET = 7
 # One call rewrites the finished article for language and flow.
 LLM_POLISH_CALL_BUDGET = 1
 
@@ -139,6 +142,18 @@ class Settings(BaseSettings):
     research_recon_max_tool_calls: int = Field(default=6, ge=1, le=12)
     research_recon_max_sources: int = Field(default=6, ge=1, le=20)
     research_recon_read_chars: int = Field(default=4000, ge=500, le=20000)
+    # A research agent replaces recon + planning: it searches, reads pages,
+    # follows citations and discovered names, then commits to evidence-grounded
+    # questions and a provisional outline. Writing and verification stay
+    # deterministic and the agent never supplies citations directly.
+    research_agent_enabled: bool = False
+    research_agent_max_rounds: int = Field(default=6, ge=1, le=10)
+    research_agent_max_searches: int = Field(default=12, ge=1, le=30)
+    research_agent_max_tool_calls: int = Field(default=18, ge=1, le=40)
+    research_agent_max_sources: int = Field(default=16, ge=1, le=50)
+    research_agent_max_fetches: int = Field(default=6, ge=0, le=20)
+    research_agent_max_citation_calls: int = Field(default=4, ge=0, le=10)
+    research_agent_read_chars: int = Field(default=8000, ge=500, le=30000)
     # Bounded supplemental retrieval triggered by the writing model when a
     # section's evidence is insufficient. Enabled whenever model writing and a
     # search provider are available; these caps only bound the extra work.
@@ -183,6 +198,7 @@ class Settings(BaseSettings):
             or self.research_llm_polish_enabled
             or self.research_claim_llm_review
             or self.research_llm_recon_enabled
+            or self.research_agent_enabled
         )
 
     @property
@@ -216,6 +232,8 @@ class Settings(BaseSettings):
             calls += LLM_PLANNING_CALL_BUDGET
         if self.research_llm_recon_enabled:
             calls += LLM_RECON_CALL_BUDGET
+        if self.research_agent_enabled:
+            calls += LLM_RESEARCH_AGENT_CALL_BUDGET
         return self.llm_call_budget_seconds * calls + self.research_node_timeout_seconds
 
     @property

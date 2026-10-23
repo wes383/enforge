@@ -53,6 +53,7 @@ from dr_core.normalization import text_sha256
 from dr_core.providers.errors import ProviderError
 from dr_core.providers.models import FetchStatus
 from dr_core.providers.orchestration import fetch_web_content
+from dr_core.research.agent import run_research_agent
 from dr_core.research.claims import (
     audit_references,
     extract_claims,
@@ -89,6 +90,7 @@ from dr_core.research.models import (
     ReferenceAudit,
     ResearchBrief,
     ResearchGap,
+    ResearchMap,
     ResearchPlan,
     ResearchQuestion as ResearchQuestionModel,
     SearchQuery as SearchQueryModel,
@@ -188,6 +190,145 @@ def parse_brief(ctx: ResearchContext):
                 "budget_stopped": False,
                 "feedback": {},
                 "current_node": "parse_brief",
+            }
+
+    return node
+
+
+def research_agent(ctx: ResearchContext):
+    def node(state: ResearchState) -> ResearchState:
+        agent_llm = _llm_research_agent(ctx)
+        if agent_llm is None:
+            return {"current_node": "research_agent"}
+        with node_timeout(_research_agent_node_timeout(ctx)):
+            ctx.guard()
+            brief = _brief(state)
+            ctx.emit(
+                RunEventType.PHASE_STARTED,
+                message="Research agent started",
+                dedupe_key="phase:research-agent:started",
+                stage=RunStatus.PLANNING,
+            )
+            toolbox = ResearchToolbox(
+                ctx,
+                brief,
+                max_sources=ctx.settings.research_agent_max_sources,
+                max_searches=ctx.settings.research_agent_max_searches,
+                max_fetches=ctx.settings.research_agent_max_fetches,
+                max_citation_calls=ctx.settings.research_agent_max_citation_calls,
+                max_read_chars=ctx.settings.research_agent_read_chars,
+                existing=_source_records(state),
+            )
+            current = _plan_or_none(state)
+            version = 1 if current is None else current.version + 1
+            tool_events = 0
+
+            def record_tool(name: str, result: dict) -> None:
+                nonlocal tool_events
+                tool_events += 1
+                results = result.get("results")
+                ctx.emit(
+                    RunEventType.PROGRESS,
+                    message=f"Research agent used {name}",
+                    payload={
+                        "tool": name,
+                        "query": result.get("query"),
+                        "direction": result.get("direction"),
+                        "results": (
+                            len(results) if isinstance(results, list) else None
+                        ),
+                        "source_id": (
+                            result.get("source_id")
+                            or result.get("from_source_id")
+                        ),
+                        "status": result.get("status"),
+                        "error": (result.get("error") or "")[:300] or None,
+                        "tool_calls": tool_events,
+                    },
+                    dedupe_key=f"research-agent:tool:{tool_events}",
+                    stage=RunStatus.PLANNING,
+                )
+
+            outcome = run_research_agent(
+                brief,
+                agent_llm,
+                toolbox,
+                max_rounds=ctx.settings.research_agent_max_rounds,
+                max_tool_calls=ctx.settings.research_agent_max_tool_calls,
+                version=version,
+                on_tool=record_tool,
+            )
+            if outcome.error:
+                logger.warning(
+                    "Research agent for run %s ended early: %s",
+                    ctx.run_id,
+                    outcome.error,
+                )
+            used_agent = outcome.plan is not None
+            plan = outcome.plan
+            limitations = list(state.get("limitations") or [])
+            if plan is None:
+                plan = build_plan(brief, version=version)
+                limitations = _with_limitations(
+                    state,
+                    _text(
+                        brief,
+                        "研究代理未产出可用问题，研究问题改用确定性模板生成。",
+                        "The research agent did not produce usable questions, "
+                        "so the deterministic template supplied them.",
+                    ),
+                )
+            plan = _sync_plan_questions(ctx, plan)
+            research_map = outcome.research_map or ResearchMap(
+                summary=(plan.summary or brief.topic)[:4000],
+                source_count=len(outcome.sources),
+                completed=False,
+            )
+            research_map.source_count = len(outcome.sources)
+            research_map.completed = used_agent
+            digest = {
+                "summary": research_map.summary,
+                "themes": list(research_map.themes),
+                "terminology": list(research_map.terminology),
+                "controversies": list(research_map.controversies),
+                "source_count": len(outcome.sources),
+            }
+            ctx.emit(
+                RunEventType.PHASE_COMPLETED,
+                message=(
+                    "Research agent completed"
+                    if used_agent
+                    else "Research agent fell back to the deterministic plan"
+                ),
+                payload={
+                    "agent": used_agent,
+                    "sources": len(outcome.sources),
+                    "searches": outcome.searches,
+                    "tool_calls": outcome.tool_calls,
+                    "llm_calls": outcome.llm_calls,
+                    "fetches": outcome.fetches,
+                    "citation_calls": outcome.citation_calls,
+                    "questions": len(plan.questions),
+                    "outline_sections": len(research_map.outline),
+                    "outline_titles": [
+                        section.title for section in research_map.outline
+                    ],
+                    "error": outcome.error,
+                },
+                dedupe_key=f"phase:research-agent:completed:{plan.version}",
+                stage=RunStatus.PLANNING,
+            )
+            return {
+                "plan": plan.model_dump(mode="json"),
+                "recon": digest,
+                "research_map": research_map.model_dump(mode="json"),
+                "sources": [
+                    record.model_dump(mode="json")
+                    for record in outcome.sources
+                ],
+                "limitations": limitations,
+                "feedback": {},
+                "current_node": "research_agent",
             }
 
     return node
@@ -324,6 +465,9 @@ def plan_research(ctx: ResearchContext):
             return {
                 "plan": plan.model_dump(mode="json"),
                 "feedback": {},
+                # A regenerated plan may reorder or replace questions, so the
+                # research map's question indexes no longer line up.
+                "research_map": {},
                 "limitations": limitations,
                 "current_node": "plan_research",
             }
@@ -388,6 +532,7 @@ def await_plan_approval(ctx: ResearchContext):
             return {
                 "plan": plan.model_dump(mode="json"),
                 "feedback": {},
+                "research_map": {},
                 "current_node": "await_plan_approval",
             }
 
@@ -1527,6 +1672,10 @@ def generate_outline(ctx: ResearchContext):
                 latest_body = _outline_body(latest.content) if latest else None
 
             version = (latest_version + 1) if latest_id else 1
+            framing = _research_map_framing(
+                dict(state.get("research_map") or {}),
+                plan,
+            )
             candidate, outliner = _outline_candidate(
                 ctx,
                 brief,
@@ -1536,6 +1685,7 @@ def generate_outline(ctx: ResearchContext):
                 version=version,
                 evidence_by_question=by_question,
                 feedback=feedback,
+                section_framing=framing,
             )
             outline_payload = candidate.model_dump(mode="json")
             if latest_id is not None and _outline_body(outline_payload) == latest_body:
@@ -2378,6 +2528,17 @@ def finalize_report(ctx: ResearchContext):
     return node
 
 
+def route_after_brief(ctx: ResearchContext):
+    def route(state: ResearchState) -> str:
+        return (
+            "research_agent"
+            if _llm_research_agent(ctx) is not None
+            else "research_recon"
+        )
+
+    return route
+
+
 def route_after_plan_approval(state: ResearchState) -> str:
     feedback = state.get("feedback") or {}
     if feedback.get("decision") == "rejected":
@@ -2687,6 +2848,7 @@ def _outline_candidate(
     version: int,
     evidence_by_question: dict,
     feedback: str | None,
+    section_framing: dict[int, tuple[str, str]] | None = None,
 ) -> tuple[Outline, str]:
     outliner = _llm_outliner(ctx)
     if outliner is not None:
@@ -2699,6 +2861,7 @@ def _outline_candidate(
             evidence_by_question=evidence_by_question,
             llm=outliner,
             feedback=feedback,
+            section_framing=section_framing,
         )
         if outline is not None:
             return outline, "llm"
@@ -2711,9 +2874,49 @@ def _outline_candidate(
             version=version,
             evidence_by_question=evidence_by_question,
             feedback=feedback,
+            section_framing=section_framing,
         ),
         "template",
     )
+
+
+_FIXED_OUTLINE_TITLES = {
+    "introduction",
+    "引言",
+    "conclusion",
+    "结论",
+    "limitations and open questions",
+    "研究局限与未解决问题",
+    "contradictions and counter-evidence",
+    "矛盾与反方证据",
+}
+
+
+def _research_map_framing(
+    value: dict,
+    plan: ResearchPlan,
+) -> dict[int, tuple[str, str]]:
+    raw = value.get("outline")
+    if not isinstance(raw, list):
+        return {}
+    framing: dict[int, tuple[str, str]] = {}
+    seen: set[str] = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            continue
+        index = entry.get("question_index")
+        if isinstance(index, bool) or not isinstance(index, int):
+            continue
+        if index < 0 or index >= len(plan.questions) or index in framing:
+            continue
+        title = " ".join(str(entry.get("title") or "").split())[:200]
+        key = title.casefold()
+        if not title or key in seen or key in _FIXED_OUTLINE_TITLES:
+            continue
+        seen.add(key)
+        purpose = " ".join(str(entry.get("purpose") or "").split())[:500]
+        framing[index] = (title, purpose)
+    return framing
 
 
 def _outline_create(outline: Outline, feedback: str | None) -> object:
@@ -2841,12 +3044,36 @@ def _llm_recon(ctx: ResearchContext):
     return UsageRecordingLLM(llm, ctx.record_usage)
 
 
+def _llm_research_agent(ctx: ResearchContext):
+    if not ctx.settings.research_agent_enabled:
+        return None
+    if not _write_search_available(ctx):
+        return None
+    llm = ctx.registry.llm
+    if (
+        llm is None
+        or getattr(llm, "name", "") == "mock-llm"
+        or not callable(getattr(llm, "chat", None))
+    ):
+        return None
+    return UsageRecordingLLM(llm, ctx.record_usage)
+
+
 def _recon_node_timeout(ctx: ResearchContext) -> int:
     if _llm_recon(ctx) is None:
         return ctx.settings.research_node_timeout_seconds
     return _llm_node_timeout(
         ctx,
         ctx.settings.research_recon_max_rounds + 1,
+    )
+
+
+def _research_agent_node_timeout(ctx: ResearchContext) -> int:
+    if _llm_research_agent(ctx) is None:
+        return ctx.settings.research_node_timeout_seconds
+    return _llm_node_timeout(
+        ctx,
+        ctx.settings.research_agent_max_rounds + 1,
     )
 
 

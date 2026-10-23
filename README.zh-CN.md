@@ -20,8 +20,11 @@ Enforge 不是一个"输入主题、一次生成"的写作工具。它把研究�
 
 ### 研究工作流
 
-基于 LangGraph 的 18 个业务节点加 2 个审批节点，覆盖解析简报、前置侦察、规划、检索、规范化、排序、正文抓取、文档解析、证据抽取、证据分析、缺口分析、补充检索、提纲、写作、润色、主张核验、引用核验与定稿。
+基于 LangGraph 的 19 个业务节点加 2 个审批节点，覆盖解析简报、研究代理 / 前置侦察、规划、检索、规范化、排序、正文抓取、文档解析、证据抽取、证据分析、缺口分析、补充检索、提纲、写作、润色、主张核验、引用核验与定稿。
 
+- 可选的规划前研究代理：它从多个角度检索、阅读与抓取来源，沿参考文献和被引文献继续追踪（`A → B → C`），再基于实际找到的材料提出问题与临时提纲。所有来源都走正常入库流程，代理本身不能提供引用。
+- 临时提纲只为各研究问题对应的正文小节提供标题与写作目的；最终提纲、证据分配、引用映射、参考文献与核验仍由确定性流程完成。代理输出未通过校验时回退确定性计划并记录局限。
+- 代理的模型轮次、工具调用、检索、来源、正文抓取与引文查询分别限额；每次工具调用都会写入进度事件。
 - 条件循环由数据库中的证据覆盖情况驱动，达到检索轮次或预算上限后继续写作并记录局限。
 - 每个节点的副作用都有数据库唯一约束或幂等键，任务重试和 Worker 重启不会重复写入。
 - 稳定线程 ID + PostgreSQL checkpoint：审批恢复、任务重试和重复投递都从最近的 checkpoint 继续。
@@ -203,6 +206,9 @@ queued → planning ⇄ 计划审批 → searching → processing_sources → bu
 | `RESEARCH_LLM_WRITING_ENABLED` | `false` | 模型分章节写作（可发起一次补检） |
 | `RESEARCH_LLM_POLISH_ENABLED` | `false` | 全文语言润色 |
 | `RESEARCH_LLM_RECON_ENABLED` | `false` | 规划前的有界工具侦察（依赖规划开关） |
+| `RESEARCH_AGENT_ENABLED` | `false` | 规划前的研究代理；需要支持工具调用的 LLM 与启用的检索提供商，否则回退侦察与确定性规划 |
+| `RESEARCH_AGENT_MAX_ROUNDS` / `RESEARCH_AGENT_MAX_TOOL_CALLS` | `6` / `18` | 单次代理运行的模型轮次与工具调用总数 |
+| `RESEARCH_AGENT_MAX_SEARCHES` / `RESEARCH_AGENT_MAX_SOURCES` / `RESEARCH_AGENT_MAX_FETCHES` / `RESEARCH_AGENT_MAX_CITATION_CALLS` | `12` / `16` / `6` / `4` | 单次运行的检索、入库来源、正文抓取与引文查询上限 |
 | `RESEARCH_CLAIM_LLM_REVIEW` | `false` | 对未通过的主张做保守模型复核，只能降级 |
 | `RESEARCH_PLAN_APPROVAL_REQUIRED` | `true` | 计划审批；关闭则全自动 |
 | `RESEARCH_OUTLINE_APPROVAL_REQUIRED` | `true` | 提纲审批 |
@@ -228,7 +234,7 @@ docker compose up -d --force-recreate api worker
 测试与真实密钥完全隔离：`docker-compose.test.yml` 强制 `RESEARCH_PROVIDER_MODE=mock` 并清空所有提供商密钥与 LLM 开关，即使 `.env` 里有真实 Key 也不会联网或消耗配额。
 
 ```bash
-# 单元 + 集成 + 评测（当前 317 passed）
+# 单元 + 集成 + 评测（当前 335 passed）
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -260,4 +266,7 @@ docker compose exec api python -m dr_core.maintenance   # 文件记录对账
 - 尚未接入真实 Embedding 服务，离线使用确定性词项哈希向量，语义召回质量有限；`auto` 模式会自动降级为关键词检索。
 - 本地解析不包含 OCR，扫描版/加密 PDF 会明确失败；表格提取为尽力而为。
 - 质量评测集使用 Mock 提供商，指标反映离线行为；接入真实服务后需要重新评测。
+- 研究代理需要兼容 OpenAI 的工具调用模型与真实检索提供商；离线与 Mock 运行使用侦察加确定性规划。代理提出的问题、摘要与临时提纲属于经过校验的模型输出，不构成引用依据。
+- 引文追踪依赖学术元数据：没有 DOI 或只有非结构化文本的参考文献会作为线索返回给代理，不会入库。代理的检索以运行事件呈现，不写入检索记录表。
+- 临时提纲为每个研究问题对应的正文小节提供标题与写作目的，代理不能借提纲增加库外来源或主张。
 - 取消是协作式的，已发出的单个提供商 HTTP 请求不会被强制中断，只会受超时约束。

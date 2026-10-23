@@ -224,8 +224,10 @@ def build_outline(
     version: int,
     evidence_by_question: dict[UUID | None, list],
     feedback: str | None = None,
+    section_framing: dict[int, tuple[str, str]] | None = None,
 ) -> Outline:
     sections: list[OutlineSection] = []
+    framing = section_framing or {}
     section_budget = (
         max(100, round(brief.target_words / (len(plan.questions) + 3)))
         if brief.target_words
@@ -252,14 +254,20 @@ def build_outline(
                 target_words=_target_words(brief, "intro", section_budget),
             )
         )
-        for question in plan.questions:
+        for position, question in enumerate(plan.questions):
             items = evidence_by_question.get(question.question_id, [])
             support, refute = _split_evidence(items)
+            title, purpose = _framed_section(
+                framing,
+                position,
+                question.question,
+                "综合证据解释这一维度，并交代证据强度与适用条件。",
+            )
             sections.append(
                 OutlineSection(
                     index=len(sections),
-                    title=_short_title(question.question),
-                    purpose="综合证据解释这一维度，并交代证据强度与适用条件。",
+                    title=title,
+                    purpose=purpose,
                     question_id=question.question_id,
                     key_claims=[item.claim_summary[:300] for item in support[:3]],
                     evidence_ids=[item.id for item in [*support, *refute]],
@@ -337,17 +345,23 @@ def build_outline(
                 target_words=_target_words(brief, "intro", section_budget),
             )
         )
-        for question in plan.questions:
+        for position, question in enumerate(plan.questions):
             items = evidence_by_question.get(question.question_id, [])
             support, refute = _split_evidence(items)
+            title, purpose = _framed_section(
+                framing,
+                position,
+                question.question,
+                (
+                    "Interpret this dimension of the evidence and explain "
+                    "its strength and conditions of applicability."
+                ),
+            )
             sections.append(
                 OutlineSection(
                     index=len(sections),
-                    title=_short_title(question.question),
-                    purpose=(
-                        "Interpret this dimension of the evidence and explain "
-                        "its strength and conditions of applicability."
-                    ),
+                    title=title,
+                    purpose=purpose,
                     question_id=question.question_id,
                     key_claims=[item.claim_summary[:300] for item in support[:3]],
                     evidence_ids=[item.id for item in [*support, *refute]],
@@ -539,3 +553,13 @@ def _short_title(question: str) -> str:
     if len(cleaned) <= 80:
         return cleaned
     return cleaned[:77] + "..."
+
+
+def _framed_section(
+    framing: dict[int, tuple[str, str]],
+    position: int,
+    question: str,
+    default_purpose: str,
+) -> tuple[str, str]:
+    title, purpose = framing.get(position, ("", ""))
+    return (title or _short_title(question), purpose or default_purpose)

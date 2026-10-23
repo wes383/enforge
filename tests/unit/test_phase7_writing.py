@@ -553,6 +553,53 @@ def test_outline_titles_are_topic_phrases_not_questions():
     assert all(not title.endswith("？") for title in titles)
 
 
+def test_outline_uses_research_map_framing_for_question_sections():
+    question_id = uuid4()
+    question = "Which accessibility milestones changed assistive technology?"
+    support = _evidence(question_id, uuid4())
+    plan = ResearchPlan(
+        summary="Plan",
+        questions=[
+            ResearchQuestion(question_id=question_id, question=question)
+        ],
+    )
+    matrix = EvidenceMatrix(
+        rows=[
+            EvidenceRow(
+                question_id=question_id,
+                question=question,
+                support_count=1,
+                independent_source_count=1,
+                conclusion="Limited support.",
+                support_evidence_ids=[support.id],
+            )
+        ],
+        total_evidence=1,
+        source_count=1,
+        independent_source_count=1,
+        coverage_ratio=0.5,
+    )
+    outline = build_outline(
+        _brief(),
+        plan,
+        matrix,
+        [],
+        version=1,
+        evidence_by_question={question_id: [support]},
+        section_framing={
+            0: (
+                "From Braille to screen readers",
+                "Trace the technology line.",
+            )
+        },
+    )
+    section = next(
+        item for item in outline.sections if item.question_id == question_id
+    )
+    assert section.title == "From Braille to screen readers"
+    assert section.purpose == "Trace the technology line."
+
+
 def test_section_without_evidence_does_not_assert_conclusions():
     draft, _, _, _ = _section(uuid4(), title="Unanswered question", evidence=[])
 

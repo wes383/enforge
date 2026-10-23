@@ -58,6 +58,7 @@ def build_outline_with_llm(
     evidence_by_question: dict[Any, list],
     llm: LLMProvider,
     feedback: str | None = None,
+    section_framing: dict[int, tuple[str, str]] | None = None,
 ) -> Outline | None:
     template = build_outline(
         brief,
@@ -67,6 +68,7 @@ def build_outline_with_llm(
         version=version,
         evidence_by_question=evidence_by_question,
         feedback=feedback,
+        section_framing=section_framing,
     )
     bodies = [
         section for section in template.sections if section.question_id is not None

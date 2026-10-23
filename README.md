@@ -20,8 +20,11 @@ Enforge is not a "type a topic, get an article" tool. It breaks research into in
 
 ### Research workflow
 
-A LangGraph workflow with 18 business nodes and 2 approval nodes, covering brief parsing, upfront recon, planning, search, normalization, ranking, full-text fetching, document parsing, evidence extraction, evidence analysis, gap analysis, follow-up search, outlining, writing, polishing, claim verification, citation verification, and finalization.
+A LangGraph workflow with 19 business nodes and 2 approval nodes, covering brief parsing, research agent / upfront recon, planning, search, normalization, ranking, full-text fetching, document parsing, evidence extraction, evidence analysis, gap analysis, follow-up search, outlining, writing, polishing, claim verification, citation verification, and finalization.
 
+- Optional research agent before planning: it searches from several angles, reads and fetches sources, follows references and citing works (`A → B → C`), and then commits to questions and a provisional outline grounded in what it actually found. Every source goes through normal ingestion and the agent cannot supply citations.
+- The provisional outline only supplies the title and purpose of question-based body sections; the final outline, evidence assignment, citation mapping, references, and verification stay deterministic. Invalid agent output falls back to the deterministic plan and records the limitation.
+- Agent rounds, tool calls, searches, sources, page fetches, and citation lookups each have their own cap; every tool call is surfaced as a progress event.
 - The conditional loop is driven by evidence coverage in the database; when the search-round or budget limit is reached, the run continues to writing and records the limitation.
 - Every node's side effects have a database unique constraint or idempotency key, so task retries and worker restarts never write duplicates.
 - A stable thread ID plus PostgreSQL checkpoints means approval resumption, task retries, and duplicate deliveries all continue from the latest checkpoint.
@@ -208,6 +211,9 @@ See [`.env.example`](.env.example) for every variable and its default. The most 
 | `RESEARCH_LLM_WRITING_ENABLED` | `false` | Model writes section by section (may request one bounded follow-up search) |
 | `RESEARCH_LLM_POLISH_ENABLED` | `false` | Whole-article language polishing |
 | `RESEARCH_LLM_RECON_ENABLED` | `false` | Bounded tool recon before planning (requires planning to be enabled) |
+| `RESEARCH_AGENT_ENABLED` | `false` | Tool-using research agent before planning; requires a tool-calling LLM and an enabled search provider, otherwise the run uses recon and deterministic planning |
+| `RESEARCH_AGENT_MAX_ROUNDS` / `RESEARCH_AGENT_MAX_TOOL_CALLS` | `6` / `18` | Model rounds and total tool calls per agent run |
+| `RESEARCH_AGENT_MAX_SEARCHES` / `RESEARCH_AGENT_MAX_SOURCES` / `RESEARCH_AGENT_MAX_FETCHES` / `RESEARCH_AGENT_MAX_CITATION_CALLS` | `12` / `16` / `6` / `4` | Per-run caps on indexed searches, stored sources, page fetches, and reference/citation lookups |
 | `RESEARCH_CLAIM_LLM_REVIEW` | `false` | Conservative model review of failed claims; can only downgrade |
 | `RESEARCH_PLAN_APPROVAL_REQUIRED` | `true` | Plan approval; disable for fully automatic runs |
 | `RESEARCH_OUTLINE_APPROVAL_REQUIRED` | `true` | Outline approval |
@@ -233,7 +239,7 @@ Changing the public API address `NEXT_PUBLIC_API_BASE_URL` requires rebuilding `
 Tests are fully isolated from real keys: `docker-compose.test.yml` forces `RESEARCH_PROVIDER_MODE=mock` and clears every provider key and LLM switch, so even a `.env` with real keys never reaches the network or consumes quota.
 
 ```bash
-# Unit + integration + evaluation (currently 324 passed)
+# Unit + integration + evaluation (currently 335 passed)
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -265,4 +271,7 @@ docker compose exec api python -m dr_core.maintenance   # file-record reconcilia
 - No real embedding service is wired in yet. Offline runs use deterministic term-hash vectors, so semantic recall is limited; `auto` mode falls back to keyword search.
 - Local parsing does not include OCR; scanned or encrypted PDFs fail explicitly, and table extraction is best-effort.
 - The quality evaluation set uses mock providers, so its metrics describe offline behavior; re-run it after connecting real services.
+- The research agent needs an OpenAI-compatible tool-calling model and a real search provider. Offline and mock runs use recon plus deterministic planning; the agent's questions, summary, and provisional outline are validated model output and never become citation authority.
+- Citation chasing depends on academic metadata: DOI-less or unstructured references are returned to the agent as leads, not ingested. Agent searches appear as run events rather than search-query rows.
+- The provisional outline titles and frames one body section per research question; it does not let the agent add sources or claims outside the stored evidence.
 - Cancellation is cooperative. An in-flight provider HTTP request is not forcibly aborted; it is bounded by timeouts.
