@@ -89,16 +89,18 @@ def test_outline_payload_becomes_contiguous_typed_sections():
     assert outline.version == 2
     assert outline.title == "Enforcement research"
     assert outline.summary == SUMMARY
-    assert [section.index for section in outline.sections] == list(range(5))
+    assert [section.index for section in outline.sections] == list(range(4))
     assert [section.role for section in outline.sections] == [
         SectionRole.INTRODUCTION,
         SectionRole.BODY,
         SectionRole.BODY,
-        SectionRole.LIMITATIONS,
         SectionRole.CONCLUSION,
     ]
-    limitations = outline.sections[3]
-    assert limitations.search_terms == []
+    # A limitations section proposed by the model is dropped: it used to be
+    # written from a template and read as a disclaimer.
+    assert SectionRole.LIMITATIONS not in {
+        section.role for section in outline.sections
+    }
     assert all(50 <= section.target_words <= 5000 for section in outline.sections)
     assert all(section.section_id for section in outline.sections)
 
@@ -241,7 +243,7 @@ def test_template_outline_follows_the_article_type():
         roles = [section.role for section in outline.sections]
         assert roles[0] is SectionRole.INTRODUCTION
         assert roles[-1] is SectionRole.CONCLUSION
-        assert SectionRole.LIMITATIONS in roles
+        assert SectionRole.LIMITATIONS not in roles
         assert [section.index for section in outline.sections] == list(
             range(len(outline.sections))
         )

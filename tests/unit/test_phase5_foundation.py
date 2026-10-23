@@ -70,7 +70,9 @@ def test_outline_template_is_type_and_depth_aware_and_consumes_feedback():
     roles = [section.role.value for section in outline.sections]
     assert roles[0] == "introduction"
     assert roles[-1] == "conclusion"
-    assert "limitations" in roles
+    # A limitations section is no longer part of an outline: it was written
+    # from a template and read as a disclaimer rather than as argument.
+    assert "limitations" not in roles
 
     revised = build_outline_template(
         _brief(),

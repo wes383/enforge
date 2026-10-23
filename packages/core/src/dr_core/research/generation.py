@@ -266,22 +266,6 @@ def build_outline_template(
     sections.append(
         OutlineSection(
             index=len(sections),
-            role=SectionRole.LIMITATIONS,
-            title="研究局限与适用范围" if zh else "Limitations and Applicability",
-            purpose=(
-                "说明证据覆盖、来源质量与适用条件的不足，不将空白包装成结论。"
-                if zh
-                else (
-                    "State gaps in evidence coverage, source quality and "
-                    "applicability without presenting blanks as conclusions."
-                )
-            ),
-            target_words=_section_words(brief, SectionRole.LIMITATIONS, body_count),
-        )
-    )
-    sections.append(
-        OutlineSection(
-            index=len(sections),
             role=SectionRole.CONCLUSION,
             title="结论" if zh else "Conclusion",
             purpose=(
@@ -384,19 +368,16 @@ def _section_words(
     total = _base_words(brief)
     intro_share = 0.1
     conclusion_share = 0.1
-    limitations_share = 0.06
     contradiction_share = 0.1
     if role is SectionRole.INTRODUCTION:
         words = total * intro_share
     elif role is SectionRole.CONCLUSION:
         words = total * conclusion_share
-    elif role is SectionRole.LIMITATIONS:
-        words = total * limitations_share
     elif role is SectionRole.CONTRADICTIONS:
         words = total * contradiction_share
     else:
         words = total * (
-            1 - intro_share - conclusion_share - limitations_share
+            1 - intro_share - conclusion_share
         ) / max(1, body_count)
     scale = _DEPTH_SCALE[brief.research_depth]
     return max(50, min(5000, round(words * scale)))

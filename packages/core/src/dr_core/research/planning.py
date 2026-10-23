@@ -123,14 +123,14 @@ def build_outline_with_llm(
     rules = [
         "Design the complete article outline, not a list of search queries.",
         "A typical article has an introduction, several body sections, an "
-        "optional counter-evidence section, a limitations section and a conclusion.",
+        "optional counter-evidence section and a conclusion.",
         f"The number of sections follows the word budget; about {low}-{high} "
         "sections for this article. Do not pad or repeat the same angle.",
         "Every section title is a short topic phrase, never a question and never "
         "a duplicate.",
         "purpose states what the section settles and what it hands to the next one.",
         "search_terms are 1-4 short keyword phrases a search engine can match. "
-        "Every body section needs them; limitations may omit them.",
+        "Every section needs them.",
         "target_words is an approximate share of the article's total budget.",
         f"Write summary, titles, purposes and search terms in {language_name}.",
         "Use the article type guidance to choose the emphases and section order.",
@@ -146,7 +146,7 @@ def build_outline_with_llm(
         ),
         *untrusted_rules(),
         "Return JSON only: {\"summary\": string, \"sections\": [{\"title\": "
-        "string, \"role\": \"introduction|body|contradictions|limitations|"
+        "string, \"role\": \"introduction|body|contradictions|"
         "conclusion\", \"purpose\": string, \"search_terms\": [string], "
         "\"target_words\": integer}]}.",
     ]
@@ -271,6 +271,12 @@ def outline_from_payload(
     for entry in raw:
         parsed = _section(entry, brief)
         if parsed is None:
+            continue
+        if parsed.role is SectionRole.LIMITATIONS:
+            # The prompt used to suggest a limitations section. It is written
+            # deterministically from a template, so it always read as a
+            # disclaimer rather than as part of the argument. A model that
+            # still proposes one loses the slot instead.
             continue
         key = parsed.title.casefold()
         if key in seen:
@@ -401,7 +407,6 @@ def _default_words(brief: ResearchBrief, role: SectionRole, total: int) -> int:
     shares = {
         SectionRole.INTRODUCTION: 0.1,
         SectionRole.CONCLUSION: 0.1,
-        SectionRole.LIMITATIONS: 0.06,
         SectionRole.CONTRADICTIONS: 0.1,
     }
     if role in shares:
@@ -409,7 +414,7 @@ def _default_words(brief: ResearchBrief, role: SectionRole, total: int) -> int:
     body_count = max(1, total - 3)
     body_share = 1 - shares[SectionRole.INTRODUCTION] - shares[
         SectionRole.CONCLUSION
-    ] - shares[SectionRole.LIMITATIONS] - shares[SectionRole.CONTRADICTIONS]
+    ] - shares[SectionRole.CONTRADICTIONS]
     return max(50, min(5000, round(budget * body_share / body_count)))
 
 
