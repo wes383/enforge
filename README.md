@@ -53,6 +53,7 @@ A LangGraph workflow with 19 business nodes and one outline-approval gate, cover
 - Parsed documents are chunked by page, section, and paragraph with location metadata, then written to pgvector and the full-text index.
 - Keyword search over `to_tsvector('simple', text)` plus pgvector HNSW vector search, fused with RRF, with filters for project, source type, date, and source version.
 - When vectors are unavailable, retrieval degrades to keyword search instead of failing the research run.
+- The vector width is a setting, not a hard-coded constant: `EMBEDDING_DIMENSION` decides the width of the chunk vector column, and the migrate service retypes that column on every start. Switching to a model with a different width therefore only needs a configuration change; the vectors of the previous width are dropped and rebuilt by the next indexing pass.
 - Evidence stores its source, source version, quotation, surrounding context, and a `locator` (page / section / paragraph / character range); verification status only says whether the quotation can be located again, not whether its content is true.
 - The evidence matrix reports, per outline section, the main conclusion, supporting and refuting evidence, independent source count, and itemized reasons for source quality (recency, methodological transparency, retraction status) and evidence quality (directness, context, independence, applicability). Counter-evidence is never filtered out.
 - Preprint revisions (`..._v1` / `..._v2`, arXiv `2101.00001v2`) collapse into one source during normalization, so version copies do not inflate the independent-source count or the reference list.
@@ -247,6 +248,7 @@ See [`.env.example`](.env.example) for every variable and its default. The most 
 | `RESEARCH_RETRIEVAL_CANDIDATE_LIMIT` | `20` | Candidates pulled per section query before extraction |
 | `RESEARCH_WRITE_MAX_TOKENS_FLOOR` / `RESEARCH_WRITE_TOKENS_PER_WORD` | `1200` / `6` | Token budget for one model-written section; reasoning models bill their reasoning against the same budget |
 | `EMBEDDING_ENABLED` / `EMBEDDING_API_KEY` | `false` / empty | Optional OpenAI-compatible embeddings; without them retrieval stays keyword-only and says so in the run events and the article limitations |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | `text-embedding-3-small` / `1536` | The model and the vector width; the chunk vector column follows the width, so switching models only needs a configuration change |
 | `RESEARCH_TOKEN_BUDGET` / `RESEARCH_COST_BUDGET_USD` | `0` | Budgets; 0 means unlimited |
 | `MAX_ACTIVE_RUNS_PER_PROJECT` | `3` | Per-project concurrent run limit; exceeding it returns 429 |
 | `LANGFUSE_ENABLED` | `false` | Optional observability; metadata only by default, no article text or secrets |

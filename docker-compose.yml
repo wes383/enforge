@@ -147,7 +147,12 @@ services:
     volumes:
       - ./migrations:/app/migrations:ro
       - ./alembic.ini:/app/alembic.ini:ro
-    command: ["alembic", "upgrade", "head"]
+    command:
+      [
+        "sh",
+        "-c",
+        "alembic upgrade head && python -m dr_core.maintenance.alignment",
+      ]
     depends_on:
       postgres:
         condition: service_healthy

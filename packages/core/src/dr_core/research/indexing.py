@@ -9,6 +9,7 @@ from sqlalchemy import func, select
 from dr_core.db.enums import ParserStatus, SourceVersionKind
 from dr_core.db.models import DocumentChunk, SourceVersion
 from dr_core.db.repositories import DocumentChunkRepository
+from dr_core.db.schema import embedding_dimension_mismatch
 from dr_core.providers.models import ParsedDocument
 from dr_core.research.context import ResearchContext
 from dr_core.research.text import sentence_spans, tokenize
@@ -273,6 +274,10 @@ def _attach_embeddings(
     if provider is None:
         return False
     expected = ctx.settings.embedding_dimension
+    mismatch = _dimension_mismatch(ctx)
+    if mismatch:
+        logger.error("%s", mismatch)
+        return False
     try:
         for start in range(0, len(chunks), _EMBED_BATCH_SIZE):
             batch = chunks[start : start + _EMBED_BATCH_SIZE]
@@ -293,6 +298,18 @@ def _attach_embeddings(
             chunk.embedding_model = None
         return False
     return True
+
+
+def _dimension_mismatch(ctx: ResearchContext) -> str | None:
+    try:
+        with ctx.database.session() as session:
+            return embedding_dimension_mismatch(
+                session,
+                ctx.settings.embedding_dimension,
+            )
+    except Exception as exc:
+        logger.warning("Unable to read the chunk vector column type: %s", exc)
+        return None
 
 
 def _section_chunk(

@@ -10,6 +10,7 @@ from app.api import approvals, files, health, projects, runs, workbench
 from app.api.dev import router as dev_router
 from dr_core.config import get_settings
 from dr_core.db.repositories import DuplicateEntity, EntityNotFound
+from dr_core.db.schema import log_embedding_dimension_mismatch
 from dr_core.observability import install_log_redaction
 from dr_core.services import InvalidRunTransition, RunAlreadyFinished
 from dr_core.storage import StorageError, get_file_storage
@@ -21,6 +22,7 @@ logger = logging.getLogger(__name__)
 async def lifespan(_: FastAPI) -> AsyncIterator[None]:
     install_log_redaction()
     get_file_storage()
+    log_embedding_dimension_mismatch()
     yield
 
 

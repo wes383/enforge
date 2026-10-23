@@ -53,6 +53,7 @@ Enforge 不是一个"输入主题、一次生成"的写作工具。它把研究�
 - 解析后的文档按页、章节、段落切成带定位信息的切片，写入 pgvector 与全文索引。
 - `to_tsvector('simple', text)` 关键词检索 + pgvector HNSW 向量检索，按 RRF 融合，支持项目、来源类型、日期、来源版本过滤。
 - 向量不可用时自动降级为关键词检索，研究任务不会因此崩溃。
+- 向量维度是配置项而非写死的常量：`EMBEDDING_DIMENSION` 决定切片向量列的宽度，migrate 服务每次启动都会把该列对齐到配置的宽度。切换到不同维度的模型因此只需改配置，旧维度的向量会被清空并在下次索引时重建。
 - 证据保存来源、来源版本、原文引用、前后上下文与 `locator`（页码 / 章节 / 段落 / 字符区间），核验状态只表示"能否重新定位"，不表示内容为真。
 - 证据矩阵按提纲章节给出主要结论、支持/反驳证据、独立来源数，以及来源质量（时效、方法透明度、撤稿状态）与证据质量（直接性、上下文、独立性、适用条件）的分项理由。相反证据不会被过滤。
 
@@ -242,6 +243,7 @@ queued → planning → 提纲审批 → searching → processing_sources → bu
 | `RESEARCH_RETRIEVAL_CANDIDATE_LIMIT` | `20` | 每个章节查询在抽取前拉取的候选数量 |
 | `RESEARCH_WRITE_MAX_TOKENS_FLOOR` / `RESEARCH_WRITE_TOKENS_PER_WORD` | `1200` / `6` | 单章节模型写作的 token 预算；推理模型的思考 token 与正文共用同一预算 |
 | `EMBEDDING_ENABLED` / `EMBEDDING_API_KEY` | `false` / 空 | 可选的 OpenAI 兼容向量模型；未配置时检索降级为关键词模式，并在运行事件与文章局限中写明 |
+| `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | `text-embedding-3-small` / `1536` | 向量模型与向量维度；切片向量列跟随该维度，切换模型只需改配置 |
 | `RESEARCH_TOKEN_BUDGET` / `RESEARCH_COST_BUDGET_USD` | `0` | 预算；0 表示不限制 |
 | `MAX_ACTIVE_RUNS_PER_PROJECT` | `3` | 项目级并发运行限制，超限返回 429 |
 | `LANGFUSE_ENABLED` | `false` | 可选观测；默认只发元数据，不含正文与密钥 |

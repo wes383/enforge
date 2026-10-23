@@ -102,6 +102,12 @@ class OpenAICompatibleEmbeddingProvider:
                     "openai",
                     "embedding response contains no vector",
                 )
+            if len(embedding) != self._dimension:
+                raise ProviderResponseError(
+                    "openai",
+                    f"embedding response has {len(embedding)} dimensions, "
+                    f"expected {self._dimension}",
+                )
             try:
                 vectors.append([float(value) for value in embedding])
             except (TypeError, ValueError) as exc:
