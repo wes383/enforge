@@ -91,6 +91,15 @@ class Settings(BaseSettings):
     llm_cost_per_1m_input_tokens: float = Field(default=0.0, ge=0)
     llm_cost_per_1m_output_tokens: float = Field(default=0.0, ge=0)
 
+    # Optional OpenAI-compatible embeddings. Hybrid retrieval only becomes
+    # truly hybrid when an embedding provider is configured, so the switch is
+    # explicit and off by default; the chat key is never reused for embeddings.
+    embedding_enabled: bool = False
+    embedding_api_key: SecretStr | None = None
+    embedding_base_url: str = "https://api.openai.com/v1"
+    embedding_model: str = "text-embedding-3-small"
+    embedding_timeout_seconds: float = Field(default=60.0, gt=0, le=300)
+
     web_fetch_max_bytes: int = Field(default=2_000_000, gt=0)
     web_fetch_min_content_chars: int = Field(default=400, ge=0)
 
@@ -155,6 +164,21 @@ class Settings(BaseSettings):
     research_write_search_max_searches: int = Field(default=6, ge=1, le=20)
     research_write_search_max_sources: int = Field(default=8, ge=1, le=50)
     research_write_search_max_evidence: int = Field(default=12, ge=1, le=100)
+    # Writing budget. Reasoning models bill their thinking against the same
+    # token limit as the answer, so a section needs a floor and a multiplier
+    # rather than a plain word count times three.
+    research_write_max_tokens_floor: int = Field(default=1200, ge=200, le=32000)
+    research_write_tokens_per_word: int = Field(default=6, ge=1, le=40)
+    # How much evidence one section aims for. The target is derived from the
+    # section's own word budget, so a short section stops earlier than a long
+    # one instead of every section sharing one hard-coded floor.
+    research_section_target_words_per_evidence: int = Field(default=80, ge=20, le=400)
+    research_section_target_evidence_min: int = Field(default=4, ge=1, le=50)
+    research_section_target_evidence_max: int = Field(default=12, ge=1, le=50)
+    research_section_target_sources_min: int = Field(default=3, ge=1, le=50)
+    research_section_target_sources_max: int = Field(default=6, ge=1, le=50)
+    # Candidate chunks a single section query may pull from the index.
+    research_retrieval_candidate_limit: int = Field(default=20, ge=1, le=100)
     # Caps paid model calls per run so verification time stays bounded.
     research_claim_llm_review_limit: int = Field(default=10, ge=1, le=500)
     max_active_runs_per_project: int = Field(default=3, ge=0, le=100)

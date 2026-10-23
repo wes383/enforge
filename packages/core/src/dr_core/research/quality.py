@@ -3,9 +3,10 @@ from __future__ import annotations
 import re
 from collections import defaultdict
 from datetime import UTC, datetime
-from typing import Any, Iterable
+from typing import Any, Iterable, Mapping
 from uuid import UUID
 
+from dr_core.config.settings import Settings
 from dr_core.db.enums import (
     EvidenceType,
     ProjectLanguage,
@@ -428,6 +429,57 @@ def assess_evidence_quality(
     )
 
 
+def section_evidence_target(
+    section: OutlineSection,
+    settings: Settings,
+) -> tuple[int, int]:
+    """Evidence a section needs, derived from its own writing budget.
+
+    The target scales with the section's word budget, so a short section
+    stops earlier than a long one instead of every section sharing one
+    hard-coded floor.
+    """
+    words = section.target_words or 0
+    wanted = words // max(1, settings.research_section_target_words_per_evidence)
+    evidence = min(
+        settings.research_section_target_evidence_max,
+        max(settings.research_section_target_evidence_min, wanted),
+    )
+    identities = min(
+        settings.research_section_target_sources_max,
+        max(settings.research_section_target_sources_min, evidence // 2 + 1),
+    )
+    return evidence, identities
+
+
+def _achievement_ratio(
+    *,
+    support_count: int,
+    identity_count: int,
+    target_evidence: int,
+    target_sources: int,
+    coverage: SectionCoverageStatus,
+) -> float:
+    """Share of a section's evidence target that was reached.
+
+    Without a target the ratio falls back to the coverage status so the
+    field stays meaningful for callers that do not know the target.
+    """
+    if target_evidence <= 0:
+        if coverage is SectionCoverageStatus.COVERED:
+            return 1.0
+        if coverage is SectionCoverageStatus.PARTIAL:
+            return 0.5
+        return 0.0
+    evidence_share = min(1.0, support_count / target_evidence)
+    source_share = (
+        min(1.0, identity_count / target_sources)
+        if target_sources > 0
+        else 1.0
+    )
+    return round(min(evidence_share, source_share), 4)
+
+
 def build_evidence_matrix(
     sections: list[OutlineSection],
     evidence: list[Any],
@@ -435,7 +487,15 @@ def build_evidence_matrix(
     *,
     language: ProjectLanguage,
     now_year: int | None = None,
+    targets: Mapping[UUID, tuple[int, int]] | None = None,
 ) -> EvidenceMatrix:
+    """Build the evidence matrix.
+
+    ``targets`` maps a section id to the ``(evidence, independent sources)``
+    the section needs to be considered well supported. Coverage status keeps
+    its own floor of two supporting items from two independent sources; the
+    target only drives the achievement ratio reported per row.
+    """
     now_year = now_year or datetime.now(tz=UTC).year
     by_section: dict[UUID | None, list[Any]] = defaultdict(list)
     for item in evidence:
@@ -579,6 +639,16 @@ def build_evidence_matrix(
             )
             for item in items[:12]
         ]
+        target_evidence, target_sources = (
+            (targets or {}).get(section.section_id, (0, 0))
+        )
+        evidence_ratio = _achievement_ratio(
+            support_count=len(support),
+            identity_count=len(support_identities),
+            target_evidence=target_evidence,
+            target_sources=target_sources,
+            coverage=coverage,
+        )
         rows.append(
             EvidenceRow(
                 section_id=section.section_id,
@@ -588,6 +658,9 @@ def build_evidence_matrix(
                 source_count=len(used_sources),
                 independent_source_count=len(used_identities),
                 coverage_status=coverage,
+                target_evidence=target_evidence,
+                target_sources=target_sources,
+                evidence_ratio=evidence_ratio,
                 conclusion=conclusion,
                 support_evidence_ids=sorted(
                     {item.id for item in support}, key=str
@@ -651,6 +724,16 @@ def build_evidence_matrix(
         4,
     )
 
+    target_ratio = round(
+        (
+            sum(row.evidence_ratio for row in rows if row.target_evidence > 0)
+            / len([row for row in rows if row.target_evidence > 0])
+        )
+        if any(row.target_evidence > 0 for row in rows)
+        else 0.0,
+        4,
+    )
+
     return EvidenceMatrix(
         rows=rows,
         total_evidence=len(evidence),
@@ -660,6 +743,7 @@ def build_evidence_matrix(
             1 for row in rows if row.support_count and row.refute_count
         ),
         coverage_ratio=coverage_ratio,
+        target_ratio=target_ratio,
         duplicate_source_groups=duplicate_labels[:20],
         quality_notes=quality_notes,
     )

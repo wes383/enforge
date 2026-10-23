@@ -15,6 +15,7 @@ from dr_core.providers.base import (
 )
 from dr_core.providers.cache import InMemoryProviderCache, ProviderCache
 from dr_core.providers.content import FirecrawlProvider
+from dr_core.providers.embeddings import OpenAICompatibleEmbeddingProvider
 from dr_core.providers.http import RetryPolicy
 from dr_core.providers.llm import OpenAICompatibleLLMProvider
 from dr_core.providers.mocks import (
@@ -50,7 +51,11 @@ class ProviderRegistry:
             *self.web_search,
             *self.academic_search,
             *self.web_content,
+            self.embedding,
+            self.llm,
         ]:
+            if provider is None:
+                continue
             close = getattr(provider, "close", None)
             if callable(close):
                 close()
@@ -153,11 +158,38 @@ def build_provider_registry(
             ),
         )
 
+    embedding: EmbeddingProvider | None = None
+    if settings.embedding_enabled:
+        embedding_key = _secret(settings.embedding_api_key)
+        if embedding_key:
+            embedding = OpenAICompatibleEmbeddingProvider(
+                embedding_key,
+                base_url=settings.embedding_base_url,
+                model=settings.embedding_model,
+                dimension=settings.embedding_dimension,
+                timeout_seconds=settings.embedding_timeout_seconds,
+                connect_timeout_seconds=settings.provider_connect_timeout_seconds,
+                retry_policy=retry_policy,
+            )
+        else:
+            logger.warning(
+                "Embeddings are enabled but EMBEDDING_API_KEY is not "
+                "configured; retrieval falls back to keyword search"
+            )
+    elif settings.research_retrieval_mode != "keyword":
+        logger.warning(
+            "Retrieval mode is %s but no embedding provider is configured "
+            "(set EMBEDDING_ENABLED and EMBEDDING_API_KEY); retrieval falls "
+            "back to keyword search",
+            settings.research_retrieval_mode,
+        )
+
     return ProviderRegistry(
         web_search=web_search,
         academic_search=academic_search,
         web_content=web_content,
         llm=llm,
+        embedding=embedding,
         parsers=[
             LocalDocumentParser(
                 max_input_bytes=settings.parser_max_input_bytes,

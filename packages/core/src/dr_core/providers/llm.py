@@ -110,22 +110,24 @@ def _parse_completion(payload: dict[str, Any], fallback_model: str) -> LLMRespon
             "chat completion response is missing choices",
         )
     choice = choices[0]
+    finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
     message = choice.get("message") if isinstance(choice, dict) else None
     if not isinstance(message, dict):
         raise ProviderResponseError(
             "openai",
-            "chat completion response is missing message content",
+            "chat completion response is missing the message object",
         )
     content = message.get("content")
     text = content if isinstance(content, str) else ""
+    reasoning = message.get("reasoning_content")
+    reasoning_text = reasoning if isinstance(reasoning, str) else ""
     tool_calls = _parse_tool_calls(message)
     if not text.strip() and not tool_calls:
         raise ProviderResponseError(
             "openai",
-            "chat completion response is missing message content",
+            _empty_content_reason(finish_reason, reasoning_text),
         )
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
-    finish_reason = choice.get("finish_reason") if isinstance(choice, dict) else None
     return LLMResponse(
         text=text,
         model=str(payload.get("model") or fallback_model),
@@ -134,8 +136,42 @@ def _parse_completion(payload: dict[str, Any], fallback_model: str) -> LLMRespon
         finish_reason=(
             str(finish_reason)[:64] if isinstance(finish_reason, str) else None
         ),
+        reasoning_text=reasoning_text[:8000] or None,
+        reasoning_tokens=_reasoning_tokens(usage),
         tool_calls=tool_calls,
     )
+
+
+def _empty_content_reason(
+    finish_reason: Any,
+    reasoning_text: str,
+) -> str:
+    """Explain why the model returned no answer.
+
+    A reasoning model that spent the whole token budget thinking returns an
+    empty answer; that is a truncation and needs a different fix from an
+    answer the model genuinely refused to produce.
+    """
+    reason = str(finish_reason) if isinstance(finish_reason, str) else "unknown"
+    if reasoning_text.strip():
+        return (
+            "chat completion returned an empty answer; the model used the "
+            f"token budget for reasoning (finish_reason={reason})"
+        )
+    return (
+        "chat completion returned an empty answer "
+        f"(finish_reason={reason})"
+    )
+
+
+def _reasoning_tokens(usage: dict[str, Any]) -> int:
+    details = usage.get("completion_tokens_details")
+    if not isinstance(details, dict):
+        return 0
+    try:
+        return max(0, int(details.get("reasoning_tokens") or 0))
+    except (TypeError, ValueError):
+        return 0
 
 
 def _parse_tool_calls(message: dict[str, Any]) -> list[LLMToolCall]:

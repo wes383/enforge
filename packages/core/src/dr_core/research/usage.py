@@ -167,6 +167,8 @@ class ProgressReportingLLM:
                 **payload,
                 "input_tokens": max(0, int(response.input_tokens or 0)),
                 "output_tokens": max(0, int(response.output_tokens or 0)),
+                "reasoning_tokens": max(0, int(response.reasoning_tokens or 0)),
+                "finish_reason": response.finish_reason,
                 "duration_ms": int((time.monotonic() - started) * 1000),
             },
             dedupe_key=f"{key}:completed",

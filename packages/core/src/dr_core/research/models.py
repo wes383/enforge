@@ -168,6 +168,11 @@ class ResearchGap(SchemaModel):
     reason: str = Field(min_length=1, max_length=20000)
     severity: Literal["low", "medium", "high"] = "medium"
     suggested_queries: list[str] = Field(default_factory=list, max_length=10)
+    # Set on gaps raised for a section that is supported but still below its
+    # evidence target, so a later round can tell whether new searching
+    # actually helped.
+    target_evidence: int = Field(default=0, ge=0)
+    achieved_ratio: float = Field(default=0.0, ge=0, le=1)
 
 
 class EvidenceRow(SchemaModel):
@@ -178,6 +183,12 @@ class EvidenceRow(SchemaModel):
     source_count: int = Field(default=0, ge=0)
     independent_source_count: int = Field(default=0, ge=0)
     coverage_status: SectionCoverageStatus = SectionCoverageStatus.OPEN
+    # How much evidence this section actually needs, and how much of that
+    # target it reached. The coverage status answers "is this section
+    # supportable at all"; the ratio answers "is it well enough supported".
+    target_evidence: int = Field(default=0, ge=0)
+    target_sources: int = Field(default=0, ge=0)
+    evidence_ratio: float = Field(default=0.0, ge=0, le=1)
     conclusion: str = Field(default="", max_length=20000)
     support_evidence_ids: list[UUID] = Field(default_factory=list)
     refute_evidence_ids: list[UUID] = Field(default_factory=list)
@@ -194,6 +205,8 @@ class EvidenceMatrix(SchemaModel):
     independent_source_count: int = Field(default=0, ge=0)
     contradiction_count: int = Field(default=0, ge=0)
     coverage_ratio: float = Field(default=0.0, ge=0, le=1)
+    # Share of the per-section evidence targets the run actually reached.
+    target_ratio: float = Field(default=0.0, ge=0, le=1)
     duplicate_source_groups: list[str] = Field(default_factory=list)
     quality_notes: list[str] = Field(default_factory=list)
 

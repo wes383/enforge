@@ -104,7 +104,11 @@ from dr_core.research.polish import (
     polish_draft_sections,
     polish_reason_kind,
 )
-from dr_core.research.quality import build_evidence_matrix, source_identity
+from dr_core.research.quality import (
+    build_evidence_matrix,
+    section_evidence_target,
+    source_identity,
+)
 from dr_core.research.reporting import (
     claim_status_counts,
     persist_report_artifacts,
@@ -121,7 +125,7 @@ from dr_core.research.source_records import (
 )
 from dr_core.research.state import ResearchState
 from dr_core.research.tools import ResearchToolbox
-from dr_core.research.text import best_sentence_span_for_queries
+from dr_core.research.text import best_sentence_span_for_queries, tokenize
 from dr_core.research.usage import ProgressReportingLLM, UsageRecordingLLM
 from dr_core.research.verification import audit_section, verify_run_claims
 from dr_core.research.write_search import WriteSearchSession
@@ -702,7 +706,17 @@ def fetch_full_text(ctx: ResearchContext):
                 record
                 for record in records
                 if not record.has_full_text and (record.fetch_url or record.url)
-            ][: brief.max_fetches_per_round]
+            ]
+            # Only a fetched source can be quoted, so fetch the ones the
+            # outline's search terms point at first.
+            eligible.sort(
+                key=lambda record: _fetch_priority(
+                    record,
+                    _searchable_sections(_outline(state)),
+                ),
+                reverse=True,
+            )
+            eligible = eligible[: brief.max_fetches_per_round]
             if not eligible:
                 return {
                     "sources": [item.model_dump(mode="json") for item in records],
@@ -1030,10 +1044,26 @@ class _SectionEvidenceState:
     support: int = 0
     identities: set[str] = field(default_factory=set)
     used_sources: set[UUID] = field(default_factory=set)
+    target_evidence: int = 4
+    target_identities: int = 3
 
     @property
     def covered(self) -> bool:
+        """Enough independent support to call the section covered."""
         return self.support >= 2 and len(self.identities) >= 2
+
+    @property
+    def target_reached(self) -> bool:
+        """Enough support for what this section has to write about.
+
+        The target scales with the section's own word budget, so a short
+        section stops earlier than a long one instead of every section
+        sharing one hard-coded floor.
+        """
+        return (
+            self.support >= self.target_evidence
+            and len(self.identities) >= self.target_identities
+        )
 
     def track(
         self,
@@ -1080,9 +1110,16 @@ def extract_evidence(ctx: ResearchContext):
                 evidence_ids.update(str(item.id) for item in existing)
                 total_evidence = len(existing)
                 sources = source_views(session, ctx.project_id)
-            section_states = {
-                section.section_id: _SectionEvidenceState() for section in sections
-            }
+            section_states: dict[UUID, _SectionEvidenceState] = {}
+            for section in sections:
+                target_evidence, target_identities = section_evidence_target(
+                    section,
+                    ctx.settings,
+                )
+                section_states[section.section_id] = _SectionEvidenceState(
+                    target_evidence=target_evidence,
+                    target_identities=target_identities,
+                )
             for item in existing:
                 if item.outline_section_id is None:
                     continue
@@ -1108,6 +1145,7 @@ def extract_evidence(ctx: ResearchContext):
             skipped = 0
             retrieval_hits = 0
             retrieval_degraded: str | None = None
+            retrieval_vector_used = False
             source_version_ids = [
                 record.source_version_id
                 for record in records
@@ -1131,30 +1169,32 @@ def extract_evidence(ctx: ResearchContext):
                         if total_evidence >= brief.max_evidence:
                             break
                         section_state = section_states[section.section_id]
-                        if section_state.covered:
+                        if section_state.target_reached:
                             continue
                         queries = _section_queries(section)
+                        unproductive = 0
                         for query in queries:
                             if total_evidence >= brief.max_evidence:
                                 break
-                            if section_state.covered:
+                            if section_state.target_reached:
                                 break
+                            known = len(section_state.identities)
                             result = retriever.search(
                                 query,
                                 filters=filters,
-                                limit=min(
-                                    ctx.settings.research_retrieval_limit,
-                                    8,
-                                ),
+                                limit=ctx.settings.research_retrieval_candidate_limit,
                             )
                             retrieval_degraded = (
                                 retrieval_degraded or result.degraded_reason
+                            )
+                            retrieval_vector_used = (
+                                retrieval_vector_used or result.vector_used
                             )
                             retrieval_hits += len(result.hits)
                             for hit in result.hits:
                                 if total_evidence >= brief.max_evidence:
                                     break
-                                if section_state.covered:
+                                if section_state.target_reached:
                                     break
                                 if hit.source_id in section_state.used_sources:
                                     continue
@@ -1190,11 +1230,20 @@ def extract_evidence(ctx: ResearchContext):
                                         is EvidenceType.REFUTATION
                                     ),
                                 )
+                            if len(section_state.identities) > known:
+                                unproductive = 0
+                            else:
+                                unproductive += 1
+                                if unproductive >= 2:
+                                    # Two queries in a row brought no new
+                                    # independent source: the section's
+                                    # material is exhausted.
+                                    break
 
             pending = [
                 section
                 for section in sections
-                if not section_states[section.section_id].covered
+                if not section_states[section.section_id].target_reached
             ]
             if pending and total_evidence < brief.max_evidence:
                 for record in records:
@@ -1223,7 +1272,7 @@ def extract_evidence(ctx: ResearchContext):
                         if total_evidence >= brief.max_evidence:
                             break
                         section_state = section_states[section.section_id]
-                        if section_state.covered:
+                        if section_state.target_reached:
                             continue
                         if record.source_id in section_state.used_sources:
                             continue
@@ -1279,6 +1328,9 @@ def extract_evidence(ctx: ResearchContext):
                     "total_evidence": total_evidence,
                     "retrieval_hits": retrieval_hits,
                     "retrieval_degraded": retrieval_degraded,
+                    "retrieval_mode": (
+                        "hybrid" if retrieval_vector_used else "keyword"
+                    ),
                 },
                 dedupe_key=(
                     f"evidence:extracted:round:{state.get('round_index', 1)}"
@@ -1331,8 +1383,14 @@ def analyze_evidence(ctx: ResearchContext):
                     "sources": matrix.source_count,
                     "independent_sources": matrix.independent_source_count,
                     "coverage_ratio": matrix.coverage_ratio,
+                    "target_ratio": matrix.target_ratio,
                     "contradictions": matrix.contradiction_count,
                     "duplicate_groups": len(matrix.duplicate_source_groups),
+                    "under_target_sections": [
+                        row.section_title
+                        for row in matrix.rows
+                        if row.target_evidence > 0 and row.evidence_ratio < 1.0
+                    ],
                 },
                 dedupe_key=(
                     f"evidence:analyzed:round:{state.get('round_index', 1)}"
@@ -1363,73 +1421,17 @@ def analyze_gaps(ctx: ResearchContext):
                 section.section_id: section.search_terms
                 for section in outline.sections
             }
-            gaps: list[ResearchGap] = []
-            for row in matrix.rows:
-                if row.coverage_status is SectionCoverageStatus.COVERED:
-                    continue
-                if roles.get(row.section_id) is SectionRole.LIMITATIONS:
-                    continue
-                severe = (
-                    row.coverage_status is SectionCoverageStatus.INSUFFICIENT
-                )
-                gaps.append(
-                    ResearchGap(
-                        section_id=row.section_id,
-                        section_title=row.section_title,
-                        reason=row.gap
-                        or _text(
-                            brief,
-                            (
-                                "该章节缺少足够的支持证据。"
-                                if severe
-                                else "该章节只有部分证据，尚不足以形成稳定结论。"
-                            ),
-                            (
-                                "The section lacks sufficient supporting evidence."
-                                if severe
-                                else "Only partial evidence is available for this section."
-                            ),
-                        ),
-                        severity="high" if severe else "medium",
-                        suggested_queries=_gap_queries(
-                            brief,
-                            row.section_title,
-                            terms_by_section.get(row.section_id, []),
-                        ),
-                    )
-                )
-            if (
-                matrix.total_evidence > 0
-                and matrix.contradiction_count == 0
-                and round_index == 1
-            ):
-                target = next(
-                    (
-                        row
-                        for row in matrix.rows
-                        if row.coverage_status is SectionCoverageStatus.COVERED
-                        and roles.get(row.section_id) is not SectionRole.LIMITATIONS
-                    ),
-                    matrix.rows[0] if matrix.rows else None,
-                )
-                if target is not None:
-                    gaps.append(
-                        ResearchGap(
-                            section_id=target.section_id,
-                            section_title=target.section_title,
-                            reason=_text(
-                                brief,
-                                "现有证据缺少明确的反方或批评性观点，需要定向补充。",
-                                "The current evidence lacks explicit opposing or critical views.",
-                            ),
-                            severity="medium",
-                            suggested_queries=_counter_queries(
-                                brief,
-                                target.section_title,
-                                terms_by_section.get(target.section_id, []),
-                            ),
-                        )
-                    )
+            gaps = _section_gaps(
+                matrix,
+                brief=brief,
+                roles=roles,
+                terms_by_section=terms_by_section,
+                previous_gaps=[
+                    ResearchGap.model_validate(value)
+                    for value in (state.get("gaps") or [])
+                ],
+                round_index=round_index,
+            )
 
             budget = ctx.run_budget()
             limitations = list(state.get("limitations") or [])
@@ -1493,6 +1495,131 @@ def analyze_gaps(ctx: ResearchContext):
             }
 
     return node
+
+
+def _section_gaps(
+    matrix: EvidenceMatrix,
+    *,
+    brief: ResearchBrief,
+    roles: dict[UUID, SectionRole],
+    terms_by_section: dict[UUID, list[str]],
+    previous_gaps: list[ResearchGap],
+    round_index: int,
+) -> list[ResearchGap]:
+    """Turn the evidence matrix into the gaps the run should chase next.
+
+    A covered section is not automatically done: it only means two supporting
+    items from two independent sources exist. When the section is still below
+    its evidence target the run may look for more material, but the gap closes
+    as soon as a round fails to improve the ratio.
+    """
+    previous_ratios = {
+        gap.section_id: gap.achieved_ratio
+        for gap in previous_gaps
+        if gap.section_id is not None and gap.target_evidence > 0
+    }
+    gaps: list[ResearchGap] = []
+    for row in matrix.rows:
+        if roles.get(row.section_id) is SectionRole.LIMITATIONS:
+            continue
+        severe = row.coverage_status is SectionCoverageStatus.INSUFFICIENT
+        under_target = row.target_evidence > 0 and row.evidence_ratio < 1.0
+        if row.coverage_status is SectionCoverageStatus.COVERED:
+            if not under_target:
+                continue
+            previous_ratio = previous_ratios.get(row.section_id)
+            if previous_ratio is not None and previous_ratio >= row.evidence_ratio:
+                # The last round already chased this section and did not
+                # improve it, so more searching would not help.
+                continue
+            gaps.append(
+                ResearchGap(
+                    section_id=row.section_id,
+                    section_title=row.section_title,
+                    reason=_text(
+                        brief,
+                        (
+                            f"该章节已有可用证据，但只达到目标量的"
+                            f"{round(row.evidence_ratio * 100)}%，"
+                            f"仍可补充独立来源以支撑更细的判断。"
+                        ),
+                        (
+                            "The section has usable evidence but only "
+                            f"{round(row.evidence_ratio * 100)}% of its "
+                            "target, so more independent sources would "
+                            "support finer conclusions."
+                        ),
+                    ),
+                    severity="low",
+                    suggested_queries=_gap_queries(
+                        brief,
+                        row.section_title,
+                        terms_by_section.get(row.section_id, []),
+                    ),
+                    target_evidence=row.target_evidence,
+                    achieved_ratio=row.evidence_ratio,
+                )
+            )
+            continue
+        gaps.append(
+            ResearchGap(
+                section_id=row.section_id,
+                section_title=row.section_title,
+                reason=row.gap
+                or _text(
+                    brief,
+                    (
+                        "该章节缺少足够的支持证据。"
+                        if severe
+                        else "该章节只有部分证据，尚不足以形成稳定结论。"
+                    ),
+                    (
+                        "The section lacks sufficient supporting evidence."
+                        if severe
+                        else "Only partial evidence is available for this section."
+                    ),
+                ),
+                severity="high" if severe else "medium",
+                suggested_queries=_gap_queries(
+                    brief,
+                    row.section_title,
+                    terms_by_section.get(row.section_id, []),
+                ),
+            )
+        )
+    if (
+        matrix.total_evidence > 0
+        and matrix.contradiction_count == 0
+        and round_index == 1
+    ):
+        target = next(
+            (
+                row
+                for row in matrix.rows
+                if row.coverage_status is SectionCoverageStatus.COVERED
+                and roles.get(row.section_id) is not SectionRole.LIMITATIONS
+            ),
+            matrix.rows[0] if matrix.rows else None,
+        )
+        if target is not None:
+            gaps.append(
+                ResearchGap(
+                    section_id=target.section_id,
+                    section_title=target.section_title,
+                    reason=_text(
+                        brief,
+                        "现有证据缺少明确的反方或批评性观点，需要定向补充。",
+                        "The current evidence lacks explicit opposing or critical views.",
+                    ),
+                    severity="medium",
+                    suggested_queries=_counter_queries(
+                        brief,
+                        target.section_title,
+                        terms_by_section.get(target.section_id, []),
+                    ),
+                )
+            )
+    return gaps
 
 
 def revise_search_plan(ctx: ResearchContext):
@@ -1921,8 +2048,11 @@ def write_sections(ctx: ResearchContext):
             new_evidence_ids: set[str] = set()
             prior_sections: list[dict] = []
             sections_state: list[dict] = []
+            template_sections: list[str] = []
             total_sections = len(outline.sections)
-            for section in outline.sections:
+            ordered_sections = _writing_order(outline.sections)
+            disclosure_target = _disclosure_target(outline.sections)
+            for section in ordered_sections:
                 ctx.guard()
                 supplement = None
                 if search_session is not None:
@@ -1989,8 +2119,26 @@ def write_sections(ctx: ResearchContext):
                     supplement=supplement,
                     max_search_requests=max_search_requests,
                     prior_sections=prior_sections,
+                    max_tokens=max(
+                        ctx.settings.research_write_max_tokens_floor,
+                        (section.target_words or 0)
+                        * ctx.settings.research_write_tokens_per_word,
+                    ),
                 )
                 content = draft.content
+                if llm is not None and not draft.used_llm:
+                    template_sections.append(section.title)
+                if (
+                    template_sections
+                    and disclosure_target is not None
+                    and section.section_id == disclosure_target.section_id
+                ):
+                    # The section is written last, so every template fallback
+                    # is known and the article can name them.
+                    content = (
+                        f"{content.rstrip()}\n\n"
+                        f"{_template_disclosure(template_sections, brief)}\n"
+                    )
                 prior_sections.append(
                     {
                         "index": section.index,
@@ -2065,7 +2213,9 @@ def write_sections(ctx: ResearchContext):
             for item in outline_payload["sections"]:
                 item["status"] = "drafted"
             result: ResearchState = {
-                "sections": sections_state,
+                "sections": sorted(
+                    sections_state, key=lambda item: item["index"]
+                ),
                 "outline": outline_payload,
                 "current_node": "write_sections",
             }
@@ -2699,6 +2849,10 @@ def _refresh_evidence_matrix(
     sections: list[OutlineSection],
     brief: ResearchBrief,
 ) -> EvidenceMatrix:
+    targets = {
+        section.section_id: section_evidence_target(section, ctx.settings)
+        for section in sections
+    }
     with ctx.database.session_scope() as session:
         evidence = EvidenceRepository(session).list_for_run(
             ctx.project_id,
@@ -2710,6 +2864,7 @@ def _refresh_evidence_matrix(
             evidence,
             sources,
             language=brief.language,
+            targets=targets,
         )
         repository = OutlineSectionRepository(session)
         for row in matrix.rows:
@@ -3065,6 +3220,25 @@ def _outline_id(state: ResearchState) -> UUID | None:
 
 
 
+def _fetch_priority(record: SourceRecord, sections: list[OutlineSection]) -> int:
+    """Rank a source by how well it matches the outline's search terms.
+
+    A source that matches the approved outline is worth its full-text fetch;
+    an off-topic one is not, and the fetch budget is small.
+    """
+    tokens = tokenize(f"{record.title} {record.snippet}".casefold())
+    if not tokens:
+        return 0
+    score = 0
+    for section in sections:
+        section_tokens: set[str] = set()
+        for value in [*section.search_terms, section.title]:
+            section_tokens |= tokenize(str(value or ""))
+        if section_tokens:
+            score += len(tokens & section_tokens)
+    return score
+
+
 def _section_evidence(section, evidence: list) -> list:
     by_id = {item.id: item for item in evidence}
     selected = [
@@ -3080,6 +3254,62 @@ def _section_evidence(section, evidence: list) -> list:
         and item.id not in selected_ids
     )
     return selected
+
+
+def _writing_order(sections: list[OutlineSection]) -> list[OutlineSection]:
+    """Write the closing sections last.
+
+    The limitations and conclusion close the article, and the closing section
+    also carries the disclosure about sections that fell back to the
+    deterministic template. Writing them last means that disclosure is
+    complete before the section is persisted.
+    """
+    closing = [
+        section
+        for section in sections
+        if section.role in (SectionRole.LIMITATIONS, SectionRole.CONCLUSION)
+    ]
+    body = [
+        section
+        for section in sections
+        if section.role not in (SectionRole.LIMITATIONS, SectionRole.CONCLUSION)
+    ]
+    return [*body, *closing]
+
+
+def _disclosure_target(
+    sections: list[OutlineSection],
+) -> OutlineSection | None:
+    """Section that names the template-only sections."""
+    closing = [
+        section
+        for section in sections
+        if section.role in (SectionRole.LIMITATIONS, SectionRole.CONCLUSION)
+    ]
+    if closing:
+        return closing[-1]
+    return sections[-1] if sections else None
+
+
+def _template_disclosure(template_sections: list[str], brief: ResearchBrief) -> str:
+    """Tell the reader which sections carry no model-written prose.
+
+    A section that fell back to the deterministic template is still part of
+    the article, so the article has to say so instead of presenting the
+    template as if it were written prose.
+    """
+    zh = brief.language is ProjectLanguage.ZH
+    titles = "、".join(template_sections) if zh else ", ".join(template_sections)
+    if zh:
+        return (
+            f"以下章节未能取得模型正文，仅以可核验的引文呈现：{titles}。"
+            "这些章节的判断应结合原文审阅。"
+        )
+    return (
+        "The following sections carry no model-written prose and present "
+        f"verifiable quotations only: {titles}. Their claims should be read "
+        "against the original sources."
+    )
 
 
 def _llm_provider(ctx: ResearchContext, enabled: bool):

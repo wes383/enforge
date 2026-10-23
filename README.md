@@ -218,6 +218,7 @@ any non-terminal state → failed / cancelled
 - **Approvals**: exactly one outline approval. Approving freezes the section IDs; editing changes the outline directly; rejection sends feedback back to the planning agent. Approval history is preserved.
 - **Cancellation**: queued and awaiting-approval runs stop immediately; running tasks check the cancellation flag at node boundaries and inside fetch/parse loops, with Celery revoke used only for acceleration.
 - **Budgets**: search rounds, query count, source count, fetch count, evidence count, per-node timeout, and token/cost budgets are all configurable. A budget stop does not fail the run; the report states the limitation.
+- **Evidence targets**: the coverage floor (two supporting items from two independent sources) only decides whether a section can be written at all. Separately, each section has an evidence target derived from its own word budget; extraction stops once the target is met or two consecutive queries bring no new independent source. A covered section that is still below its target raises a low-severity gap, and that gap closes as soon as a round fails to improve it.
 - **Failure semantics**: transient errors (timeouts, momentary database/storage failures) go to Celery with exponential backoff; permanent errors fail immediately with a readable `error_summary`.
 
 ## Configuration
@@ -240,6 +241,12 @@ See [`.env.example`](.env.example) for every variable and its default. The most 
 | `RESEARCH_OUTLINE_APPROVAL_REQUIRED` | `true` | Single outline approval; disable for fully automatic runs |
 | `RESEARCH_MAX_SEARCH_ROUNDS` | `3` | Maximum search rounds |
 | `RESEARCH_MAX_SOURCES` / `RESEARCH_MAX_EVIDENCE` | `20` / `40` | Source and evidence limits |
+| `RESEARCH_SECTION_TARGET_WORDS_PER_EVIDENCE` | `80` | Evidence a section needs per 80 words of its own budget; the target is clamped by the min/max below |
+| `RESEARCH_SECTION_TARGET_EVIDENCE_MIN` / `_MAX` | `4` / `12` | Lower and upper bound of a section's evidence target |
+| `RESEARCH_SECTION_TARGET_SOURCES_MIN` / `_MAX` | `3` / `6` | Lower and upper bound of the independent sources a section needs |
+| `RESEARCH_RETRIEVAL_CANDIDATE_LIMIT` | `20` | Candidates pulled per section query before extraction |
+| `RESEARCH_WRITE_MAX_TOKENS_FLOOR` / `RESEARCH_WRITE_TOKENS_PER_WORD` | `1200` / `6` | Token budget for one model-written section; reasoning models bill their reasoning against the same budget |
+| `EMBEDDING_ENABLED` / `EMBEDDING_API_KEY` | `false` / empty | Optional OpenAI-compatible embeddings; without them retrieval stays keyword-only and says so in the run events and the article limitations |
 | `RESEARCH_TOKEN_BUDGET` / `RESEARCH_COST_BUDGET_USD` | `0` | Budgets; 0 means unlimited |
 | `MAX_ACTIVE_RUNS_PER_PROJECT` | `3` | Per-project concurrent run limit; exceeding it returns 429 |
 | `LANGFUSE_ENABLED` | `false` | Optional observability; metadata only by default, no article text or secrets |

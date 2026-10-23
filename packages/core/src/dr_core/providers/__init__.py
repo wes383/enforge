@@ -8,6 +8,7 @@ from dr_core.providers.base import (
 )
 from dr_core.providers.cache import InMemoryProviderCache, ProviderCache
 from dr_core.providers.content import FirecrawlProvider
+from dr_core.providers.embeddings import OpenAICompatibleEmbeddingProvider
 from dr_core.providers.errors import (
     DocumentParseError,
     ProviderDisabled,
@@ -91,6 +92,7 @@ __all__ = [
     "MockLLMProvider",
     "MockSearchProvider",
     "MockWebContentProvider",
+    "OpenAICompatibleEmbeddingProvider",
     "OpenAICompatibleLLMProvider",
     "ParseStatus",
     "ParsedDocument",

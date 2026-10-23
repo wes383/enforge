@@ -446,7 +446,7 @@ def test_section_without_evidence_does_not_assert_conclusions():
     assert not draft.evidence_ids
 
 
-def test_llm_section_accepts_valid_markdown_with_only_supplied_markers():
+def test_llm_section_takes_the_outline_title_over_the_model_heading():
     section_id = uuid4()
     support = _evidence(section_id, uuid4())
     llm = _FakeLLM(
@@ -460,7 +460,9 @@ def test_llm_section_accepts_valid_markdown_with_only_supplied_markers():
     )
 
     assert draft.used_llm
-    assert draft.content.startswith("## Question")
+    assert draft.content.startswith("## Enforcement outcomes")
+    assert "Enforcement improves compliance [S1]." in draft.content
+    assert "Question" not in draft.content
     assert draft.citation_map == {"S1": str(support.source_id)}
     assert draft.evidence_ids == [support.id]
 
@@ -721,7 +723,6 @@ def test_summarize_section_content_keeps_leading_sentences_without_markers():
 def test_llm_section_falls_back_on_unsafe_output():
     section_id = uuid4()
     support = _evidence(section_id, uuid4())
-    source_id = support.source_id
 
     unknown = _FakeLLM({"markdown": "## Q\n\nClaim [S7]."})
     draft, _, _, _ = _section(
@@ -739,6 +740,12 @@ def test_llm_section_falls_back_on_unsafe_output():
     assert not draft.used_llm
     assert "87%" not in draft.content
 
+
+def test_llm_section_drops_a_fabricated_reference_list():
+    section_id = uuid4()
+    support = _evidence(section_id, uuid4())
+    source_id = support.source_id
+
     reference_list = _FakeLLM(
         {
             "markdown": (
@@ -750,11 +757,14 @@ def test_llm_section_falls_back_on_unsafe_output():
     draft, _, _, _ = _section(
         section_id, evidence=[support], llm=reference_list
     )
-    assert not draft.used_llm
+
+    assert draft.used_llm
+    assert "Enforcement works [S1]." in draft.content
+    assert "Fabricated" not in draft.content
     assert draft.citation_map == {"S1": str(source_id)}
 
 
-def test_llm_section_rejects_uncited_paragraphs():
+def test_llm_section_drops_uncited_paragraphs():
     section_id = uuid4()
     support = _evidence(section_id, uuid4())
     llm = _FakeLLM(
@@ -762,7 +772,9 @@ def test_llm_section_rejects_uncited_paragraphs():
     )
     draft, _, _, _ = _section(section_id, evidence=[support], llm=llm)
 
-    assert not draft.used_llm
+    assert draft.used_llm
+    assert "First claim [S1]." in draft.content
+    assert "Second unsupported sentence." not in draft.content
 
 
 def test_claim_extraction_flags_uncited_numeric_claims():

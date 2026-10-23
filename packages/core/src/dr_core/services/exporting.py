@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from uuid import UUID
 
+from dr_core.config.settings import get_settings
 from dr_core.db.enums import (
     CitationAuditStatus,
     DraftSectionStatus,
@@ -32,7 +33,7 @@ from dr_core.research.models import (
     ReferenceAudit,
     ResearchBrief,
 )
-from dr_core.research.quality import build_evidence_matrix
+from dr_core.research.quality import build_evidence_matrix, section_evidence_target
 from dr_core.research.reporting import (
     claim_status_counts,
     persist_report_artifacts,
@@ -105,23 +106,29 @@ def export_run(
         date_to=project.date_to,
         budget_usd=project.budget_usd,
     )
+    settings = get_settings()
+    export_sections = [
+        OutlineSection(
+            section_id=item.id,
+            index=index,
+            role=item.role,
+            title=item.title,
+            purpose=item.purpose or item.title,
+            search_terms=list(item.search_terms or []),
+            target_words=item.target_words or 400,
+            coverage_status=item.coverage_status,
+        )
+        for index, item in enumerate(outline_sections)
+    ]
     matrix = build_evidence_matrix(
-        [
-            OutlineSection(
-                section_id=item.id,
-                index=index,
-                role=item.role,
-                title=item.title,
-                purpose=item.purpose or item.title,
-                search_terms=list(item.search_terms or []),
-                target_words=item.target_words or 400,
-                coverage_status=item.coverage_status,
-            )
-            for index, item in enumerate(outline_sections)
-        ],
+        export_sections,
         evidence,
         {source.id: source for source in source_records},
         language=project.language,
+        targets={
+            section.section_id: section_evidence_target(section, settings)
+            for section in export_sections
+        },
     )
 
     audited_section_ids: set[UUID] = set()

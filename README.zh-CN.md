@@ -213,6 +213,7 @@ queued → planning → 提纲审批 → searching → processing_sources → bu
 - **审批**：只有一次提纲审批。批准即冻结章节 ID；修改内容直接生效；拒绝会带反馈回到规划代理。审批历史完整保留。
 - **取消**：排队与待审批立即终止；执行中的运行在节点边界和抓取/解析循环内检查取消标记，Celery revoke 只作加速。
 - **预算**：检索轮次、查询数、来源数、抓取数、证据数、单节点超时、token 与成本预算均可配置。预算停止不会让运行失败，报告会写明限制。
+- **证据目标**：覆盖下限（两条支持证据来自两个独立来源）只决定该章节能不能写；每个章节另有按自身字数预算换算出的证据目标，达到目标、或连续两次检索没有带来新的独立来源时即停止抽取。已覆盖但仍低于目标的章节会抛出低危缺口，若某一轮没有改善，该缺口即关闭。
 - **失败语义**：暂时性错误（超时、数据库/存储瞬时故障）交给 Celery 退避重试；永久性错误立即失败并写入可读的 `error_summary`。
 
 ## 配置
@@ -235,6 +236,12 @@ queued → planning → 提纲审批 → searching → processing_sources → bu
 | `RESEARCH_OUTLINE_APPROVAL_REQUIRED` | `true` | 唯一一次提纲审批；关闭则全自动 |
 | `RESEARCH_MAX_SEARCH_ROUNDS` | `3` | 最大检索轮次 |
 | `RESEARCH_MAX_SOURCES` / `RESEARCH_MAX_EVIDENCE` | `20` / `40` | 来源与证据上限 |
+| `RESEARCH_SECTION_TARGET_WORDS_PER_EVIDENCE` | `80` | 每 80 字篇幅所需的证据条数，再按下限/上限收敛 |
+| `RESEARCH_SECTION_TARGET_EVIDENCE_MIN` / `_MAX` | `4` / `12` | 章节证据目标的下限与上限 |
+| `RESEARCH_SECTION_TARGET_SOURCES_MIN` / `_MAX` | `3` / `6` | 章节所需独立来源数的下限与上限 |
+| `RESEARCH_RETRIEVAL_CANDIDATE_LIMIT` | `20` | 每个章节查询在抽取前拉取的候选数量 |
+| `RESEARCH_WRITE_MAX_TOKENS_FLOOR` / `RESEARCH_WRITE_TOKENS_PER_WORD` | `1200` / `6` | 单章节模型写作的 token 预算；推理模型的思考 token 与正文共用同一预算 |
+| `EMBEDDING_ENABLED` / `EMBEDDING_API_KEY` | `false` / 空 | 可选的 OpenAI 兼容向量模型；未配置时检索降级为关键词模式，并在运行事件与文章局限中写明 |
 | `RESEARCH_TOKEN_BUDGET` / `RESEARCH_COST_BUDGET_USD` | `0` | 预算；0 表示不限制 |
 | `MAX_ACTIVE_RUNS_PER_PROJECT` | `3` | 项目级并发运行限制，超限返回 429 |
 | `LANGFUSE_ENABLED` | `false` | 可选观测；默认只发元数据，不含正文与密钥 |

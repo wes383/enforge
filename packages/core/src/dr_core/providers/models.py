@@ -262,6 +262,11 @@ class LLMResponse(SchemaModel):
     input_tokens: int = Field(default=0, ge=0)
     output_tokens: int = Field(default=0, ge=0)
     finish_reason: str | None = Field(default=None, max_length=64)
+    # Reasoning models bill reasoning tokens against the same budget as the
+    # answer, so an empty text with reasoning present is a truncation, not an
+    # empty answer.
+    reasoning_text: str | None = Field(default=None, max_length=8000)
+    reasoning_tokens: int = Field(default=0, ge=0)
     tool_calls: list[LLMToolCall] = Field(default_factory=list, max_length=10)
 
 
