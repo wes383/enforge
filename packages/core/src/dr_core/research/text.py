@@ -41,12 +41,20 @@ def is_low_value_sentence(text: str) -> bool:
     )
 
 
+_URL_FRAGMENT_MARKERS = ("://", "](http", "](https", "](//", "www.")
+
+
 def _is_url_fragment(text: str) -> bool:
-    """Return True for a bare URL or path fragment scraped from a page.
+    """Return True for a bare URL, a path fragment, or a markdown link.
 
     A page header often leaves ``com/questions/60046/why-did-...`` behind as a
     "sentence". It has no spaces and only URL-safe ASCII, so it is never prose.
+    The splitter also cuts on the dots inside a URL, so a markdown link turns
+    into pieces such as ``title=片尾字幕&oldid=93159888](https://zh.``; any span
+    that still carries a scheme or a link target is navigation, not a quote.
     """
+    if any(marker in text for marker in _URL_FRAGMENT_MARKERS):
+        return True
     if len(text) < 20 or not text.isascii() or " " in text:
         return False
     return any(marker in text for marker in ("/", "?", "=", "&"))

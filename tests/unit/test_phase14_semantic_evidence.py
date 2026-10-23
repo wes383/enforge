@@ -65,6 +65,14 @@ def test_url_fragments_never_become_sentences():
     fragment = "com/questions/60046/why-did-the-end-credits-in-movies-become-a-lot-lon"
     assert is_low_value_sentence(fragment) is True
     assert sentence_spans(fragment) == []
+    # A markdown link cut on the dots inside its URL is not a sentence either.
+    for link in (
+        "title=片尾字幕&oldid=93159888](https://zh.",
+        "- [电影术语](https://zh.",
+        "- 在片尾演职员表中向原创作者致谢 片尾播放前的 [反应视频](https://clipchamp.",
+    ):
+        assert is_low_value_sentence(link) is True
+        assert sentence_spans(link) == []
     # Prose that happens to mention a domain keeps its place.
     prose = "The studio published its rules at example.com/rules in 1970 for all members."
     assert is_low_value_sentence(prose) is False
