@@ -185,6 +185,30 @@ def test_workflow_uses_registered_openai_compatible_llm(database):
         assert len(review_calls) <= review_limit
         assert len(_LLM_CALLS) == len(llm_sections) + len(review_calls)
 
+        progress_events = [
+            event
+            for event in events
+            if event.event_type is RunEventType.PROGRESS
+            and isinstance((event.payload or {}).get("model_call"), int)
+        ]
+        assert len(progress_events) == 2 * len(_LLM_CALLS)
+        assert {event.payload.get("node") for event in progress_events} == {
+            "write_sections",
+            "verify_claims",
+        }
+        section_progress = [
+            event
+            for event in progress_events
+            if event.payload.get("node") == "write_sections"
+        ]
+        assert section_progress
+        assert all(event.payload.get("title") for event in section_progress)
+        assert any(
+            "completed" in (event.message or "")
+            and event.payload.get("input_tokens") == 40
+            for event in section_progress
+        )
+
         with database.session() as session:
             run_row = session.get(ResearchRun, run_id)
         assert run_row is not None

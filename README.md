@@ -24,7 +24,8 @@ A LangGraph workflow with 19 business nodes and 2 approval nodes, covering brief
 
 - Optional research agent before planning: it searches from several angles, reads and fetches sources, follows references and citing works (`A → B → C`), and then commits to questions and a provisional outline grounded in what it actually found. Every source goes through normal ingestion and the agent cannot supply citations.
 - The provisional outline only supplies the title and purpose of question-based body sections; the final outline, evidence assignment, citation mapping, references, and verification stay deterministic. Invalid agent output falls back to the deterministic plan and records the limitation.
-- Agent rounds, tool calls, searches, sources, page fetches, and citation lookups each have their own cap; every tool call is surfaced as a progress event.
+- Agent rounds, tool calls, searches, sources, page fetches, and citation lookups each have their own cap; every tool call is surfaced as a progress event with its query, result count, and source title.
+- Every later model call (planning, outlining, each writing section, polishing, and claim review) reports a started/completed/failed event with its section title, token usage, and duration.
 - The conditional loop is driven by evidence coverage in the database; when the search-round or budget limit is reached, the run continues to writing and records the limitation.
 - Every node's side effects have a database unique constraint or idempotency key, so task retries and worker restarts never write duplicates.
 - A stable thread ID plus PostgreSQL checkpoints means approval resumption, task retries, and duplicate deliveries all continue from the latest checkpoint.

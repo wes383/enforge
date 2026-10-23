@@ -425,6 +425,18 @@ def test_workflow_uses_the_research_agent_and_skips_planning(database):
             assert agent_event.payload["searches"] == 2
             assert not any("plan_version" in event.payload for event in events)
 
+            tool_events = [
+                event
+                for event in events
+                if event.event_type is RunEventType.PROGRESS
+                and (event.payload or {}).get("tool") == "search_sources"
+            ]
+            assert {event.payload["query"] for event in tool_events} == {
+                "accessibility history",
+                "accessibility law",
+            }
+            assert all("searched" in (event.message or "") for event in tool_events)
+
             questions = list(
                 session.scalars(
                     select(ResearchQuestion).where(

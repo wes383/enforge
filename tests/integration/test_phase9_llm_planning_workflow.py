@@ -263,6 +263,25 @@ def test_workflow_uses_model_generated_research_questions(database):
         assert event is not None
         assert event.payload["planner"] == "llm"
 
+        with database.session() as session:
+            planning_progress = [
+                item
+                for item in session.scalars(
+                    select(RunEvent).where(RunEvent.run_id == run_id)
+                )
+                if item.event_type is RunEventType.PROGRESS
+                and isinstance((item.payload or {}).get("model_call"), int)
+            ]
+        assert len(planning_progress) == 2
+        assert {
+            item.payload.get("node") for item in planning_progress
+        } == {"plan_research"}
+        assert any(
+            item.payload.get("input_tokens") == 40
+            and item.payload.get("output_tokens") == 20
+            for item in planning_progress
+        )
+
         query_texts = _query_texts(database, run_id)
         assert query_texts
         assert "peer review error rates" in query_texts

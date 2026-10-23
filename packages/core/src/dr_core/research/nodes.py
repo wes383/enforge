@@ -122,7 +122,7 @@ from dr_core.research.source_records import (
 from dr_core.research.state import ResearchState
 from dr_core.research.tools import ResearchToolbox
 from dr_core.research.text import best_sentence_span_for_queries
-from dr_core.research.usage import UsageRecordingLLM
+from dr_core.research.usage import ProgressReportingLLM, UsageRecordingLLM
 from dr_core.research.verification import audit_section, verify_run_claims
 from dr_core.research.write_search import WriteSearchSession
 from dr_core.research.writing import compose_section, summarize_section_content
@@ -227,12 +227,22 @@ def research_agent(ctx: ResearchContext):
                 nonlocal tool_events
                 tool_events += 1
                 results = result.get("results")
+                query = result.get("query")
+                message = f"Research agent used {name}"
+                if name == "search_sources" and isinstance(query, str) and query:
+                    message = f'Research agent searched "{query[:120]}"'
+                elif name == "read_source":
+                    message = "Research agent read a source"
+                elif name == "fetch_source":
+                    message = "Research agent fetched a page"
+                elif name == "follow_citations":
+                    message = "Research agent followed citations"
                 ctx.emit(
                     RunEventType.PROGRESS,
-                    message=f"Research agent used {name}",
+                    message=message,
                     payload={
                         "tool": name,
-                        "query": result.get("query"),
+                        "query": query,
                         "direction": result.get("direction"),
                         "results": (
                             len(results) if isinstance(results, list) else None
@@ -240,6 +250,9 @@ def research_agent(ctx: ResearchContext):
                         "source_id": (
                             result.get("source_id")
                             or result.get("from_source_id")
+                        ),
+                        "title": (
+                            result.get("title") or result.get("from_title")
                         ),
                         "status": result.get("status"),
                         "error": (result.get("error") or "")[:300] or None,
@@ -417,7 +430,18 @@ def plan_research(ctx: ResearchContext):
             current_plan = _plan_or_none(state)
             version = 1 if current_plan is None else current_plan.version + 1
             recon = state.get("recon") or None
-            planner = _llm_planner(ctx)
+            planner = _progress_llm(
+                ctx,
+                _llm_planner(ctx),
+                stage=RunStatus.PLANNING,
+                label="Planning research questions",
+                key_prefix=f"llm:planning:v{version}",
+                payload={
+                    "node": "plan_research",
+                    "version": version,
+                    "replan": bool(feedback_text),
+                },
+            )
             plan = (
                 build_plan_with_llm(
                     brief,
@@ -1851,6 +1875,7 @@ def write_sections(ctx: ResearchContext):
             new_evidence_ids: set[str] = set()
             prior_sections: list[dict] = []
             sections_state: list[dict] = []
+            total_sections = len(outline.sections)
             for section in outline.sections:
                 ctx.guard()
                 supplement = None
@@ -1887,6 +1912,20 @@ def write_sections(ctx: ResearchContext):
                             matrix = _refresh_evidence_matrix(ctx, plan, brief)
                         return outcome
 
+                section_llm = _progress_llm(
+                    ctx,
+                    llm,
+                    stage=RunStatus.WRITING,
+                    label=(
+                        f"Writing section {section.index + 1}/{total_sections}"
+                    ),
+                    key_prefix=f"llm:section:{section.index}",
+                    payload={
+                        "node": "write_sections",
+                        "section_index": section.index,
+                        "title": section.title,
+                    },
+                )
                 draft = compose_section(
                     section=section,
                     brief=brief,
@@ -1896,7 +1935,7 @@ def write_sections(ctx: ResearchContext):
                     evidence=_section_evidence(section, evidence),
                     sources=sources,
                     numbering=numbering,
-                    llm=llm,
+                    llm=section_llm,
                     supplement=supplement,
                     max_search_requests=max_search_requests,
                     prior_sections=prior_sections,
@@ -2017,10 +2056,18 @@ def polish_article(ctx: ResearchContext):
                 )
                 for row in rows
             ]
+            polish_llm = _progress_llm(
+                ctx,
+                llm,
+                stage=RunStatus.WRITING,
+                label="Polishing the article",
+                key_prefix="llm:polish",
+                payload={"node": "polish_article", "sections": len(drafts)},
+            )
             changes, reason = polish_draft_sections(
                 brief=brief,
                 sections=drafts,
-                llm=llm,
+                llm=polish_llm,
                 max_input_chars=ctx.settings.research_polish_max_input_chars,
             )
             result: ResearchState = {
@@ -2134,6 +2181,17 @@ def verify_claims(ctx: ResearchContext):
                 dedupe_key="phase:verifying:claims",
             )
             ctx.guard()
+            reviewer = _progress_llm(
+                ctx,
+                _claim_reviewer(ctx),
+                stage=RunStatus.VERIFYING,
+                label="Reviewing factual claims",
+                key_prefix="llm:claim-review",
+                payload={
+                    "node": "verify_claims",
+                    "limit": ctx.settings.research_claim_llm_review_limit,
+                },
+            )
             models, llm_reviewed = verify_run_claims(
                 ctx.database,
                 ctx.storage,
@@ -2141,7 +2199,7 @@ def verify_claims(ctx: ResearchContext):
                 ctx.registry.parsers,
                 ctx.project_id,
                 ctx.run_id,
-                llm=_claim_reviewer(ctx),
+                llm=reviewer,
             )
             claims_state = [model.model_dump(mode="json") for model in models]
             summary = claim_status_counts(claims_state)
@@ -2850,7 +2908,14 @@ def _outline_candidate(
     feedback: str | None,
     section_framing: dict[int, tuple[str, str]] | None = None,
 ) -> tuple[Outline, str]:
-    outliner = _llm_outliner(ctx)
+    outliner = _progress_llm(
+        ctx,
+        _llm_outliner(ctx),
+        stage=RunStatus.PLANNING,
+        label="Outlining article sections",
+        key_prefix=f"llm:outline:v{version}",
+        payload={"node": "generate_outline", "version": version},
+    )
     if outliner is not None:
         outline = build_outline_with_llm(
             brief,
@@ -2984,6 +3049,27 @@ def _llm_provider(ctx: ResearchContext, enabled: bool):
     if llm is None or getattr(llm, "name", "") == "mock-llm":
         return None
     return UsageRecordingLLM(llm, ctx.record_usage)
+
+
+def _progress_llm(
+    ctx: ResearchContext,
+    llm,
+    *,
+    stage: RunStatus,
+    label: str,
+    key_prefix: str,
+    payload: dict | None = None,
+):
+    if llm is None:
+        return None
+    return ProgressReportingLLM(
+        llm,
+        ctx.emit,
+        stage=stage,
+        label=label,
+        key_prefix=key_prefix,
+        payload=payload,
+    )
 
 
 def _llm_planner(ctx: ResearchContext):
