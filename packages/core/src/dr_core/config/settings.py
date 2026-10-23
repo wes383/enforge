@@ -132,9 +132,12 @@ class Settings(BaseSettings):
     # frozen sections. Writing and verification stay deterministic and neither
     # agent supplies citations directly.
     research_agent_enabled: bool = False
-    research_agent_max_rounds: int = Field(default=6, ge=1, le=10)
+    # The tool-call budget is shared by every tool: search, read, page fetch
+    # and citation lookup each spend one call, so it has to cover the search
+    # budget plus the reads the agent needs to judge what it found.
+    research_agent_max_rounds: int = Field(default=6, ge=1, le=16)
     research_agent_max_searches: int = Field(default=12, ge=1, le=30)
-    research_agent_max_tool_calls: int = Field(default=18, ge=1, le=40)
+    research_agent_max_tool_calls: int = Field(default=18, ge=1, le=80)
     research_agent_max_sources: int = Field(default=16, ge=1, le=200)
     research_agent_max_fetches: int = Field(default=6, ge=0, le=20)
     research_agent_max_citation_calls: int = Field(default=4, ge=0, le=10)

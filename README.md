@@ -233,8 +233,8 @@ See [`.env.example`](.env.example) for every variable and its default. The most 
 | `RESEARCH_LLM_WRITING_ENABLED` | `false` | Model writes section by section (may request one bounded follow-up search) |
 | `RESEARCH_LLM_POLISH_ENABLED` | `false` | Whole-article language polishing |
 | `RESEARCH_AGENT_ENABLED` | `false` | Tool-using planning agent before approval and evidence agent after approval; requires a tool-calling LLM and an enabled search provider, otherwise the run uses the deterministic outline and retrieval path |
-| `RESEARCH_AGENT_MAX_ROUNDS` / `RESEARCH_AGENT_MAX_TOOL_CALLS` | `6` / `18` | Model rounds and total tool calls per agent run |
-| `RESEARCH_AGENT_MAX_SEARCHES` / `RESEARCH_AGENT_MAX_SOURCES` / `RESEARCH_AGENT_MAX_FETCHES` / `RESEARCH_AGENT_MAX_CITATION_CALLS` | `12` / `16` / `6` / `4` | Per-run caps on indexed searches, stored sources, page fetches, and reference/citation lookups; both agents share the source cap, which is further limited by `RESEARCH_MAX_SOURCES` |
+| `RESEARCH_AGENT_MAX_ROUNDS` / `RESEARCH_AGENT_MAX_TOOL_CALLS` | `6` / `18` | Model rounds and total tool calls per agent run; search, read, page fetch and citation lookup each spend one tool call, so the tool-call budget must stay above the search budget |
+| `RESEARCH_AGENT_MAX_SEARCHES` / `RESEARCH_AGENT_MAX_SOURCES` / `RESEARCH_AGENT_MAX_FETCHES` / `RESEARCH_AGENT_MAX_CITATION_CALLS` | `12` / `16` / `6` / `4` | Per-run caps on indexed searches, stored sources, page fetches, and reference/citation lookups; one search stores at most 5 results, both agents share the source cap, which is further limited by `RESEARCH_MAX_SOURCES` |
 | `RESEARCH_CLAIM_LLM_REVIEW` | `false` | Conservative model review of failed claims; can only downgrade |
 | `RESEARCH_OUTLINE_APPROVAL_REQUIRED` | `true` | Single outline approval; disable for fully automatic runs |
 | `RESEARCH_MAX_SEARCH_ROUNDS` | `3` | Maximum search rounds |
