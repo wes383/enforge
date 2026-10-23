@@ -37,6 +37,8 @@ def evidence_from_hit(
     sentence: str,
     start: int,
     end: int,
+    match: str = "lexical",
+    similarity: float | None = None,
 ) -> EvidenceCreate:
     raw = hit.text[start:end]
     verified = " ".join(raw.split()) == sentence
@@ -48,6 +50,7 @@ def evidence_from_hit(
         "character_start": start,
         "character_end": end,
         "sentence_index": sentence_index(hit.text, start),
+        "match": match,
         "retrieval": {
             "score": hit.score,
             "keyword_score": hit.keyword_score,
@@ -56,6 +59,8 @@ def evidence_from_hit(
             "vector_rank": hit.vector_rank,
         },
     }
+    if similarity is not None:
+        locator["similarity"] = round(float(similarity), 6)
     return EvidenceCreate(
         source_id=hit.source_id,
         source_version_id=hit.source_version_id,
@@ -83,6 +88,8 @@ def evidence_from_text(
     start: int,
     end: int,
     kind: str = "source_text",
+    match: str = "lexical",
+    similarity: float | None = None,
 ) -> EvidenceCreate:
     raw = text[start:end]
     verified = " ".join(raw.split()) == sentence
@@ -97,7 +104,10 @@ def evidence_from_text(
         "character_end": end,
         "sentence_index": sentence_index(text, start),
         "text_length": len(text),
+        "match": match,
     }
+    if similarity is not None:
+        locator["similarity"] = round(float(similarity), 6)
     return EvidenceCreate(
         source_id=record.source_id,
         source_version_id=record.source_version_id,

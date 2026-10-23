@@ -33,10 +33,23 @@ def is_low_value_sentence(text: str) -> bool:
     cleaned = " ".join(text.split())
     if not cleaned:
         return True
+    if _is_url_fragment(cleaned):
+        return True
     return bool(
         _LOW_VALUE_SENTENCE.search(cleaned)
         or _LOW_VALUE_PREFIX.search(cleaned)
     )
+
+
+def _is_url_fragment(text: str) -> bool:
+    """Return True for a bare URL or path fragment scraped from a page.
+
+    A page header often leaves ``com/questions/60046/why-did-...`` behind as a
+    "sentence". It has no spaces and only URL-safe ASCII, so it is never prose.
+    """
+    if len(text) < 20 or not text.isascii() or " " in text:
+        return False
+    return any(marker in text for marker in ("/", "?", "=", "&"))
 _STOPWORDS = frozenset(
     {
         "and",

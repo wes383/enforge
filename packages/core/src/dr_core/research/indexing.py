@@ -197,10 +197,23 @@ def ensure_source_index(
                 DocumentChunk.source_version_id == source_version_id,
             )
         ).one()
-        if existing:
+        if existing and (
+            int(embedded) >= int(existing) or ctx.registry.embedding is None
+        ):
             return IndexResult(
                 chunk_count=int(existing),
                 embedded=bool(embedded),
+                skipped=True,
+            )
+        if existing:
+            # The chunks were written while the embedding provider was down.
+            # Without vectors the source is invisible to a query in another
+            # language, so the missing vectors are filled in on the next pass
+            # instead of leaving the source permanently unusable.
+            backfilled = _backfill_embeddings(ctx, source_version_id)
+            return IndexResult(
+                chunk_count=int(existing),
+                embedded=backfilled,
                 skipped=True,
             )
         version = session.get(SourceVersion, source_version_id)
@@ -264,6 +277,54 @@ def ensure_source_index(
         embedded=embedded,
         error=error,
     )
+
+
+def _backfill_embeddings(ctx: ResearchContext, source_version_id) -> bool:
+    """Embed the chunks of a version that were stored without vectors."""
+    provider = ctx.registry.embedding
+    if provider is None:
+        return False
+    expected = ctx.settings.embedding_dimension
+    if _dimension_mismatch(ctx):
+        return False
+    with ctx.database.session() as session:
+        missing = [
+            (chunk.id, chunk.text)
+            for chunk in DocumentChunkRepository(
+                session, expected
+            ).list_for_version(ctx.project_id, source_version_id)
+            if chunk.embedding is None
+        ]
+    if not missing:
+        return True
+    try:
+        for start in range(0, len(missing), _EMBED_BATCH_SIZE):
+            batch = missing[start : start + _EMBED_BATCH_SIZE]
+            vectors = provider.embed_texts([text for _, text in batch])
+            if len(vectors) != len(batch):
+                raise ValueError("Embedding provider returned a mismatched batch")
+            with ctx.database.session_scope() as session:
+                repository = DocumentChunkRepository(session, expected)
+                for (chunk_id, _), vector in zip(batch, vectors, strict=True):
+                    if len(vector) != expected:
+                        raise ValueError(
+                            f"Embedding dimension {len(vector)} does not match "
+                            f"{expected}"
+                        )
+                    repository.set_embedding(
+                        chunk_id,
+                        [float(value) for value in vector],
+                        project_id=ctx.project_id,
+                        embedding_model=provider.model_name,
+                    )
+    except Exception as exc:
+        logger.warning(
+            "Embedding backfill failed for %s: %s",
+            source_version_id,
+            exc,
+        )
+        return False
+    return True
 
 
 def _attach_embeddings(

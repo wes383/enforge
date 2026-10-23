@@ -85,6 +85,7 @@ from dr_core.research.generation import (
     source_numbering,
 )
 from dr_core.research.indexing import IndexResult, ensure_source_index
+from dr_core.research.matching import SemanticSentenceMatcher
 from dr_core.research.models import (
     ApprovalDecision,
     CitationAudit,
@@ -702,6 +703,19 @@ def rank_sources(ctx: ResearchContext):
     return node
 
 
+# Source types whose landing page is usually a publisher or repository page that
+# a content provider cannot read. Their abstract is the only text that will ever
+# be available, so it is indexed even when the fetch budget skips them.
+_ACADEMIC_SOURCE_TYPES = frozenset(
+    {
+        SourceType.BOOK,
+        SourceType.JOURNAL_ARTICLE,
+        SourceType.CONFERENCE_PAPER,
+        SourceType.PREPRINT,
+    }
+)
+
+
 def fetch_full_text(ctx: ResearchContext):
     def node(state: ResearchState) -> ResearchState:
         with node_timeout(ctx.settings.research_node_timeout_seconds):
@@ -835,6 +849,22 @@ def fetch_full_text(ctx: ResearchContext):
                     stage=RunStatus.PROCESSING_SOURCES,
                 )
 
+            # An academic source usually points at a publisher page the content
+            # provider cannot read, so it is never fetched and never chunked;
+            # the retriever cannot return it and its abstract never becomes
+            # evidence. Indexing the abstract closes that gap without a network
+            # call, and the cross-lingual matcher can then quote it.
+            abstracts_indexed = 0
+            parser = next(iter(ctx.registry.parsers), None)
+            for record in updated.values():
+                if record.has_full_text or not record.snippet:
+                    continue
+                if record.source_type not in _ACADEMIC_SOURCE_TYPES:
+                    continue
+                indexed = _index_source(ctx, record, parser=parser)
+                if indexed.chunk_count and indexed.embedded:
+                    abstracts_indexed += 1
+
             ctx.emit(
                 RunEventType.PROGRESS,
                 message="Full-text fetch completed",
@@ -842,6 +872,7 @@ def fetch_full_text(ctx: ResearchContext):
                     "attempted": len(eligible),
                     "fetched": len(fetch_results) - failed,
                     "failed": failed,
+                    "abstracts_indexed": abstracts_indexed,
                 },
                 dedupe_key="sources:fetched:round",
                 stage=RunStatus.PROCESSING_SOURCES,
@@ -1158,6 +1189,8 @@ def extract_evidence(ctx: ResearchContext):
             retrieval_hits = 0
             retrieval_degraded: str | None = None
             retrieval_vector_used = False
+            matcher = _semantic_matcher(ctx)
+            semantic_matches = 0
             source_version_ids = [
                 record.source_version_id
                 for record in records
@@ -1210,13 +1243,16 @@ def extract_evidence(ctx: ResearchContext):
                                     break
                                 if hit.source_id in section_state.used_sources:
                                     continue
-                                match = best_sentence_span_for_queries(
+                                match, match_kind, similarity = _match_sentence(
                                     hit.text,
                                     queries,
+                                    matcher,
                                 )
                                 if match is None:
                                     continue
                                 sentence, _, start, end = match
+                                if match_kind == "semantic":
+                                    semantic_matches += 1
                                 with ctx.database.session_scope() as session:
                                     item = EvidenceRepository(session).create(
                                         ctx.project_id,
@@ -1227,6 +1263,8 @@ def extract_evidence(ctx: ResearchContext):
                                             sentence=sentence,
                                             start=start,
                                             end=end,
+                                            match=match_kind,
+                                            similarity=similarity,
                                         ),
                                     )
                                     if str(item.id) in evidence_ids:
@@ -1292,10 +1330,13 @@ def extract_evidence(ctx: ResearchContext):
                         match = None
                         matched_text = None
                         matched_kind = "source_text"
+                        match_source = "lexical"
+                        similarity: float | None = None
                         for text, kind in texts:
-                            match = best_sentence_span_for_queries(
+                            match, match_source, similarity = _match_sentence(
                                 text,
                                 queries,
+                                matcher,
                             )
                             if match is not None:
                                 matched_text = text
@@ -1303,6 +1344,8 @@ def extract_evidence(ctx: ResearchContext):
                                 break
                         if match is None or matched_text is None:
                             continue
+                        if match_source == "semantic":
+                            semantic_matches += 1
                         sentence, _, start, end = match
                         with ctx.database.session_scope() as session:
                             item = EvidenceRepository(session).create(
@@ -1316,6 +1359,8 @@ def extract_evidence(ctx: ResearchContext):
                                     start=start,
                                     end=end,
                                     kind=matched_kind,
+                                    match=match_source,
+                                    similarity=similarity,
                                 ),
                             )
                             if str(item.id) in evidence_ids:
@@ -1343,6 +1388,7 @@ def extract_evidence(ctx: ResearchContext):
                     "retrieval_mode": (
                         "hybrid" if retrieval_vector_used else "keyword"
                     ),
+                    "semantic_matches": semantic_matches,
                 },
                 dedupe_key=(
                     f"evidence:extracted:round:{state.get('round_index', 1)}"
@@ -3253,6 +3299,46 @@ def _fetch_priority(record: SourceRecord, sections: list[OutlineSection]) -> int
         if section_tokens:
             score += len(tokens & section_tokens)
     return score
+
+
+def _semantic_matcher(ctx: ResearchContext) -> SemanticSentenceMatcher | None:
+    """Build the cross-lingual fallback used when lexical matching finds nothing.
+
+    Without an embedding provider the fallback stays off and evidence extraction
+    keeps its previous behaviour.
+    """
+    if not ctx.settings.research_semantic_evidence_enabled:
+        return None
+    embedding = ctx.registry.embedding
+    if embedding is None:
+        return None
+    return SemanticSentenceMatcher(
+        embedding,
+        min_similarity=ctx.settings.research_semantic_match_min_similarity,
+    )
+
+
+def _match_sentence(
+    text: str,
+    queries: list[str],
+    matcher: SemanticSentenceMatcher | None,
+) -> tuple[tuple[str, float, int, int] | None, str, float | None]:
+    """Match a sentence lexically first, then by embedding similarity.
+
+    A Chinese query and an English source sentence share no token, so the
+    lexical pass returns nothing for a whole class of scholarly sources. The
+    semantic pass only runs when the lexical one found nothing.
+    """
+    match = best_sentence_span_for_queries(text, queries)
+    if match is not None:
+        return match, "lexical", None
+    if matcher is None:
+        return None, "lexical", None
+    semantic = matcher.match(text, queries)
+    if semantic is None:
+        return None, "lexical", None
+    sentence, similarity, start, end = semantic
+    return (sentence, similarity, start, end), "semantic", similarity
 
 
 def _section_evidence(section, evidence: list) -> list:

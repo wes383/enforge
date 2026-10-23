@@ -132,6 +132,11 @@ class Settings(BaseSettings):
     research_retrieval_mode: Literal["hybrid", "keyword", "vector"] = "hybrid"
     research_retrieval_limit: int = Field(default=10, ge=1, le=100)
     research_chunk_max_chars: int = Field(default=1200, ge=200, le=10000)
+    # Lexical matching cannot pair a query with a source sentence in another
+    # language. When an embedding provider is configured, a sentence that clears
+    # this similarity floor can become evidence even though no token is shared.
+    research_semantic_evidence_enabled: bool = True
+    research_semantic_match_min_similarity: float = Field(default=0.5, ge=0.0, le=1.0)
     research_llm_writing_enabled: bool = False
     research_claim_llm_review: bool = False
     # The model orders and frames the article's body sections. Evidence

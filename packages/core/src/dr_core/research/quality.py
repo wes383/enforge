@@ -331,6 +331,18 @@ def assess_evidence_quality(
         )
         directness = "indirect"
 
+    if str((getattr(evidence, "locator", None) or {}).get("match") or "") == "semantic":
+        reasons.append(
+            QualityReason(
+                dimension="directness",
+                status="concern",
+                reason=(
+                    "The quotation was selected by embedding similarity because the "
+                    "query and the source share no term; read it before relying on it."
+                ),
+            )
+        )
+
     if has_context:
         reasons.append(
             QualityReason(
