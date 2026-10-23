@@ -220,8 +220,10 @@ def test_run_time_limits_expand_only_when_model_writing_is_on():
         research_claim_llm_review_limit=10,
         research_node_timeout_seconds=90,
     )
-    assert writing.llm_call_budget_seconds == 120
-    assert writing.effective_run_task_soft_time_limit_seconds == 120 * 34 + 90
+    # A call that the model spends on reasoning is repeated once, so the
+    # worst-case wall time of one call covers two requests.
+    assert writing.llm_call_budget_seconds == 240
+    assert writing.effective_run_task_soft_time_limit_seconds == 240 * 34 + 90
     assert (
         writing.effective_run_task_hard_time_limit_seconds
         == writing.effective_run_task_soft_time_limit_seconds + 60
@@ -263,9 +265,9 @@ def test_llm_node_timeouts_scale_with_expected_model_calls():
         record_usage=lambda response: None,
     )
     state = {"outline": {"sections": [{}, {}, {}]}}
-    assert _writing_node_timeout(ctx, state) == 90 + 3 * 120
-    assert _verification_node_timeout(ctx) == 90 + 4 * 120
-    assert _writing_node_timeout(ctx, {}) == 90 + LLM_SECTION_CALL_BUDGET * 120
+    assert _writing_node_timeout(ctx, state) == 90 + 3 * 240
+    assert _verification_node_timeout(ctx) == 90 + 4 * 240
+    assert _writing_node_timeout(ctx, {}) == 90 + LLM_SECTION_CALL_BUDGET * 240
 
     deterministic = SimpleNamespace(
         settings=settings.model_copy(
@@ -310,11 +312,11 @@ def test_polish_adds_exactly_one_model_call_to_the_time_budgets():
         record_usage=lambda response: None,
     )
     assert polishing.settings.llm_workflow_enabled is True
-    assert _polish_node_timeout(polishing) == 90 + 120
+    assert _polish_node_timeout(polishing) == 90 + 240
     assert (
         polishing.settings.llm_run_time_floor_seconds
         - settings.llm_run_time_floor_seconds
-        == 120
+        == 240
     )
 
 
@@ -348,9 +350,9 @@ def test_outline_adds_two_model_calls_to_the_run_budget():
     )
     assert outlining.settings.llm_workflow_enabled is True
     # the non-tool outline fallback keeps one call per approval round
-    assert _research_agent_node_timeout(outlining) == 90 + 120
+    assert _research_agent_node_timeout(outlining) == 90 + 240
     assert (
         outlining.settings.llm_run_time_floor_seconds
         - settings.llm_run_time_floor_seconds
-        == 2 * 120
+        == 2 * 240
     )

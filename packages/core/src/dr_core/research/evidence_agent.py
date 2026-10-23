@@ -66,6 +66,7 @@ def run_evidence_agent(
     round_index: int,
     max_rounds: int,
     max_tool_calls: int,
+    max_tokens_floor: int = 6000,
     on_tool: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> EvidenceAgentOutcome:
     max_rounds = max(1, max_rounds)
@@ -93,7 +94,10 @@ def run_evidence_agent(
             response = llm.chat(
                 messages,
                 tools=None if final_turn else AGENT_TOOL_SPECS,
-                max_tokens=min(8000, max(2200, 350 * len(outline.sections))),
+                max_tokens=min(
+                    16000,
+                    max(max_tokens_floor, 350 * len(outline.sections)),
+                ),
                 temperature=0.2,
             )
         except (RunCancelled, RunFinished, NodeTimeoutError):

@@ -20,7 +20,9 @@ logger = logging.getLogger(__name__)
 
 _MAX_SECTION_CHARS = 30000
 _MIN_KEPT_RATIO = 0.5
-_MAX_OUTPUT_TOKENS = 16000
+_MAX_OUTPUT_TOKENS = 32000
+# A reasoning model needs room to think before it rewrites the article.
+_MAX_OUTPUT_TOKEN_FLOOR = 4000
 _UNTRUSTED_TAG = "UNTRUSTED_SOURCE_DATA"
 _SYSTEM = (
     "You are editing a finished research article for language and flow. Rewrite "
@@ -50,6 +52,7 @@ def polish_draft_sections(
     sections: list[DraftArticleSection],
     llm: LLMProvider,
     max_input_chars: int,
+    max_output_tokens: int | None = None,
 ) -> tuple[list[PolishedSection], str]:
     """Rewrite the whole article in one call so terminology, transitions and
     repeated conclusions are fixed across sections instead of one at a time.
@@ -70,6 +73,7 @@ def polish_draft_sections(
         sections=ordered,
         llm=llm,
         total_chars=total_chars,
+        max_output_tokens=max_output_tokens,
     )
     if payload is None:
         return [], failure
@@ -114,6 +118,7 @@ def _request_polish(
     sections: list[DraftArticleSection],
     llm: LLMProvider,
     total_chars: int,
+    max_output_tokens: int | None = None,
 ) -> tuple[dict[str, Any] | None, str]:
     warnings: set[str] = set()
     for item in sections:
@@ -126,8 +131,10 @@ def _request_polish(
         warnings=warnings,
     )
     # Output is about as long as the input, and CJK text costs more tokens per
-    # character than Latin text, so the budget follows the article length.
-    max_tokens = min(_MAX_OUTPUT_TOKENS, max(800, int(total_chars * 4 / 5)))
+    # character than Latin text, so the budget follows the article length. The
+    # floor leaves a reasoning model room to think before it rewrites.
+    floor = max_output_tokens or _MAX_OUTPUT_TOKEN_FLOOR
+    max_tokens = min(_MAX_OUTPUT_TOKENS, max(floor, int(total_chars * 4 / 5)))
     try:
         response = llm.generate(
             prompt,

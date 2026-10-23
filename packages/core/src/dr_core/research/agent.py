@@ -74,6 +74,7 @@ def run_research_agent(
     max_tool_calls: int,
     version: int = 1,
     feedback: str | None = None,
+    max_tokens_floor: int = 6000,
     on_tool: Callable[[str, dict[str, Any]], None] | None = None,
 ) -> ResearchAgentOutcome:
     max_rounds = max(1, max_rounds)
@@ -102,7 +103,7 @@ def run_research_agent(
             response = llm.chat(
                 messages,
                 tools=None if final_turn else AGENT_TOOL_SPECS,
-                max_tokens=min(9000, max(3000, 450 * high)),
+                max_tokens=min(16000, max(max_tokens_floor, 450 * high)),
                 temperature=0.2,
             )
         except (RunCancelled, RunFinished, NodeTimeoutError):

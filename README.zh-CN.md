@@ -241,7 +241,12 @@ queued → planning → 提纲审批 → searching → processing_sources → bu
 | `RESEARCH_SECTION_TARGET_EVIDENCE_MIN` / `_MAX` | `4` / `12` | 章节证据目标的下限与上限 |
 | `RESEARCH_SECTION_TARGET_SOURCES_MIN` / `_MAX` | `3` / `6` | 章节所需独立来源数的下限与上限 |
 | `RESEARCH_RETRIEVAL_CANDIDATE_LIMIT` | `20` | 每个章节查询在抽取前拉取的候选数量 |
-| `RESEARCH_WRITE_MAX_TOKENS_FLOOR` / `RESEARCH_WRITE_TOKENS_PER_WORD` | `1200` / `6` | 单章节模型写作的 token 预算；推理模型的思考 token 与正文共用同一预算 |
+| `RESEARCH_WRITE_MAX_TOKENS_FLOOR` / `RESEARCH_WRITE_TOKENS_PER_WORD` | `3000` / `6` | 单章节模型写作的 token 预算；推理模型的思考 token 与正文共用同一预算 |
+| `RESEARCH_OUTLINE_MAX_TOKENS_FLOOR` / `RESEARCH_OUTLINE_TOKENS_PER_SECTION` | `6000` / `400` | 单次提纲生成的 token 预算；下限为推理模型留出先思考再写结构的余量 |
+| `RESEARCH_CLAIM_REVIEW_MAX_TOKENS` | `1200` | 单次主张复核的 token 预算 |
+| `RESEARCH_POLISH_MAX_TOKENS_FLOOR` | `4000` | 全文润色调用的 token 下限 |
+| `RESEARCH_AGENT_MAX_TOKENS_FLOOR` / `RESEARCH_EVIDENCE_AGENT_MAX_TOKENS_FLOOR` | `6000` / `6000` | 规划 agent 与取证 agent 单轮工具调用的 token 下限 |
+| `LLM_REASONING_RETRY_FACTOR` / `LLM_REASONING_RETRY_CEILING` | `2` / `24000` | 模型把整个 token 预算都用在思考上、导致回答为空时，用更大的预算重试一次；被截断的那次仍然计费，设为 `1` 可关闭重试 |
 | `EMBEDDING_ENABLED` / `EMBEDDING_API_KEY` | `false` / 空 | 可选的 OpenAI 兼容向量模型；未配置时检索降级为关键词模式，并在运行事件与文章局限中写明 |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | `text-embedding-3-small` / `1536` | 向量模型与向量维度；切片向量列跟随该维度，切换模型只需改配置 |
 | `RESEARCH_TOKEN_BUDGET` / `RESEARCH_COST_BUDGET_USD` | `0` | 预算；0 表示不限制 |
@@ -300,3 +305,4 @@ docker compose exec api python -m dr_core.maintenance   # 文件记录对账
 - 引文追踪依赖学术元数据：没有 DOI 或只有非结构化文本的参考文献会作为线索返回给代理，不会入库。代理的检索以运行事件呈现，不写入检索记录表。
 - 审批后的提纲是结构权威：代理不能增加库外来源或主张，取证代理也不能改动章节结构。
 - 取消是协作式的，已发出的单个提供商 HTTP 请求不会被强制中断，只会受超时约束。
+- 推理模型的思考 token 与正文共用同一额度，回答为空时会用更大的预算重试一次（`LLM_REASONING_RETRY_FACTOR`），被截断的那次仍然计费；若重试后仍被截断，该节点回退到确定性路径。

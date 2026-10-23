@@ -148,7 +148,12 @@ def verify_run_claims(
                     before = assessment.status
                     if before is not ClaimVerificationStatus.SUPPORTED and cited:
                         llm_calls += 1
-                    assessment = review_claim_with_llm(llm, assessment, cited)
+                    assessment = review_claim_with_llm(
+                        llm,
+                        assessment,
+                        cited,
+                        max_tokens=settings.research_claim_review_max_tokens,
+                    )
                     if assessment.status is not before:
                         llm_reviewed += 1
             models.append(

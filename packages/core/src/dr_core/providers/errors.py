@@ -50,6 +50,31 @@ class ProviderResponseError(ProviderError):
     code = "invalid_response"
 
 
+class ProviderReasoningTruncated(ProviderResponseError):
+    """The model spent the token budget reasoning and returned no answer.
+
+    A reasoning model bills its thinking against the same limit as the answer,
+    so a budget that is too small leaves nothing for the answer itself. The
+    attempt still cost tokens, so the counts are kept for the run's usage.
+    """
+
+    code = "reasoning_truncated"
+
+    def __init__(
+        self,
+        provider: str,
+        message: str,
+        *,
+        input_tokens: int = 0,
+        output_tokens: int = 0,
+        reasoning_tokens: int = 0,
+    ) -> None:
+        super().__init__(provider, message)
+        self.input_tokens = input_tokens
+        self.output_tokens = output_tokens
+        self.reasoning_tokens = reasoning_tokens
+
+
 class ProviderResourceNotFound(ProviderError):
     code = "not_found"
 

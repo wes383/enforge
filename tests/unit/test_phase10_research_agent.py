@@ -382,8 +382,8 @@ def test_agent_keeps_the_prompt_bounded_and_carries_feedback():
 
     assert outcome.outline is not None
     assert outcome.outline.version == 4
-    assert llm.calls[0]["max_tokens"] >= 3000
-    assert llm.calls[0]["max_tokens"] <= 9000
+    assert llm.calls[0]["max_tokens"] >= 6000
+    assert llm.calls[0]["max_tokens"] <= 16000
     prompt = json.loads(llm.calls[0]["messages"][1]["content"])
     assert prompt["limits"]["sections_hint"][1] > 10
     assert "Cover the cost side earlier." in prompt["approver_feedback"]

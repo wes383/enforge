@@ -86,6 +86,13 @@ class Settings(BaseSettings):
     llm_request_timeout_seconds: float = Field(default=240.0, gt=0, le=900)
     llm_max_retries: int = Field(default=0, ge=0, le=5)
 
+    # A reasoning model bills its thinking against the same token limit as the
+    # answer, so a budget that fits the answer alone can end with an empty
+    # reply. Such a call is repeated once with a larger budget; the truncated
+    # attempt is still billed.
+    llm_reasoning_retry_factor: int = Field(default=2, ge=1, le=8)
+    llm_reasoning_retry_ceiling: int = Field(default=24000, ge=512, le=128000)
+
     # Optional per-million-token prices for the configured endpoint. Cost stays 0
     # when unset, but token usage is always recorded against the run.
     llm_cost_per_1m_input_tokens: float = Field(default=0.0, ge=0)
@@ -167,8 +174,18 @@ class Settings(BaseSettings):
     # Writing budget. Reasoning models bill their thinking against the same
     # token limit as the answer, so a section needs a floor and a multiplier
     # rather than a plain word count times three.
-    research_write_max_tokens_floor: int = Field(default=1200, ge=200, le=32000)
+    research_write_max_tokens_floor: int = Field(default=3000, ge=200, le=64000)
     research_write_tokens_per_word: int = Field(default=6, ge=1, le=40)
+    # The outline, the claim review and the polish pass each get their own
+    # budget. The floors keep a reasoning model from spending the whole
+    # allowance on thinking and returning nothing.
+    research_outline_max_tokens_floor: int = Field(default=6000, ge=512, le=64000)
+    research_outline_tokens_per_section: int = Field(default=400, ge=50, le=4000)
+    research_claim_review_max_tokens: int = Field(default=1200, ge=200, le=16000)
+    research_polish_max_tokens_floor: int = Field(default=4000, ge=512, le=64000)
+    # The tool-calling agents need room to think before they emit a tool call.
+    research_agent_max_tokens_floor: int = Field(default=6000, ge=512, le=64000)
+    research_evidence_agent_max_tokens_floor: int = Field(default=6000, ge=512, le=64000)
     # How much evidence one section aims for. The target is derived from the
     # section's own word budget, so a short section stops earlier than a long
     # one instead of every section sharing one hard-coded floor.
@@ -218,7 +235,12 @@ class Settings(BaseSettings):
     @property
     def llm_call_budget_seconds(self) -> int:
         """Worst-case wall time of one model call, retries included."""
-        return int((self.llm_max_retries + 1) * self.llm_request_timeout_seconds)
+        attempts = self.llm_max_retries + 1
+        if self.llm_reasoning_retry_factor > 1:
+            # A call truncated by reasoning is repeated once with a larger
+            # budget, so it can take twice as long as the request timeout.
+            attempts += 1
+        return int(attempts * self.llm_request_timeout_seconds)
 
     def llm_usage_cost(self, input_tokens: int, output_tokens: int) -> Decimal:
         """Cost of one model call, rounded to the run column's 6 decimals."""

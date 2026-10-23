@@ -246,7 +246,12 @@ See [`.env.example`](.env.example) for every variable and its default. The most 
 | `RESEARCH_SECTION_TARGET_EVIDENCE_MIN` / `_MAX` | `4` / `12` | Lower and upper bound of a section's evidence target |
 | `RESEARCH_SECTION_TARGET_SOURCES_MIN` / `_MAX` | `3` / `6` | Lower and upper bound of the independent sources a section needs |
 | `RESEARCH_RETRIEVAL_CANDIDATE_LIMIT` | `20` | Candidates pulled per section query before extraction |
-| `RESEARCH_WRITE_MAX_TOKENS_FLOOR` / `RESEARCH_WRITE_TOKENS_PER_WORD` | `1200` / `6` | Token budget for one model-written section; reasoning models bill their reasoning against the same budget |
+| `RESEARCH_WRITE_MAX_TOKENS_FLOOR` / `RESEARCH_WRITE_TOKENS_PER_WORD` | `3000` / `6` | Token budget for one model-written section; reasoning models bill their reasoning against the same budget |
+| `RESEARCH_OUTLINE_MAX_TOKENS_FLOOR` / `RESEARCH_OUTLINE_TOKENS_PER_SECTION` | `6000` / `400` | Token budget for one outline call; the floor leaves a reasoning model room to think before it writes the structure |
+| `RESEARCH_CLAIM_REVIEW_MAX_TOKENS` | `1200` | Token budget for one claim review |
+| `RESEARCH_POLISH_MAX_TOKENS_FLOOR` | `4000` | Token floor for the whole-article polish call |
+| `RESEARCH_AGENT_MAX_TOKENS_FLOOR` / `RESEARCH_EVIDENCE_AGENT_MAX_TOKENS_FLOOR` | `6000` / `6000` | Token floor for one tool-calling round of the planning agent and the evidence agent |
+| `LLM_REASONING_RETRY_FACTOR` / `LLM_REASONING_RETRY_CEILING` | `2` / `24000` | A call that ends with an empty answer because the model spent the whole budget on reasoning is repeated once with a larger budget; the truncated attempt is still billed, and the factor `1` switches the repeat off |
 | `EMBEDDING_ENABLED` / `EMBEDDING_API_KEY` | `false` / empty | Optional OpenAI-compatible embeddings; without them retrieval stays keyword-only and says so in the run events and the article limitations |
 | `EMBEDDING_MODEL` / `EMBEDDING_DIMENSION` | `text-embedding-3-small` / `1536` | The model and the vector width; the chunk vector column follows the width, so switching models only needs a configuration change |
 | `RESEARCH_TOKEN_BUDGET` / `RESEARCH_COST_BUDGET_USD` | `0` | Budgets; 0 means unlimited |
@@ -305,3 +310,4 @@ docker compose exec api python -m dr_core.maintenance   # file-record reconcilia
 - Citation chasing depends on academic metadata: DOI-less or unstructured references are returned to the agent as leads, not ingested. Agent searches appear as run events rather than search-query rows.
 - The approved outline is authoritative: agents cannot add sources or claims outside stored evidence, and the evidence agent cannot alter section structure.
 - Cancellation is cooperative. An in-flight provider HTTP request is not forcibly aborted; it is bounded by timeouts.
+- Reasoning models bill their thinking against the same token limit as the answer. A call that ends with an empty answer is repeated once with a larger budget (`LLM_REASONING_RETRY_FACTOR`), and the truncated attempt is still billed; if the second attempt is truncated too, the node falls back to its deterministic path.

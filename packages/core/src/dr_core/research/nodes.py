@@ -98,7 +98,7 @@ from dr_core.research.models import (
     SearchQuery as SearchQueryModel,
     SourceRecord,
 )
-from dr_core.research.planning import build_outline_with_llm
+from dr_core.research.planning import build_outline_with_llm, outline_token_budget
 from dr_core.research.polish import (
     DraftArticleSection,
     polish_draft_sections,
@@ -126,7 +126,11 @@ from dr_core.research.source_records import (
 from dr_core.research.state import ResearchState
 from dr_core.research.tools import ResearchToolbox
 from dr_core.research.text import best_sentence_span_for_queries, tokenize
-from dr_core.research.usage import ProgressReportingLLM, UsageRecordingLLM
+from dr_core.research.usage import (
+    ProgressReportingLLM,
+    ReasoningBudgetLLM,
+    UsageRecordingLLM,
+)
 from dr_core.research.verification import audit_section, verify_run_claims
 from dr_core.research.write_search import WriteSearchSession
 from dr_core.research.writing import compose_section, summarize_section_content
@@ -288,6 +292,7 @@ def research_agent(ctx: ResearchContext):
                     max_tool_calls=ctx.settings.research_agent_max_tool_calls,
                     version=version,
                     feedback=feedback,
+                    max_tokens_floor=ctx.settings.research_agent_max_tokens_floor,
                     on_tool=record_tool,
                 )
                 if outcome.error:
@@ -317,6 +322,13 @@ def research_agent(ctx: ResearchContext):
                         version=version,
                         feedback=feedback,
                         background=state.get("recon") or None,
+                        max_tokens=outline_token_budget(
+                            brief,
+                            floor=ctx.settings.research_outline_max_tokens_floor,
+                            per_section=(
+                                ctx.settings.research_outline_tokens_per_section
+                            ),
+                        ),
                     )
                     planner = "llm" if outline is not None else "template"
             if outline is None:
@@ -1775,6 +1787,9 @@ def evidence_agent(ctx: ResearchContext):
                 round_index=round_index,
                 max_rounds=ctx.settings.research_agent_max_rounds,
                 max_tool_calls=ctx.settings.research_agent_max_tool_calls,
+                max_tokens_floor=(
+                    ctx.settings.research_evidence_agent_max_tokens_floor
+                ),
                 on_tool=record_tool,
             )
             if outcome.error:
@@ -2269,6 +2284,7 @@ def polish_article(ctx: ResearchContext):
                 sections=drafts,
                 llm=polish_llm,
                 max_input_chars=ctx.settings.research_polish_max_input_chars,
+                max_output_tokens=ctx.settings.research_polish_max_tokens_floor,
             )
             result: ResearchState = {
                 "article_polished": True,
@@ -3318,7 +3334,37 @@ def _llm_provider(ctx: ResearchContext, enabled: bool):
     llm = ctx.registry.llm
     if llm is None or getattr(llm, "name", "") == "mock-llm":
         return None
-    return UsageRecordingLLM(llm, ctx.record_usage)
+    return _reasoning_budget(ctx, UsageRecordingLLM(llm, ctx.record_usage))
+
+
+def _reasoning_budget(ctx: ResearchContext, llm):
+    """Repeat a call whose token budget was spent on reasoning.
+
+    The wrapper sits above the usage recorder, so the truncated attempt and
+    the repeated one are both billed to the run.
+    """
+    retries = 0
+
+    def notify(message: str, spent: int, larger: int) -> None:
+        nonlocal retries
+        retries += 1
+        ctx.emit(
+            RunEventType.PROGRESS,
+            message=message,
+            payload={
+                "retry_reason": "reasoning_truncated",
+                "max_tokens": spent,
+                "retry_max_tokens": larger,
+            },
+            dedupe_key=f"llm:reasoning-retry:{retries}",
+        )
+
+    return ReasoningBudgetLLM(
+        llm,
+        factor=ctx.settings.llm_reasoning_retry_factor,
+        ceiling=ctx.settings.llm_reasoning_retry_ceiling,
+        notify=notify,
+    )
 
 
 def _progress_llm(
@@ -3378,7 +3424,7 @@ def _llm_research_agent(ctx: ResearchContext):
         or not callable(getattr(llm, "chat", None))
     ):
         return None
-    return UsageRecordingLLM(llm, ctx.record_usage)
+    return _reasoning_budget(ctx, UsageRecordingLLM(llm, ctx.record_usage))
 
 
 def _llm_evidence_agent(ctx: ResearchContext):
@@ -3393,7 +3439,7 @@ def _llm_evidence_agent(ctx: ResearchContext):
         or not callable(getattr(llm, "chat", None))
     ):
         return None
-    return UsageRecordingLLM(llm, ctx.record_usage)
+    return _reasoning_budget(ctx, UsageRecordingLLM(llm, ctx.record_usage))
 
 
 def _evidence_agent_node_timeout(ctx: ResearchContext) -> int:

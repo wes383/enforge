@@ -104,7 +104,7 @@ def test_polish_prompt_fixes_the_fact_surface_and_marks_sections_untrusted():
     assert '<UNTRUSTED_SOURCE_DATA label="section_1">' in prompt["sections"][1]["markdown"]
     assert BODY in prompt["sections"][1]["markdown"]
     total = sum(len(item.content) for item in _sections())
-    assert llm.max_tokens[0] == max(800, int(total * 4 / 5))
+    assert llm.max_tokens[0] == min(32000, max(4000, int(total * 4 / 5)))
 
 
 def test_polish_keeps_the_marker_set_of_every_section():

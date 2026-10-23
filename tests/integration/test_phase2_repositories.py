@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import delete, func, select, text
 from sqlalchemy.exc import DBAPIError, IntegrityError
 
+from dr_core.config import get_settings
 from dr_core.db.enums import (
     ArtifactType,
     CitationAuditStatus,
@@ -83,7 +84,9 @@ from dr_core.schemas import (
 
 pytestmark = pytest.mark.integration
 
-EMBEDDING_DIMENSION = 1536
+# The vector width follows the configured dimension; the migrate service aligns
+# the column to it, so the fixtures have to use the same width.
+EMBEDDING_DIMENSION = get_settings().embedding_dimension
 
 
 def _hash(value: str) -> str:

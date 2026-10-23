@@ -268,6 +268,9 @@ class LLMResponse(SchemaModel):
     reasoning_text: str | None = Field(default=None, max_length=8000)
     reasoning_tokens: int = Field(default=0, ge=0)
     tool_calls: list[LLMToolCall] = Field(default_factory=list, max_length=10)
+    # Set when the call was repeated with a larger budget because the model
+    # spent the first one on reasoning.
+    retried_after_truncation: bool = False
 
 
 class SearchBundle(SchemaModel):

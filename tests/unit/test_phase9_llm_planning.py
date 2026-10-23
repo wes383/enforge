@@ -15,7 +15,7 @@ from dr_core.research.nodes import (
     _llm_outliner,
     _research_agent_node_timeout,
 )
-from dr_core.research.usage import UsageRecordingLLM
+from dr_core.research.usage import ReasoningBudgetLLM
 
 
 class _FakeLLM:
@@ -70,7 +70,7 @@ def test_outline_fallback_gate_only_uses_a_real_enabled_model():
     ctx = _ctx(settings, _FakeLLM())
 
     outliner = _llm_outliner(ctx)
-    assert isinstance(outliner, UsageRecordingLLM)
+    assert isinstance(outliner, ReasoningBudgetLLM)
     assert _research_agent_node_timeout(ctx) == (
         settings.research_node_timeout_seconds
         + settings.llm_call_budget_seconds
@@ -103,7 +103,7 @@ def test_evidence_agent_requires_tools_and_stays_inside_the_round_budget():
     ctx = _ctx(settings, _FakeLLM(), search=True)
 
     agent = _llm_evidence_agent(ctx)
-    assert isinstance(agent, UsageRecordingLLM)
+    assert isinstance(agent, ReasoningBudgetLLM)
     expected = settings.research_node_timeout_seconds + (
         settings.research_agent_max_rounds + 1
     ) * settings.llm_call_budget_seconds

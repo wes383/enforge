@@ -7,7 +7,11 @@ from typing import Any
 import httpx
 from pydantic import SecretStr
 
-from dr_core.providers.errors import ProviderResponseError
+from dr_core.providers.errors import (
+    ProviderError,
+    ProviderReasoningTruncated,
+    ProviderResponseError,
+)
 from dr_core.providers.http import JsonHttpClient, RetryPolicy
 from dr_core.providers.models import LLMResponse, LLMToolCall
 
@@ -123,10 +127,8 @@ def _parse_completion(payload: dict[str, Any], fallback_model: str) -> LLMRespon
     reasoning_text = reasoning if isinstance(reasoning, str) else ""
     tool_calls = _parse_tool_calls(message)
     if not text.strip() and not tool_calls:
-        raise ProviderResponseError(
-            "openai",
-            _empty_content_reason(finish_reason, reasoning_text),
-        )
+        usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
+        raise _empty_answer_error(finish_reason, reasoning_text, usage)
     usage = payload.get("usage") if isinstance(payload.get("usage"), dict) else {}
     return LLMResponse(
         text=text,
@@ -142,10 +144,11 @@ def _parse_completion(payload: dict[str, Any], fallback_model: str) -> LLMRespon
     )
 
 
-def _empty_content_reason(
+def _empty_answer_error(
     finish_reason: Any,
     reasoning_text: str,
-) -> str:
+    usage: dict[str, Any],
+) -> ProviderError:
     """Explain why the model returned no answer.
 
     A reasoning model that spent the whole token budget thinking returns an
@@ -154,13 +157,23 @@ def _empty_content_reason(
     """
     reason = str(finish_reason) if isinstance(finish_reason, str) else "unknown"
     if reasoning_text.strip():
-        return (
+        message = (
             "chat completion returned an empty answer; the model used the "
             f"token budget for reasoning (finish_reason={reason})"
         )
-    return (
-        "chat completion returned an empty answer "
-        f"(finish_reason={reason})"
+    else:
+        message = (
+            "chat completion returned an empty answer "
+            f"(finish_reason={reason})"
+        )
+    if not reasoning_text.strip() and reason != "length":
+        return ProviderResponseError("openai", message)
+    return ProviderReasoningTruncated(
+        "openai",
+        message,
+        input_tokens=int(usage.get("prompt_tokens") or 0),
+        output_tokens=int(usage.get("completion_tokens") or 0),
+        reasoning_tokens=_reasoning_tokens(usage),
     )
 
 
