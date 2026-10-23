@@ -217,6 +217,21 @@ def test_source_identity_groups_doi_and_republished_titles():
     assert source_identity(other) != source_identity(republished)
 
 
+def test_a_very_long_title_keeps_the_identity_key_bounded():
+    """A scraped page title must not fail the whole evidence analysis."""
+    long_title = "household electricity consumption air conditioning " * 40
+    source = _source(title=long_title)
+
+    key = source_identity(source)
+
+    assert len(key) <= 512
+    # The key is still stable and still distinguishes a different opening.
+    assert source_identity(_source(title=long_title)) == key
+    assert source_identity(_source(title="different " + long_title)) != key
+    # The quality assessment accepts it, which is where the run used to fail.
+    assert assess_source_quality(source).identity_key == key
+
+
 def test_source_quality_keeps_reasons_and_flags_retractions():
     strong = _source(
         title="Peer reviewed study",

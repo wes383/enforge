@@ -64,18 +64,25 @@ def normalize_title_key(title: str) -> str:
     return _TITLE_NOISE.sub("", title.casefold())
 
 
+# The key is stored on SourceQuality and compared for duplicate detection. A
+# scraped page title can be arbitrarily long, so the key is bounded here rather
+# than letting a single long title fail the whole evidence analysis.
+_IDENTITY_MAX_CHARS = 400
+
+
 def source_identity(source: Any) -> str:
     doi = getattr(source, "doi", None)
     if doi:
-        return f"doi:{doi.casefold()}"
+        return f"doi:{doi.casefold()}"[:_IDENTITY_MAX_CHARS]
     title = getattr(source, "title", "") or ""
     year = _published_year(source)
     title_key = normalize_title_key(title)
     if title_key:
-        return f"title:{title_key}:{year or 'unknown'}"
+        key = f"title:{title_key}:{year or 'unknown'}"
+        return key[:_IDENTITY_MAX_CHARS]
     url = getattr(source, "canonical_url", None)
     if url:
-        return f"url:{url.casefold()}"
+        return f"url:{url.casefold()}"[:_IDENTITY_MAX_CHARS]
     source_id = getattr(source, "id", None)
     return f"source:{source_id}"
 
