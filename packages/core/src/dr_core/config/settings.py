@@ -135,7 +135,7 @@ class Settings(BaseSettings):
     research_agent_max_rounds: int = Field(default=6, ge=1, le=10)
     research_agent_max_searches: int = Field(default=12, ge=1, le=30)
     research_agent_max_tool_calls: int = Field(default=18, ge=1, le=40)
-    research_agent_max_sources: int = Field(default=16, ge=1, le=50)
+    research_agent_max_sources: int = Field(default=16, ge=1, le=200)
     research_agent_max_fetches: int = Field(default=6, ge=0, le=20)
     research_agent_max_citation_calls: int = Field(default=4, ge=0, le=10)
     research_agent_read_chars: int = Field(default=8000, ge=500, le=30000)
