@@ -50,6 +50,10 @@ class _Toolbox:
         self.citation_calls = 0
         self.executed: list[tuple[str, str]] = []
 
+    @property
+    def remaining_sources(self) -> int:
+        return max(0, self.max_sources - len(self.records))
+
     def execute(self, name: str, arguments: str) -> dict:
         self.executed.append((name, arguments))
         if name == "search_sources":

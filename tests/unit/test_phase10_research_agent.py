@@ -76,6 +76,10 @@ class _FakeToolbox:
     def source_count(self) -> int:
         return len(self.records)
 
+    @property
+    def remaining_sources(self) -> int:
+        return max(0, self.max_sources - len(self.records))
+
     def execute(self, name: str, arguments: str) -> dict:
         self.calls.append(name)
         payload = json.loads(arguments or "{}")

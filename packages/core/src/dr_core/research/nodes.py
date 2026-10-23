@@ -223,7 +223,10 @@ def research_agent(ctx: ResearchContext):
                 toolbox = ResearchToolbox(
                     ctx,
                     brief,
-                    max_sources=ctx.settings.research_agent_max_sources,
+                    max_sources=min(
+                        ctx.settings.research_agent_planning_max_sources,
+                        ctx.settings.research_agent_max_sources,
+                    ),
                     max_searches=ctx.settings.research_agent_max_searches,
                     max_fetches=ctx.settings.research_agent_max_fetches,
                     max_citation_calls=(

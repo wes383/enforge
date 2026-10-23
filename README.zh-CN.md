@@ -230,6 +230,7 @@ queued → planning → 提纲审批 → searching → processing_sources → bu
 | `RESEARCH_AGENT_ENABLED` | `false` | 审批前的规划代理与审批后的取证代理；需要支持工具调用的 LLM 与启用的检索提供商，否则使用确定性提纲与检索路径 |
 | `RESEARCH_AGENT_MAX_ROUNDS` / `RESEARCH_AGENT_MAX_TOOL_CALLS` | `6` / `18` | 单次代理运行的模型轮次与工具调用总数；检索、阅读、正文抓取与引文查询各消耗一次工具调用，因此工具调用额度必须大于检索额度 |
 | `RESEARCH_AGENT_MAX_SEARCHES` / `RESEARCH_AGENT_MAX_SOURCES` / `RESEARCH_AGENT_MAX_FETCHES` / `RESEARCH_AGENT_MAX_CITATION_CALLS` | `12` / `16` / `6` / `4` | 单次运行的检索、入库来源、正文抓取与引文查询上限；一次检索最多入库 5 条结果，来源额度由两个 agent 共享，并受 `RESEARCH_MAX_SOURCES` 限制 |
+| `RESEARCH_AGENT_PLANNING_MAX_SOURCES` | `60` | 提纲产生前规划 agent 可入库的来源数；`RESEARCH_AGENT_MAX_SOURCES` 的余量留给取证 agent 补齐已批准的章节 |
 | `RESEARCH_CLAIM_LLM_REVIEW` | `false` | 对未通过的主张做保守模型复核，只能降级 |
 | `RESEARCH_OUTLINE_APPROVAL_REQUIRED` | `true` | 唯一一次提纲审批；关闭则全自动 |
 | `RESEARCH_MAX_SEARCH_ROUNDS` | `3` | 最大检索轮次 |

@@ -245,6 +245,10 @@ class ResearchToolbox:
         return len(self._records)
 
     @property
+    def remaining_sources(self) -> int:
+        return max(0, self._max_sources - len(self._records))
+
+    @property
     def max_searches(self) -> int:
         return self._max_searches
 
@@ -309,12 +313,16 @@ class ResearchToolbox:
                 "search_calls_left": 0,
                 "next": "Return the final JSON now.",
             }
-        remaining = self._max_sources - len(self._records)
+        remaining = self.remaining_sources
         if remaining <= 0:
             return {
                 "error": "source limit reached",
                 "remaining_sources": 0,
-                "next": "Use read_source on existing IDs or return the final JSON.",
+                "next": (
+                    "The source library is full; do not search again. Read or "
+                    "fetch the source IDs you already have, then return the "
+                    "final JSON."
+                ),
             }
         requested = _bounded_int(limit, _SEARCH_LIMIT, 1, _SEARCH_LIMIT)
 
@@ -587,11 +595,16 @@ class ResearchToolbox:
         ]
         if not providers:
             return {"error": "no enabled academic search provider"}
-        remaining = self._max_sources - len(self._records)
+        remaining = self.remaining_sources
         if remaining <= 0:
             return {
                 "error": "source limit reached",
                 "remaining_sources": 0,
+                "next": (
+                    "The source library is full; do not follow more citations. "
+                    "Read or fetch the source IDs you already have, then return "
+                    "the final JSON."
+                ),
             }
         requested = _bounded_int(limit, _SEARCH_LIMIT, 1, _SEARCH_LIMIT)
         self.citation_calls += 1

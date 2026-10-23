@@ -265,6 +265,7 @@ def _initial_prompt(
                 "tool_calls": max_tool_calls,
                 "search_calls": toolbox.max_searches,
                 "sources": toolbox.max_sources,
+                "remaining_sources": toolbox.remaining_sources,
                 "page_fetches": toolbox.max_fetches,
                 "citation_lookups": toolbox.max_citation_calls,
                 "sections_hint": [low, high],
