@@ -152,7 +152,11 @@ def _entry(fixture, key: str, title: str, purpose: str, **overrides) -> dict:
 
 
 def _payload(fixture, *entries: dict) -> dict:
-    return {"line": LINE, "sections": list(entries)}
+    return {
+        "include_contradictions": True,
+        "line": LINE,
+        "sections": list(entries),
+    }
 
 
 def _outline(*entries: dict, feedback=None, llm=None, fixture=None, brief=None):
@@ -180,6 +184,37 @@ def _body_entries(fixture) -> tuple[dict, dict]:
             "Small firms report higher audit overhead."
         ], target_words=400),
     )
+
+
+def test_llm_outline_makes_the_contradictions_section_optional():
+    fixture = _fixture()
+    first, second = _body_entries(fixture)
+    payload = {**_payload(fixture, first, second), "include_contradictions": False}
+
+    outline, _, _ = _outline(first, second, llm=_FakeLLM(payload), fixture=fixture)
+
+    assert outline is not None
+    titles = [section.title for section in outline.sections]
+    assert "Contradictions and Counter-Evidence" not in titles
+    question = next(
+        section
+        for section in outline.sections
+        if str(section.question_id) == fixture["a"]
+    )
+    assert question.refute_evidence_ids == [fixture["refute_a"].id]
+
+    missing = _payload(fixture, first, second)
+    missing.pop("include_contradictions")
+    outline, _, _ = _outline(
+        first,
+        second,
+        llm=_FakeLLM(missing),
+        fixture=fixture,
+    )
+    assert outline is not None
+    assert "Contradictions and Counter-Evidence" not in [
+        section.title for section in outline.sections
+    ]
 
 
 def test_llm_outline_reorders_bodies_and_keeps_the_frame():
@@ -364,8 +399,10 @@ def test_llm_outline_prompt_never_asks_for_evidence_or_sources():
     assert prompt["task"] == OUTLINE_TASK
     assert "topic-phrase title" in rules
     assert "Every supplied question id must appear exactly once" in rules
-    assert "introduction, the contradictions section" in rules
+    assert "include_contradictions" in rules
     assert "UNTRUSTED_SOURCE_DATA" in rules
+    assert prompt["contradictions"]["count"] == 1
+    assert prompt["contradictions"]["questions"][0]["refute_count"] == 1
     assert set(prompt["sections"][0]) == {
         "question_id",
         "question",

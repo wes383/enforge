@@ -225,6 +225,7 @@ def build_outline(
     evidence_by_question: dict[UUID | None, list],
     feedback: str | None = None,
     section_framing: dict[int, tuple[str, str]] | None = None,
+    include_contradictions: bool = False,
 ) -> Outline:
     sections: list[OutlineSection] = []
     framing = section_framing or {}
@@ -276,7 +277,7 @@ def build_outline(
                     target_words=_target_words(brief, "question", section_budget),
                 )
             )
-        if matrix.contradiction_count:
+        if include_contradictions and matrix.contradiction_count:
             sections.append(
                 OutlineSection(
                     index=len(sections),
@@ -370,7 +371,7 @@ def build_outline(
                     target_words=_target_words(brief, "question", section_budget),
                 )
             )
-        if matrix.contradiction_count:
+        if include_contradictions and matrix.contradiction_count:
             sections.append(
                 OutlineSection(
                     index=len(sections),

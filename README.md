@@ -43,7 +43,7 @@ A LangGraph workflow with 19 business nodes and 2 approval nodes, covering brief
 
 ### Writing and verification
 
-- Argumentative outline: every section has a purpose, an associated research question, key claims, supporting and opposing evidence, a target word count, and a status.
+- Argumentative outline: every section has a purpose, an associated research question, key claims, supporting and opposing evidence, a target word count, and a status. A standalone contradictions section is included only when the outline model judges that disagreements cut across questions; refuting evidence otherwise stays inside its question section.
 - Continuous prose per section instead of a list of evidence; the introduction frames the tension and through-line, and the conclusion only synthesizes.
 - Optional model outlining, model writing, and article polishing. Every output passes strict structural validation (citation-marker set, numeric consistency, no reference section, and more) and falls back to deterministic writing if any check fails.
 - The article's limitations section keeps only evidence-relevant caveats: budget caps, retrieval degradation, model fallbacks, missing full text, and source-count audit notes stay in the run workspace instead of leaking into the finished article.

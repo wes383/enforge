@@ -60,23 +60,35 @@ def build_outline_with_llm(
     feedback: str | None = None,
     section_framing: dict[int, tuple[str, str]] | None = None,
 ) -> Outline | None:
-    template = build_outline(
-        brief,
-        plan,
-        matrix,
-        gaps,
-        version=version,
-        evidence_by_question=evidence_by_question,
-        feedback=feedback,
-        section_framing=section_framing,
-    )
+    def template_for(include_contradictions: bool) -> Outline:
+        return build_outline(
+            brief,
+            plan,
+            matrix,
+            gaps,
+            version=version,
+            evidence_by_question=evidence_by_question,
+            feedback=feedback,
+            section_framing=section_framing,
+            include_contradictions=include_contradictions,
+        )
+
+    template = template_for(False)
     bodies = [
         section for section in template.sections if section.question_id is not None
     ]
     if not bodies:
         return template
 
-    payload = _request(brief, template, bodies, evidence_by_question, llm, feedback)
+    payload = _request(
+        brief,
+        template,
+        bodies,
+        evidence_by_question,
+        matrix,
+        llm,
+        feedback,
+    )
     if payload is None:
         return None
     ordered = _ordered_bodies(payload, brief, template, bodies, evidence_by_question)
@@ -86,6 +98,9 @@ def build_outline_with_llm(
             brief.project_id,
         )
         return None
+
+    if payload.get("include_contradictions") is True and matrix.contradiction_count:
+        template = template_for(True)
 
     positions = [
         index
@@ -117,6 +132,7 @@ def _request(
     template: Outline,
     bodies: list[OutlineSection],
     evidence_by_question: dict[Any, list],
+    matrix: EvidenceMatrix,
     llm: LLMProvider,
     feedback: str | None,
 ) -> dict[str, Any] | None:
@@ -149,16 +165,19 @@ def _request(
             if feedback
             else []
         ),
-        "The introduction, the contradictions section, the limitations section "
-        "and the conclusion are generated elsewhere; outline only the body "
-        "sections listed here.",
+        "The introduction, the limitations section and the conclusion are "
+        "generated elsewhere; outline only the body sections listed here. "
+        "Refuting evidence stays inside its question section. Set "
+        "include_contradictions to true only when the disagreements cut across "
+        "questions and deserve one standalone section; otherwise set it to false.",
         "Every supplied question id must appear exactly once. Do not add, rename "
         "or drop a question, and do not mention evidence counts or the research "
         "process in the article text.",
         *untrusted_rules(),
-        "Return JSON only: {\"line\": string, \"sections\": [{\"question_id\": "
-        "string, \"title\": string, \"purpose\": string, \"key_claims\": "
-        "[string], \"target_words\": integer}]}.",
+        "Return JSON only: {\"include_contradictions\": boolean, \"line\": "
+        "string, \"sections\": [{\"question_id\": string, \"title\": string, "
+        "\"purpose\": string, \"key_claims\": [string], \"target_words\": "
+        "integer}]}.",
     ]
     prompt = json.dumps(
         {
@@ -177,6 +196,19 @@ def _request(
                 if feedback
                 else None
             ),
+            "contradictions": {
+                "count": matrix.contradiction_count,
+                "questions": [
+                    {
+                        "question": wrap_untrusted(
+                            row.question[:400], label="question"
+                        ),
+                        "refute_count": row.refute_count,
+                    }
+                    for row in matrix.rows
+                    if row.support_count and row.refute_count
+                ][:6],
+            },
             "sections": [
                 {
                     "question_id": str(section.question_id),

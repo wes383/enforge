@@ -239,6 +239,7 @@ def test_outline_populates_claims_evidence_and_target_words():
         [ResearchGap(question="Open question", reason="Missing data")],
         version=1,
         evidence_by_question={question_id: [support, refute]},
+        include_contradictions=True,
     )
 
     assert outline.sections[0].key_claims
@@ -255,6 +256,24 @@ def test_outline_populates_claims_evidence_and_target_words():
     assert "Contradictions and Counter-Evidence" in titles
     assert "Limitations and Open Questions" in titles
     assert outline.sections[-1].evidence_ids == [support.id, refute.id]
+
+    default_outline = build_outline(
+        _brief(),
+        plan,
+        matrix,
+        [],
+        version=1,
+        evidence_by_question={question_id: [support, refute]},
+    )
+    assert "Contradictions and Counter-Evidence" not in [
+        section.title for section in default_outline.sections
+    ]
+    default_question = next(
+        section
+        for section in default_outline.sections
+        if section.question_id == question_id
+    )
+    assert default_question.refute_evidence_ids == [refute.id]
 
     deep = build_outline(
         _brief(research_depth=ResearchDepth.DEEP),
