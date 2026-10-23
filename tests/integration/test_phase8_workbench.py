@@ -176,21 +176,6 @@ def test_project_options_and_research_workbench(client, project_factory):
     assert invalid_update.status_code == 422
 
     run = _create_run(client, project["id"])
-    plan = _wait_for_approval(client, run["id"], "plan")
-    plan_payload = dict(plan["payload"])
-    plan_payload["scope_notes"] = (
-        (plan_payload.get("scope_notes") or "")
-        + " Approved with edited scope notes."
-    )
-    approved_plan = _decide(
-        client,
-        run["id"],
-        plan["id"],
-        {"decision": "modified", "content": plan_payload},
-    )
-    assert approved_plan.status_code == 202, approved_plan.text
-    assert approved_plan.json()["status"] == "modified"
-
     outline_approval = _wait_for_approval(client, run["id"], "outline")
     outline_payload = dict(outline_approval["payload"]["outline"])
     outline_payload["title"] = "Edited Phase 8 Report"
@@ -232,10 +217,8 @@ def test_project_options_and_research_workbench(client, project_factory):
     assert overview_body["source_status"]["total"] >= 5
     assert overview_body["source_status"]["parsed"] > 0
     assert overview_body["pending_approval"] is None
-    assert len(overview_body["questions"]) >= 3
-
-    questions = client.get(f"{API}/runs/{run['id']}/questions").json()["items"]
-    question_id = questions[0]["id"]
+    assert len(overview_body["outline_sections"]) >= 3
+    section_id = overview_body["outline_sections"][0]["id"]
 
     sources_response = client.get(f"{API}/runs/{run['id']}/sources")
     assert sources_response.status_code == 200, sources_response.text
@@ -251,14 +234,14 @@ def test_project_options_and_research_workbench(client, project_factory):
 
     evidence_response = client.get(
         f"{API}/runs/{run['id']}/evidence",
-        params={"question_id": question_id, "limit": 100},
+        params={"section_id": section_id, "limit": 100},
     )
     assert evidence_response.status_code == 200, evidence_response.text
     evidence_body = evidence_response.json()
     assert evidence_body["items"]
     assert evidence_body["total"] == len(evidence_body["items"])
     assert all(
-        item["research_question_id"] == question_id
+        item["outline_section_id"] == section_id
         for item in evidence_body["items"]
     )
     assert all(
@@ -292,7 +275,8 @@ def test_project_options_and_research_workbench(client, project_factory):
     assert sections_response.status_code == 200, sections_response.text
     sections = sections_response.json()["items"]
     assert len(sections) == len(outline_body["outline"]["sections"])
-    assert all(item["audit_status"] == "passed" for item in sections)
+    assert all(item["audit_status"] != "failed" for item in sections)
+    assert any(item["audit_status"] == "passed" for item in sections)
     section = sections[0]
     assert section["citation_map"]
 

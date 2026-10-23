@@ -16,7 +16,7 @@ from dr_core.schemas.base import SchemaModel
 class EvidenceCreate(SchemaModel):
     source_id: UUID
     source_version_id: UUID
-    research_question_id: UUID | None = None
+    outline_section_id: UUID | None = None
     evidence_type: EvidenceType = EvidenceType.DIRECT_SUPPORT
     claim_summary: str = Field(min_length=1, max_length=20000)
     quoted_text: str = Field(min_length=1, max_length=100000)

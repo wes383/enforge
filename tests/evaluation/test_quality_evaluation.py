@@ -21,7 +21,7 @@ def test_quality_evaluation_dataset_passes_thresholds():
     assert summary["recovery_success_rate"] == 1.0, summary
     assert summary["assertion_pass_rate"] == 1.0, summary
     assert summary["citation_validity_rate"] >= 0.95, summary
-    assert summary["question_coverage_rate"] >= 0.8, summary
+    assert summary["section_coverage_rate"] >= 0.8, summary
     assert summary["citation_support_accuracy"] >= 0.3, summary
     assert summary["unsupported_claim_ratio"] <= 0.8, summary
     assert summary["metadata_accuracy_rate"] >= 0.8, summary

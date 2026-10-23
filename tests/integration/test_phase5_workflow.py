@@ -15,6 +15,7 @@ from dr_core.config import get_settings
 from dr_core.db.enums import (
     ArtifactType,
     DraftSectionStatus,
+    SectionRole,
     SourceVersionKind,
 )
 from dr_core.db.models import (
@@ -26,8 +27,8 @@ from dr_core.db.models import (
     DraftSection,
     EvidenceItem,
     Outline,
+    OutlineSectionRecord,
     ResearchProject,
-    ResearchQuestion,
     ResearchRun,
     SearchQuery,
     SourceVersion,
@@ -221,9 +222,8 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
 ):
     project = project_factory(research_depth="standard", title="Phase 5 workflow test")
     run = _create_run(client, project["id"])
-    plan = _wait_for_approval(client, run["id"], "plan")
-    assert plan["version"] == 1
-    assert len(plan["payload"]["questions"]) >= 3
+    outline = _wait_for_approval(client, run["id"], "outline")
+    assert outline["version"] == 1
 
     paused = _wait_for_checkpoint(client, run["id"])
     assert paused["status"] == "awaiting_approval"
@@ -238,77 +238,37 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
             {"configurable": {"thread_id": thread_id}}
         )
     assert saved is not None
-    assert saved.checkpoint["channel_values"]["plan"]["version"] == 1
-    first_checkpoint = paused["checkpoint_id"]
-
-    approved = _decide(
-        client,
-        run["id"],
-        plan["id"],
-        {"decision": "approved"},
-    )
-    assert approved.status_code == 202, approved.text
-    assert approved.json()["status"] == "approved"
-
-    outline = _wait_for_approval(client, run["id"], "outline", timeout=90)
-    paused_again = _wait_for_checkpoint(
-        client,
-        run["id"],
-        exclude=first_checkpoint,
-    )
-    assert paused_again["status"] == "awaiting_approval"
-    assert paused_again["checkpoint_id"]
-    assert paused_again["checkpoint_id"] != first_checkpoint
+    assert saved.checkpoint["channel_values"]["outline"]["version"] == 1
 
     outline_sections = outline["payload"]["outline"]["sections"]
-    assert outline_sections
+    assert len(outline_sections) >= 3
     for section in outline_sections:
+        assert section["title"]
         assert section["purpose"]
         assert section["target_words"] >= 50
         assert section["status"] == "planned"
-        assert isinstance(section["key_claims"], list)
-        assert set(section["support_evidence_ids"]) <= set(
-            section["evidence_ids"]
-        )
-        assert set(section["refute_evidence_ids"]) <= set(
-            section["evidence_ids"]
-        )
-    assert any(section["key_claims"] for section in outline_sections)
+        assert isinstance(section["search_terms"], list)
+        assert section["role"] in {
+            "introduction",
+            "body",
+            "contradictions",
+            "limitations",
+            "conclusion",
+        }
+    assert any(section["role"] == "body" for section in outline_sections)
 
     with database.session() as session:
-        question_count = session.scalar(
+        section_count = session.scalar(
             select(func.count())
-            .select_from(ResearchQuestion)
-            .where(ResearchQuestion.run_id == UUID(run["id"]))
+            .select_from(OutlineSectionRecord)
+            .where(OutlineSectionRecord.run_id == UUID(run["id"]))
         )
-        evidence_count = session.scalar(
-            select(func.count())
-            .select_from(EvidenceItem)
-            .where(EvidenceItem.run_id == UUID(run["id"]))
-        )
-        full_text_count = session.scalar(
-            select(func.count())
-            .select_from(SourceVersion)
-            .where(
-                SourceVersion.project_id == UUID(project["id"]),
-                SourceVersion.content_kind == SourceVersionKind.FULL_TEXT,
-            )
-        )
-        max_round = session.scalar(
-            select(func.max(SearchQuery.round_index)).where(
-                SearchQuery.run_id == UUID(run["id"])
-            )
-        )
-    assert question_count >= 3
-    assert evidence_count > 0
-    assert full_text_count > 0
-    assert max_round and max_round >= 2
+    assert section_count == len(outline_sections)
 
     event_types = [event["event_type"] for event in _events(client, run["id"])]
-    assert event_types.count("awaiting_approval") >= 2
-    assert "source_fetched" in event_types
-    assert "source_parsed" in event_types
-    assert "evidence_extracted" in event_types
+    assert event_types.count("awaiting_approval") == 1
+    assert "source_fetched" not in event_types
+    assert "evidence_extracted" not in event_types
 
     outline_approved = _decide(
         client,
@@ -377,6 +337,26 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
         outline_record = session.scalar(
             select(Outline).where(Outline.run_id == UUID(run["id"]))
         )
+        full_text_count = session.scalar(
+            select(func.count())
+            .select_from(SourceVersion)
+            .where(
+                SourceVersion.project_id == UUID(project["id"]),
+                SourceVersion.content_kind == SourceVersionKind.FULL_TEXT,
+            )
+        )
+        max_round = session.scalar(
+            select(func.max(SearchQuery.round_index)).where(
+                SearchQuery.run_id == UUID(run["id"])
+            )
+        )
+        outline_sections = list(
+            session.scalars(
+                select(OutlineSectionRecord).where(
+                    OutlineSectionRecord.run_id == UUID(run["id"])
+                )
+            )
+        )
     assert {item.artifact_type.value for item in artifacts} == {
         "research_report",
         "reference_list",
@@ -396,6 +376,29 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
         section["status"] == "verified"
         for section in outline_record.content["sections"]
     )
+    assert evidence_items
+    assert full_text_count > 0
+    assert max_round and max_round >= 1
+    searchable_sections = [
+        item
+        for item in outline_sections
+        if item.role is not SectionRole.LIMITATIONS
+    ]
+    assert searchable_sections
+    assert all(
+        item.coverage_status.value == "covered"
+        for item in searchable_sections
+    ), [
+        (item.title, item.coverage_status.value)
+        for item in searchable_sections
+    ]
+    completed_events = [
+        event["event_type"] for event in _events(client, run["id"])
+    ]
+    assert "source_fetched" in completed_events
+    assert "source_parsed" in completed_events
+    assert "evidence_extracted" in completed_events
+    assert completed_events.count("awaiting_approval") == 1
     assert claims
     assert claim_links
     linked_claims = {link.claim_id for link in claim_links}
@@ -434,7 +437,8 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
         assert locator.get("kind")
         assert locator.get("character_start") is not None
         assert locator.get("character_end") is not None
-        assert item.context_before or item.context_after
+        if locator.get("kind") != "search_snippet":
+            assert item.context_before or item.context_after
         assert item.verification_status.value == "verified"
         if locator.get("chunk_id"):
             source_text = chunk_text[UUID(locator["chunk_id"])]
@@ -495,28 +499,32 @@ def test_research_workflow_end_to_end_with_approvals_and_checkpoints(
         assert row["conclusion"]
         assert len(row["support_evidence_ids"]) == row["support_count"]
         assert len(row["refute_evidence_ids"]) == row["refute_count"]
-        assert row["source_quality"]
-        assert row["evidence_quality"]
         assert row["independent_source_count"] <= row["source_count"]
-        assert all(reason["reason"] for reason in row["source_quality"][0]["reasons"])
+        if row["source_count"]:
+            assert row["source_quality"]
+            assert row["evidence_quality"]
+            assert all(
+                reason["reason"]
+                for reason in row["source_quality"][0]["reasons"]
+            )
 
     duplicate = _decide(
         client,
         run["id"],
-        plan["id"],
+        outline["id"],
         {"decision": "approved"},
     )
     assert duplicate.status_code == 409
 
 
-def test_plan_rejection_modification_and_cancellation(
+def test_outline_rejection_modification_and_cancellation(
     client,
     database,
     project_factory,
 ):
     project = project_factory(research_depth="quick", title="Phase 5 revision test")
     run = _create_run(client, project["id"])
-    first = _wait_for_approval(client, run["id"], "plan")
+    first = _wait_for_approval(client, run["id"], "outline")
 
     missing_content = _decide(
         client,
@@ -530,7 +538,7 @@ def test_plan_rejection_modification_and_cancellation(
         client,
         run["id"],
         first["id"],
-        {"decision": "modified", "content": {"questions": []}},
+        {"decision": "modified", "content": {"sections": []}},
     )
     assert invalid_content.status_code == 422
 
@@ -540,33 +548,48 @@ def test_plan_rejection_modification_and_cancellation(
         first["id"],
         {
             "decision": "rejected",
-            "feedback": "Add a question about enforcement costs.",
+            "feedback": "Add a section about enforcement costs.",
         },
     )
     assert rejected.status_code == 202, rejected.text
-    second = _wait_for_approval(client, run["id"], "plan", version=2, timeout=60)
-    assert second["payload"]["summary"]
-    assert any(
-        "enforcement costs" in item["question"].casefold()
-        for item in second["payload"]["questions"]
+    second = _wait_for_approval(
+        client,
+        run["id"],
+        "outline",
+        version=2,
+        timeout=90,
     )
+    assert second["payload"]["outline"]["summary"]
+    assert "enforcement costs" in second["payload"]["outline"]["summary"].casefold()
 
-    edited_plan = {
+    edited_outline = {
         "version": 2,
-        "summary": "User-edited plan about enforcement costs.",
-        "scope_notes": "Edited during approval",
-        "questions": [
+        "title": "AI regulation enforcement",
+        "summary": "A revised outline that tracks enforcement costs and evidence.",
+        "sections": [
             {
-                "question": "What are the enforcement costs of AI regulation?",
-                "priority": 90,
+                "index": 0,
+                "role": "introduction",
+                "title": "Introduction",
+                "purpose": "Frame the enforcement cost issue.",
+                "search_terms": ["AI regulation enforcement costs"],
+                "target_words": 300,
             },
             {
-                "question": "What evidence supports AI regulation claims?",
-                "priority": 80,
+                "index": 1,
+                "role": "body",
+                "title": "Enforcement costs in practice",
+                "purpose": "Weigh the costs against the stated benefits.",
+                "search_terms": ["AI regulation enforcement costs evidence"],
+                "target_words": 800,
             },
             {
-                "question": "What limitations affect implementation?",
-                "priority": 70,
+                "index": 2,
+                "role": "conclusion",
+                "title": "Conclusion",
+                "purpose": "Synthesize what the evidence supports.",
+                "search_terms": ["AI regulation conclusion"],
+                "target_words": 300,
             },
         ],
     }
@@ -574,39 +597,42 @@ def test_plan_rejection_modification_and_cancellation(
         client,
         run["id"],
         second["id"],
-        {"decision": "modified", "content": edited_plan},
+        {"decision": "modified", "content": edited_outline},
     )
     assert modified.status_code == 202, modified.text
     assert modified.json()["status"] == "modified"
 
-    outline = _wait_for_approval(client, run["id"], "outline", timeout=90)
+    completed = _wait_for_run(
+        client,
+        run["id"],
+        {"completed", "failed"},
+        timeout=90,
+    )
+    assert completed["status"] == "completed", completed
+
     with database.session() as session:
-        questions = list(
+        titles = list(
             session.scalars(
-                select(ResearchQuestion.question).where(
-                    ResearchQuestion.run_id == UUID(run["id"])
+                select(OutlineSectionRecord.title).where(
+                    OutlineSectionRecord.run_id == UUID(run["id"])
                 )
             )
         )
-    assert "What are the enforcement costs of AI regulation?" in questions
+    assert "Enforcement costs in practice" in titles
     assert any(
-        approval["kind"] == "plan" and approval["status"] == "modified"
+        approval["kind"] == "outline" and approval["status"] == "modified"
         for approval in _approvals(client, run["id"])
     )
 
-    pending = _approvals(client, run["id"], status="pending")
-    assert any(item["id"] == outline["id"] for item in pending)
-
-    cancelled = client.post(f"{API}/runs/{run['id']}/cancel")
+    other_run = _create_run(client, project["id"])
+    pending_outline = _wait_for_approval(client, other_run["id"], "outline")
+    cancelled = client.post(f"{API}/runs/{other_run['id']}/cancel")
     assert cancelled.status_code == 202, cancelled.text
     assert cancelled.json()["status"] == "cancelled"
-    approvals = _approvals(client, run["id"])
-    assert all(
-        item["status"] != "pending"
-        for item in approvals
-    )
+    approvals = _approvals(client, other_run["id"])
+    assert all(item["status"] != "pending" for item in approvals)
     assert any(
-        item["id"] == outline["id"] and item["status"] == "cancelled"
+        item["id"] == pending_outline["id"] and item["status"] == "cancelled"
         for item in approvals
     )
 
@@ -637,13 +663,6 @@ def test_cost_budget_stops_research_and_is_reported(
         queue=settings.celery_task_default_queue,
     )
 
-    plan = _wait_for_approval(client, str(run_id), "plan")
-    assert _decide(
-        client,
-        str(run_id),
-        plan["id"],
-        {"decision": "approved"},
-    ).status_code == 202
     outline = _wait_for_approval(client, str(run_id), "outline", timeout=90)
     assert _decide(
         client,

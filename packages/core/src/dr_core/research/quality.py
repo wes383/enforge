@@ -9,7 +9,7 @@ from uuid import UUID
 from dr_core.db.enums import (
     EvidenceType,
     ProjectLanguage,
-    QuestionCoverageStatus,
+    SectionCoverageStatus,
     SourceType,
 )
 from dr_core.research.models import (
@@ -17,7 +17,7 @@ from dr_core.research.models import (
     EvidenceQuality,
     EvidenceRow,
     QualityReason,
-    ResearchQuestion,
+    OutlineSection,
     SourceQuality,
 )
 
@@ -182,7 +182,7 @@ def assess_source_quality(
                 QualityReason(
                     dimension="recency",
                     status="neutral",
-                    reason=f"Published in {year}; relevance depends on the question.",
+                    reason=f"Published in {year}; relevance depends on the section.",
                 )
             )
         else:
@@ -311,7 +311,7 @@ def assess_evidence_quality(
                 dimension="directness",
                 status="positive",
                 reason=(
-                    "The quoted passage directly supports or refutes the question "
+                    "The quoted passage directly supports or refutes the section "
                     f"as {evidence_type.value} evidence."
                 ),
             )
@@ -324,7 +324,7 @@ def assess_evidence_quality(
                 status="neutral",
                 reason=(
                     f"The passage is {evidence_type.value} evidence and requires "
-                    "an inferential step to answer the question."
+                    "an inferential step to address the section."
                 ),
             )
         )
@@ -355,7 +355,7 @@ def assess_evidence_quality(
                 dimension="independence",
                 status="concern",
                 reason=(
-                    "Another source in this question appears to report the same "
+                    "Another source in this section appears to report the same "
                     "original work, so the items are not treated as independent."
                 ),
             )
@@ -374,7 +374,7 @@ def assess_evidence_quality(
             QualityReason(
                 dimension="counter_evidence",
                 status="positive",
-                reason="Contrary evidence was retained and considered for this question.",
+                reason="Contrary evidence was retained and considered for this section.",
             )
         )
         counter = "present"
@@ -429,7 +429,7 @@ def assess_evidence_quality(
 
 
 def build_evidence_matrix(
-    questions: list[ResearchQuestion],
+    sections: list[OutlineSection],
     evidence: list[Any],
     sources_by_id: dict[UUID, Any],
     *,
@@ -437,9 +437,9 @@ def build_evidence_matrix(
     now_year: int | None = None,
 ) -> EvidenceMatrix:
     now_year = now_year or datetime.now(tz=UTC).year
-    by_question: dict[UUID | None, list[Any]] = defaultdict(list)
+    by_section: dict[UUID | None, list[Any]] = defaultdict(list)
     for item in evidence:
-        by_question[getattr(item, "research_question_id", None)].append(item)
+        by_section[getattr(item, "outline_section_id", None)].append(item)
 
     rows: list[EvidenceRow] = []
     all_identities: set[str] = set()
@@ -462,8 +462,8 @@ def build_evidence_matrix(
         for identity, source_ids in sorted(duplicate_groups.items())
     ]
 
-    for question in questions:
-        items = by_question.get(question.question_id, [])
+    for section in sections:
+        items = by_section.get(section.section_id, [])
         support = [
             item for item in items if item.evidence_type is not EvidenceType.REFUTATION
         ]
@@ -502,24 +502,24 @@ def build_evidence_matrix(
             identity_counts[identity] += 1
 
         if len(support) >= 2 and len(support_identities) >= 2:
-            coverage = QuestionCoverageStatus.COVERED
+            coverage = SectionCoverageStatus.COVERED
         elif support:
-            coverage = QuestionCoverageStatus.PARTIAL
+            coverage = SectionCoverageStatus.PARTIAL
         else:
-            coverage = QuestionCoverageStatus.INSUFFICIENT
+            coverage = SectionCoverageStatus.INSUFFICIENT
 
         row_limitations: list[str] = []
         if len(support_identities) == 0:
             row_limitations.append(
-                "无独立来源支持该问题。"
+                "无独立来源支持该章节。"
                 if language is ProjectLanguage.ZH
-                else "No independent source supports this question."
+                else "No independent source supports this section."
             )
         elif len(support_identities) == 1:
             row_limitations.append(
-                "仅有一个独立来源支持该问题，结论应视为初步判断。"
+                "仅有一个独立来源支持该章节，结论应视为初步判断。"
                 if language is ProjectLanguage.ZH
-                else "Only one independent source supports this question; treat the conclusion as provisional."
+                else "Only one independent source supports this section; treat the conclusion as provisional."
             )
         if len(used_identities) < len(used_sources):
             row_limitations.append(
@@ -581,8 +581,8 @@ def build_evidence_matrix(
         ]
         rows.append(
             EvidenceRow(
-                question_id=question.question_id,
-                question=question.question,
+                section_id=section.section_id,
+                section_title=section.title,
                 support_count=len(support),
                 refute_count=len(refute),
                 source_count=len(used_sources),
@@ -600,7 +600,7 @@ def build_evidence_matrix(
                 limitations=row_limitations,
                 gap=(
                     None
-                    if coverage is QuestionCoverageStatus.COVERED
+                    if coverage is SectionCoverageStatus.COVERED
                     else _gap_text(language, coverage, len(support_identities))
                 ),
             )
@@ -638,9 +638,9 @@ def build_evidence_matrix(
         (
             sum(
                 1.0
-                if row.coverage_status is QuestionCoverageStatus.COVERED
+                if row.coverage_status is SectionCoverageStatus.COVERED
                 else 0.5
-                if row.coverage_status is QuestionCoverageStatus.PARTIAL
+                if row.coverage_status is SectionCoverageStatus.PARTIAL
                 else 0.0
                 for row in rows
             )
@@ -688,15 +688,15 @@ def _conclusion(
     refute_count: int,
     support_identities: int,
     refute_identities: int,
-    coverage: QuestionCoverageStatus,
+    coverage: SectionCoverageStatus,
     language: ProjectLanguage,
 ) -> str:
     zh = language is ProjectLanguage.ZH
     if support_count == 0 and refute_count == 0:
         return (
-            "尚未提取到可支持该问题的证据。"
+            "尚未提取到可支持该章节的证据。"
             if zh
-            else "No evidence has been extracted for this question yet."
+            else "No evidence has been extracted for this section yet."
         )
     if refute_count and support_count:
         return (
@@ -705,20 +705,20 @@ def _conclusion(
             if zh
             else (
                 f"Evidence is mixed: {support_identities} independent source(s) "
-                f"support the question while {refute_identities} raise contrary "
+                f"support the section while {refute_identities} raise contrary "
                 "evidence; the conclusion is provisional."
             )
         )
     if refute_count and not support_count:
         return (
-            "现有证据主要反对该问题的肯定性表述，尚不能形成支持结论。"
+            "现有证据主要反对该章节的肯定性表述，尚不能形成支持结论。"
             if zh
             else (
                 "Available evidence mainly opposes the affirmative claim; no "
                 "supporting conclusion can be drawn."
             )
         )
-    if coverage is QuestionCoverageStatus.COVERED:
+    if coverage is SectionCoverageStatus.COVERED:
         return (
             f"{support_identities} 个独立来源提供支持证据，可形成初步结论，"
             "但仍受来源质量与适用条件限制。"
@@ -729,7 +729,7 @@ def _conclusion(
             )
         )
     return (
-        "仅有有限或单一来源支持该问题，结论为初步判断。"
+        "仅有有限或单一来源支持该章节，结论为初步判断。"
         if zh
         else "Support is limited or comes from a single source; the conclusion is provisional."
     )
@@ -737,16 +737,16 @@ def _conclusion(
 
 def _gap_text(
     language: ProjectLanguage,
-    coverage: QuestionCoverageStatus,
+    coverage: SectionCoverageStatus,
     support_identities: int,
 ) -> str:
     if language is ProjectLanguage.ZH:
-        if coverage is QuestionCoverageStatus.INSUFFICIENT:
-            return "该问题缺少支持证据，需要补充检索或调整研究范围。"
-        return f"该问题仅有 {support_identities} 个独立支持来源，证据仍不充分。"
-    if coverage is QuestionCoverageStatus.INSUFFICIENT:
-        return "The question lacks supporting evidence; more search or scope adjustment is needed."
+        if coverage is SectionCoverageStatus.INSUFFICIENT:
+            return "该章节缺少支持证据，需要补充检索或调整研究范围。"
+        return f"该章节仅有 {support_identities} 个独立支持来源，证据仍不充分。"
+    if coverage is SectionCoverageStatus.INSUFFICIENT:
+        return "The section lacks supporting evidence; more search or scope adjustment is needed."
     return (
-        f"The question has only {support_identities} independent supporting "
+        f"The section has only {support_identities} independent supporting "
         "source(s); evidence remains incomplete."
     )

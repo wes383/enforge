@@ -12,15 +12,9 @@ LLM_SECTION_CALL_BUDGET = 12
 # A section may first ask for supplemental sources, then write once the new
 # evidence is available. The extra fallback call is budgeted separately.
 LLM_WRITE_SEARCH_CALL_BUDGET = 12
-# Planning asks the model once per plan version, so a run that is revised by the
-# approver can make a couple of planning calls before searching starts.
-LLM_PLANNING_CALL_BUDGET = 2
-# Outlining asks once per outline version; the same budget as planning covers a
-# single regeneration after an approval rejection.
+# The non-tool outline fallback asks the model once per version; two covers a
+# regeneration after an approval rejection.
 LLM_OUTLINE_CALL_BUDGET = 2
-# The bounded researcher makes at most one call per tool round plus a final
-# digest call. Tool rounds are capped at three in settings.
-LLM_RECON_CALL_BUDGET = 4
 # The research agent runs a whole tool loop before committing to a plan. The
 # budget follows the default six tool rounds plus the forced final turn.
 LLM_RESEARCH_AGENT_CALL_BUDGET = 7
@@ -79,8 +73,9 @@ class Settings(BaseSettings):
 
     # Optional OpenAI-compatible chat model for planning, section writing and
     # claim review. Registration only happens when a key is present; the workflow
-    # still requires RESEARCH_LLM_PLANNING_ENABLED / RESEARCH_LLM_WRITING_ENABLED /
-    # RESEARCH_CLAIM_LLM_REVIEW to call it.
+    # still requires RESEARCH_LLM_OUTLINE_ENABLED / RESEARCH_LLM_WRITING_ENABLED /
+    # RESEARCH_LLM_POLISH_ENABLED / RESEARCH_CLAIM_LLM_REVIEW / RESEARCH_AGENT_ENABLED
+    # to call it.
     openai_api_key: SecretStr | None = None
     openai_base_url: str = "https://api.openai.com/v1"
     openai_model: str = "gpt-4o-mini"
@@ -117,12 +112,10 @@ class Settings(BaseSettings):
     research_node_timeout_seconds: int = Field(default=90, ge=1, le=1800)
     research_token_budget: int = Field(default=0, ge=0)
     research_cost_budget_usd: float = Field(default=0.0, ge=0)
-    research_plan_approval_required: bool = True
     research_outline_approval_required: bool = True
     research_retrieval_mode: Literal["hybrid", "keyword", "vector"] = "hybrid"
     research_retrieval_limit: int = Field(default=10, ge=1, le=100)
     research_chunk_max_chars: int = Field(default=1200, ge=200, le=10000)
-    research_llm_planning_enabled: bool = False
     research_llm_writing_enabled: bool = False
     research_claim_llm_review: bool = False
     # The model orders and frames the article's body sections. Evidence
@@ -133,19 +126,11 @@ class Settings(BaseSettings):
     # Articles longer than the input cap keep the sections as written.
     research_llm_polish_enabled: bool = False
     research_polish_max_input_chars: int = Field(default=24000, ge=2000, le=200000)
-    # Bounded reconnaissance before planning. The model may search and read
-    # ingested sources through tools; every result goes through the normal
-    # ingestion pipeline and can later back evidence and citations.
-    research_llm_recon_enabled: bool = False
-    research_recon_max_rounds: int = Field(default=2, ge=1, le=3)
-    research_recon_max_searches: int = Field(default=4, ge=1, le=8)
-    research_recon_max_tool_calls: int = Field(default=6, ge=1, le=12)
-    research_recon_max_sources: int = Field(default=6, ge=1, le=20)
-    research_recon_read_chars: int = Field(default=4000, ge=500, le=20000)
-    # A research agent replaces recon + planning: it searches, reads pages,
+    # The planning agent runs before approval: it searches, reads pages,
     # follows citations and discovered names, then commits to evidence-grounded
-    # questions and a provisional outline. Writing and verification stay
-    # deterministic and the agent never supplies citations directly.
+    # a provisional outline. The evidence agent runs after approval within the
+    # frozen sections. Writing and verification stay deterministic and neither
+    # agent supplies citations directly.
     research_agent_enabled: bool = False
     research_agent_max_rounds: int = Field(default=6, ge=1, le=10)
     research_agent_max_searches: int = Field(default=12, ge=1, le=30)
@@ -192,12 +177,10 @@ class Settings(BaseSettings):
     @property
     def llm_workflow_enabled(self) -> bool:
         return (
-            self.research_llm_planning_enabled
-            or self.research_llm_writing_enabled
+            self.research_llm_writing_enabled
             or self.research_llm_outline_enabled
             or self.research_llm_polish_enabled
             or self.research_claim_llm_review
-            or self.research_llm_recon_enabled
             or self.research_agent_enabled
         )
 
@@ -228,10 +211,6 @@ class Settings(BaseSettings):
             calls += LLM_POLISH_CALL_BUDGET
         if self.research_llm_outline_enabled:
             calls += LLM_OUTLINE_CALL_BUDGET
-        if self.research_llm_planning_enabled:
-            calls += LLM_PLANNING_CALL_BUDGET
-        if self.research_llm_recon_enabled:
-            calls += LLM_RECON_CALL_BUDGET
         if self.research_agent_enabled:
             calls += LLM_RESEARCH_AGENT_CALL_BUDGET
         return self.llm_call_budget_seconds * calls + self.research_node_timeout_seconds

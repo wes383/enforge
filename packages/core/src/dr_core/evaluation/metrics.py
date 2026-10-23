@@ -11,7 +11,7 @@ from dr_core.db.enums import (
     ArtifactType,
     ClaimVerificationStatus,
     EvidenceType,
-    QuestionCoverageStatus,
+    SectionCoverageStatus,
     SearchQueryStatus,
     SourceVersionKind,
 )
@@ -21,7 +21,7 @@ from dr_core.db.models import (
     Claim,
     ClaimEvidence,
     EvidenceItem,
-    ResearchQuestion,
+    OutlineSectionRecord,
     ResearchRun,
     SearchQuery,
     Source,
@@ -35,7 +35,7 @@ class CaseMetrics:
     status: str
     citation_validity_rate: float | None
     citation_support_accuracy: float | None
-    question_coverage_rate: float | None
+    section_coverage_rate: float | None
     partial_coverage_rate: float | None
     unsupported_claim_ratio: float | None
     metadata_accuracy_rate: float | None
@@ -80,9 +80,9 @@ def collect_case_metrics(
             select(Source).where(Source.project_id == run.project_id)
         )
     )
-    questions = list(
+    sections = list(
         session.scalars(
-            select(ResearchQuestion).where(ResearchQuestion.run_id == run.id)
+            select(OutlineSectionRecord).where(OutlineSectionRecord.run_id == run.id)
         )
     )
     evidence = list(
@@ -153,21 +153,21 @@ def collect_case_metrics(
         status=run.status.value,
         citation_validity_rate=_ratio(passed_audits, len(audits)),
         citation_support_accuracy=_ratio(supported_cited, len(cited_claims)),
-        question_coverage_rate=_ratio(
+        section_coverage_rate=_ratio(
             sum(
                 1
-                for question in questions
-                if question.coverage_status is QuestionCoverageStatus.COVERED
+                for section in sections
+                if section.coverage_status is SectionCoverageStatus.COVERED
             ),
-            len(questions),
+            len(sections),
         ),
         partial_coverage_rate=_ratio(
             sum(
                 1
-                for question in questions
-                if question.coverage_status is QuestionCoverageStatus.PARTIAL
+                for section in sections
+                if section.coverage_status is SectionCoverageStatus.PARTIAL
             ),
-            len(questions),
+            len(sections),
         ),
         unsupported_claim_ratio=_ratio(unsupported, len(claims)),
         metadata_accuracy_rate=_ratio(
@@ -211,8 +211,8 @@ def aggregate_metrics(metrics: Iterable[CaseMetrics]) -> dict[str, Any]:
         "citation_support_accuracy": _mean(
             item.citation_support_accuracy for item in values
         ),
-        "question_coverage_rate": _mean(
-            item.question_coverage_rate for item in values
+        "section_coverage_rate": _mean(
+            item.section_coverage_rate for item in values
         ),
         "unsupported_claim_ratio": _mean(
             item.unsupported_claim_ratio for item in values

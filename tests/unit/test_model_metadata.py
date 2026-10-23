@@ -7,7 +7,7 @@ from dr_core.db.base import Base
 REQUIRED_TABLES = {
     "research_projects",
     "research_runs",
-    "research_questions",
+    "outline_sections",
     "search_queries",
     "sources",
     "source_versions",

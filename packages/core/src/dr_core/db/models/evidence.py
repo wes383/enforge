@@ -28,7 +28,7 @@ from dr_core.db.enums import (
 from dr_core.db.types import str_enum
 
 if TYPE_CHECKING:
-    from dr_core.db.models.project import ResearchProject, ResearchQuestion, ResearchRun
+    from dr_core.db.models.project import OutlineSectionRecord, ResearchProject, ResearchRun
     from dr_core.db.models.source import Source, SourceVersion
 
 
@@ -43,8 +43,8 @@ class EvidenceItem(UUIDPrimaryKeyMixin, Base):
         ForeignKey("research_runs.id", ondelete="CASCADE"),
         nullable=False,
     )
-    research_question_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("research_questions.id", ondelete="SET NULL"),
+    outline_section_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("outline_sections.id", ondelete="SET NULL"),
     )
     source_id: Mapped[UUID] = mapped_column(
         ForeignKey("sources.id", ondelete="CASCADE"),
@@ -85,7 +85,7 @@ class EvidenceItem(UUIDPrimaryKeyMixin, Base):
 
     project: Mapped[ResearchProject] = relationship(back_populates="evidence_items")
     run: Mapped[ResearchRun] = relationship()
-    research_question: Mapped[ResearchQuestion | None] = relationship()
+    outline_section: Mapped[OutlineSectionRecord | None] = relationship()
     source: Mapped[Source] = relationship()
     source_version: Mapped[SourceVersion] = relationship(back_populates="evidence_items")
     claim_links: Mapped[list[ClaimEvidence]] = relationship(
@@ -102,8 +102,8 @@ class EvidenceItem(UUIDPrimaryKeyMixin, Base):
             "run_id",
         ),
         Index(
-            "ix_evidence_items_research_question_id",
-            "research_question_id",
+            "ix_evidence_items_outline_section_id",
+            "outline_section_id",
         ),
         Index("ix_evidence_items_source_version_id", "source_version_id"),
     )

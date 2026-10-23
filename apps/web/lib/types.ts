@@ -3,12 +3,23 @@ export type Locale = "zh" | "en";
 export type ProjectLanguage = "zh" | "en";
 export type ResearchDepth = "quick" | "standard" | "deep";
 export type CitationStyle = "apa" | "ieee" | "chicago" | "mla";
+export type ArticleType =
+  | "explainer"
+  | "mechanism_analysis"
+  | "investigative_research"
+  | "case_study"
+  | "comparative_analysis"
+  | "argument_critique"
+  | "trend_scenario"
+  | "decision_strategy"
+  | "historical_development";
 
 export type Project = {
   id: string;
   title: string;
   topic: string;
   research_scope: string | null;
+  article_type: ArticleType;
   language: ProjectLanguage;
   target_audience: string | null;
   research_depth: ResearchDepth;
@@ -82,21 +93,22 @@ export type Approval = {
 
 export type ApprovalListResponse = { items: Approval[] };
 
-export type ResearchQuestion = {
+export type OutlineSectionSummary = {
   id: string;
-  question: string;
+  title: string;
+  role: string;
+  purpose: string;
+  search_terms: string[];
+  target_words: number | null;
   priority: number;
-  parent_id: string | null;
   coverage_status: string;
   created_at: string;
 };
 
-export type QuestionListResponse = { items: ResearchQuestion[] };
-
 export type RunOverview = {
   run: Run;
   project: Project;
-  questions: ResearchQuestion[];
+  outline_sections: OutlineSectionSummary[];
   counts: {
     sources: number;
     evidence: number;
@@ -121,8 +133,8 @@ export type RunOverview = {
     rounds: number;
   };
   gaps: {
-    question_id: string;
-    question: string;
+    section_id: string;
+    section_title: string;
     severity: string;
     coverage_status: string;
   }[];
@@ -158,7 +170,7 @@ export type Source = {
   publisher: string | null;
   metadata: Record<string, unknown>;
   versions: SourceVersion[];
-  question_ids: string[];
+  section_ids: string[];
   evidence_count: number;
   fetch_status: string | null;
 };
@@ -185,7 +197,7 @@ export type Evidence = {
   id: string;
   source_id: string;
   source_version_id: string;
-  research_question_id: string | null;
+  outline_section_id: string | null;
   evidence_type: string;
   claim_summary: string;
   quoted_text: string;
@@ -211,15 +223,23 @@ export type EvidenceListResponse = {
 };
 
 export type OutlineSection = {
+  section_id: string;
   index: number;
+  role:
+    | "introduction"
+    | "body"
+    | "contradictions"
+    | "limitations"
+    | "conclusion";
   title: string;
   purpose: string;
-  question_id: string | null;
+  search_terms: string[];
   key_claims: string[];
   evidence_ids: string[];
   support_evidence_ids: string[];
   refute_evidence_ids: string[];
   target_words: number;
+  coverage_status: string;
   status: "planned" | "drafted" | "verified";
 };
 
@@ -340,20 +360,4 @@ export type ExportResponse = {
   citation_audit: CitationAuditSummary;
   reference_audit: ReferenceAudit;
   section_count: number;
-};
-
-export type ResearchPlanQuestion = {
-  question_id?: string | null;
-  question: string;
-  priority: number;
-  parent_id?: string | null;
-  coverage_status?: string;
-  search_terms?: string[];
-};
-
-export type ResearchPlan = {
-  version: number;
-  summary: string;
-  questions: ResearchPlanQuestion[];
-  scope_notes: string | null;
 };

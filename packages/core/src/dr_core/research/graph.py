@@ -31,26 +31,22 @@ from dr_core.research.context import (
 from dr_core.research.nodes import (
     analyze_evidence,
     analyze_gaps,
+    attach_evidence,
     await_outline_approval,
-    await_plan_approval,
+    evidence_agent,
     extract_evidence,
     fetch_full_text,
     finalize_report,
-    generate_outline,
     generate_queries,
     normalize_sources,
     parse_brief,
     parse_documents,
-    plan_research,
     polish_article,
     rank_sources,
     research_agent,
-    research_recon,
     revise_search_plan,
-    route_after_brief,
     route_after_gaps,
     route_after_outline_approval,
-    route_after_plan_approval,
     search_sources,
     verify_citations,
     verify_claims,
@@ -102,115 +98,44 @@ def _traced_node(ctx: ResearchContext, name: str, node):
 
 def build_research_graph(ctx: ResearchContext, checkpointer: PostgresSaver):
     builder = StateGraph(ResearchState)
-    builder.add_node(
-        "parse_brief",
-        _traced_node(ctx, "parse_brief", parse_brief(ctx)),
-    )
-    builder.add_node(
-        "research_agent",
-        _traced_node(ctx, "research_agent", research_agent(ctx)),
-    )
-    builder.add_node(
-        "research_recon",
-        _traced_node(ctx, "research_recon", research_recon(ctx)),
-    )
-    builder.add_node(
-        "plan_research",
-        _traced_node(ctx, "plan_research", plan_research(ctx)),
-    )
-    builder.add_node(
-        "await_plan_approval",
-        _traced_node(ctx, "await_plan_approval", await_plan_approval(ctx)),
-    )
-    builder.add_node(
-        "generate_queries",
-        _traced_node(ctx, "generate_queries", generate_queries(ctx)),
-    )
-    builder.add_node(
-        "search_sources",
-        _traced_node(ctx, "search_sources", search_sources(ctx)),
-    )
-    builder.add_node(
-        "normalize_sources",
-        _traced_node(ctx, "normalize_sources", normalize_sources(ctx)),
-    )
-    builder.add_node(
-        "rank_sources",
-        _traced_node(ctx, "rank_sources", rank_sources(ctx)),
-    )
-    builder.add_node(
-        "fetch_full_text",
-        _traced_node(ctx, "fetch_full_text", fetch_full_text(ctx)),
-    )
-    builder.add_node(
-        "parse_documents",
-        _traced_node(ctx, "parse_documents", parse_documents(ctx)),
-    )
-    builder.add_node(
-        "extract_evidence",
-        _traced_node(ctx, "extract_evidence", extract_evidence(ctx)),
-    )
-    builder.add_node(
-        "analyze_evidence",
-        _traced_node(ctx, "analyze_evidence", analyze_evidence(ctx)),
-    )
-    builder.add_node(
-        "analyze_gaps",
-        _traced_node(ctx, "analyze_gaps", analyze_gaps(ctx)),
-    )
-    builder.add_node(
-        "revise_search_plan",
-        _traced_node(ctx, "revise_search_plan", revise_search_plan(ctx)),
-    )
-    builder.add_node(
-        "generate_outline",
-        _traced_node(ctx, "generate_outline", generate_outline(ctx)),
-    )
-    builder.add_node(
-        "await_outline_approval",
-        _traced_node(ctx, "await_outline_approval", await_outline_approval(ctx)),
-    )
-    builder.add_node(
-        "write_sections",
-        _traced_node(ctx, "write_sections", write_sections(ctx)),
-    )
-    builder.add_node(
-        "polish_article",
-        _traced_node(ctx, "polish_article", polish_article(ctx)),
-    )
-    builder.add_node(
-        "verify_claims",
-        _traced_node(ctx, "verify_claims", verify_claims(ctx)),
-    )
-    builder.add_node(
-        "verify_citations",
-        _traced_node(ctx, "verify_citations", verify_citations(ctx)),
-    )
-    builder.add_node(
-        "finalize_report",
-        _traced_node(ctx, "finalize_report", finalize_report(ctx)),
-    )
+    factories = {
+        "parse_brief": parse_brief,
+        "research_agent": research_agent,
+        "await_outline_approval": await_outline_approval,
+        "evidence_agent": evidence_agent,
+        "generate_queries": generate_queries,
+        "search_sources": search_sources,
+        "normalize_sources": normalize_sources,
+        "rank_sources": rank_sources,
+        "fetch_full_text": fetch_full_text,
+        "parse_documents": parse_documents,
+        "extract_evidence": extract_evidence,
+        "analyze_evidence": analyze_evidence,
+        "analyze_gaps": analyze_gaps,
+        "revise_search_plan": revise_search_plan,
+        "attach_evidence": attach_evidence,
+        "write_sections": write_sections,
+        "polish_article": polish_article,
+        "verify_claims": verify_claims,
+        "verify_citations": verify_citations,
+        "finalize_report": finalize_report,
+    }
+    for name, factory in factories.items():
+        builder.add_node(name, _traced_node(ctx, name, factory(ctx)))
 
     builder.add_edge(START, "parse_brief")
+    builder.add_edge("parse_brief", "research_agent")
+    builder.add_edge("research_agent", "await_outline_approval")
     builder.add_conditional_edges(
-        "parse_brief",
-        route_after_brief(ctx),
+        "await_outline_approval",
+        route_after_outline_approval(ctx),
         {
             "research_agent": "research_agent",
-            "research_recon": "research_recon",
-        },
-    )
-    builder.add_edge("research_agent", "await_plan_approval")
-    builder.add_edge("research_recon", "plan_research")
-    builder.add_edge("plan_research", "await_plan_approval")
-    builder.add_conditional_edges(
-        "await_plan_approval",
-        route_after_plan_approval,
-        {
-            "plan_research": "plan_research",
+            "evidence_agent": "evidence_agent",
             "generate_queries": "generate_queries",
         },
     )
+    builder.add_edge("evidence_agent", "normalize_sources")
     builder.add_edge("generate_queries", "search_sources")
     builder.add_edge("search_sources", "normalize_sources")
     builder.add_edge("normalize_sources", "rank_sources")
@@ -221,22 +146,15 @@ def build_research_graph(ctx: ResearchContext, checkpointer: PostgresSaver):
     builder.add_edge("analyze_evidence", "analyze_gaps")
     builder.add_conditional_edges(
         "analyze_gaps",
-        route_after_gaps,
+        route_after_gaps(ctx),
         {
+            "evidence_agent": "evidence_agent",
             "revise_search_plan": "revise_search_plan",
-            "generate_outline": "generate_outline",
+            "attach_evidence": "attach_evidence",
         },
     )
     builder.add_edge("revise_search_plan", "search_sources")
-    builder.add_edge("generate_outline", "await_outline_approval")
-    builder.add_conditional_edges(
-        "await_outline_approval",
-        route_after_outline_approval,
-        {
-            "generate_outline": "generate_outline",
-            "write_sections": "write_sections",
-        },
-    )
+    builder.add_edge("attach_evidence", "write_sections")
     builder.add_edge("write_sections", "polish_article")
     builder.add_edge("polish_article", "verify_claims")
     builder.add_edge("verify_claims", "verify_citations")

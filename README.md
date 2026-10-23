@@ -4,7 +4,7 @@ English | [简体中文](README.zh-CN.md)
 
 **A deep research writing agent with a traceable evidence chain**
 
-It researches a topic, reads the source material, extracts evidence, detects gaps, builds an outline, writes section by section, and verifies every claim and citation in the final text.
+A planning agent researches the topic, reads the source material, and proposes an article outline. After one human approval, an evidence agent collects material within the frozen outline sections, and deterministic writing and verification complete the article.
 
 ---
 
@@ -12,23 +12,41 @@ Enforge is not a "type a topic, get an article" tool. It breaks research into in
 
 - **Citations come only from the database**: every `[S1]` marker in the text maps to an ingested source, and references are generated from source metadata in APA / IEEE / Chicago / MLA format. No invented bibliography.
 - **Claim-by-claim verification**: factual, quantitative, causal, and comparative claims are extracted and checked against citation mapping, source location, numbers and years, and counter-evidence, producing `SUPPORTED` / `PARTIAL` / `CONTRADICTED` / `UNSUPPORTED` / `UNVERIFIABLE`.
-- **Gap-driven, not a fixed pipeline**: when question coverage is insufficient, the system runs additional searches; when rounds or budget run out, the limitations go into the report instead of pretending the work is complete.
-- **Human in the loop**: the research plan and article outline pause for human approval, editing, or rejection by default, and the workflow resumes from a PostgreSQL checkpoint.
+- **Gap-driven, not a fixed pipeline**: when outline-section coverage is insufficient, the system runs additional searches; when rounds or budget run out, the limitations go into the report instead of pretending the work is complete.
+- **Outline is the contract**: the approved outline is the single structural authority. Every section has a stable ID, role, search terms, and word budget; evidence, queries, writing, and verification all link back to those IDs, so a run can be inspected end to end.
+- **Human in the loop**: the article outline pauses for approval, editing, or rejection by default, and the workflow resumes from a PostgreSQL checkpoint.
 - **Works offline**: with no API key configured, deterministic mock providers run the full workflow, the entire test suite, and the evaluation set. Real search, crawling, and models can be enabled individually.
 
 ## Capabilities
 
 ### Research workflow
 
-A LangGraph workflow with 19 business nodes and 2 approval nodes, covering brief parsing, research agent / upfront recon, planning, search, normalization, ranking, full-text fetching, document parsing, evidence extraction, evidence analysis, gap analysis, follow-up search, outlining, writing, polishing, claim verification, citation verification, and finalization.
+A LangGraph workflow with 19 business nodes and one outline-approval gate, covering brief parsing, the planning agent, outline approval, the evidence agent, query generation, search, normalization, ranking, full-text fetching, document parsing, evidence extraction and analysis, gap analysis, follow-up retrieval, evidence attachment, writing, polishing, claim verification, citation verification, and finalization.
 
-- Optional research agent before planning: it searches from several angles, reads and fetches sources, follows references and citing works (`A → B → C`), and then commits to questions and a provisional outline grounded in what it actually found. Every source goes through normal ingestion and the agent cannot supply citations.
-- The provisional outline only supplies the title and purpose of question-based body sections; the final outline, evidence assignment, citation mapping, references, and verification stay deterministic. Invalid agent output falls back to the deterministic plan and records the limitation.
+- **Planning agent (before approval)**: it searches from several angles, reads and fetches sources, follows references, citing works, and names it discovers (`A → B → C`), and then commits to an outline grounded in what it actually found. Every source goes through normal ingestion, and the agent cannot supply citations.
+- **Evidence agent (after approval)**: it works inside the approved section IDs, chooses new search terms or fetches more material, and attaches evidence only to those sections. It cannot rename, reorder, add, or remove sections.
+- **Deterministic core**: with the agents disabled or unavailable, a one-shot model outline or the deterministic outline template is used, deterministic queries drive retrieval, and writing, citation mapping, references, and verification always run through the same traceable code path.
+- The outline has no fixed section count; the planning agent chooses the number of body sections from the target word budget. The introduction, optional contradictions, optional limitations, and conclusion roles are normalized by the system.
+- Nine article types are chosen at project creation. Each supplies bilingual intent, outline focus, research focus, and review focus to the prompts without hard-coding a fixed template.
 - Agent rounds, tool calls, searches, sources, page fetches, and citation lookups each have their own cap; every tool call is surfaced as a progress event with its query, result count, and source title.
-- Every later model call (planning, outlining, each writing section, polishing, and claim review) reports a started/completed/failed event with its section title, token usage, and duration.
-- The conditional loop is driven by evidence coverage in the database; when the search-round or budget limit is reached, the run continues to writing and records the limitation.
+- Every model call (outline planning, each agent round, each writing section, polishing, and claim review) reports a started/completed/failed event with its section title, token usage, and duration.
+- The conditional loop is driven by evidence coverage per outline section; when the search-round or budget limit is reached, the run continues to writing and records the limitation.
 - Every node's side effects have a database unique constraint or idempotency key, so task retries and worker restarts never write duplicates.
 - A stable thread ID plus PostgreSQL checkpoints means approval resumption, task retries, and duplicate deliveries all continue from the latest checkpoint.
+
+### Article types
+
+| Type | Emphasis |
+|---|---|
+| Explainer | Define the subject, how it works, and why it matters |
+| Mechanism Analysis | Explain the mechanism behind a phenomenon and why it persists |
+| Investigative Research | Map the facts, evidence, and disputes around a complex issue |
+| Case Study | Examine one case's course, causes, and outcome |
+| Comparative Analysis | Compare options under shared criteria and assess fit |
+| Argument & Critique | Test a claim and examine where popular explanations fail |
+| Trend & Scenario Analysis | Analyze change and plausible future scenarios |
+| Decision & Strategy | Recommend action for a situation and justify it |
+| Historical Development | Trace how something reached its present form |
 
 ### Evidence layer and hybrid retrieval
 
@@ -36,14 +54,14 @@ A LangGraph workflow with 19 business nodes and 2 approval nodes, covering brief
 - Keyword search over `to_tsvector('simple', text)` plus pgvector HNSW vector search, fused with RRF, with filters for project, source type, date, and source version.
 - When vectors are unavailable, retrieval degrades to keyword search instead of failing the research run.
 - Evidence stores its source, source version, quotation, surrounding context, and a `locator` (page / section / paragraph / character range); verification status only says whether the quotation can be located again, not whether its content is true.
-- The evidence matrix reports, per research question, the main conclusion, supporting and refuting evidence, independent source count, and itemized reasons for source quality (recency, methodological transparency, retraction status) and evidence quality (directness, context, independence, applicability). Counter-evidence is never filtered out.
+- The evidence matrix reports, per outline section, the main conclusion, supporting and refuting evidence, independent source count, and itemized reasons for source quality (recency, methodological transparency, retraction status) and evidence quality (directness, context, independence, applicability). Counter-evidence is never filtered out.
 - Preprint revisions (`..._v1` / `..._v2`, arXiv `2101.00001v2`) collapse into one source during normalization, so version copies do not inflate the independent-source count or the reference list.
 - Full-text fetching and remote scraping validate scheme, host, port, and literal IPs locally, but leave domain resolution to the remote fetch provider: a local proxy fake-IP DNS answer can no longer reject every public URL. Hostname blocklists and private-IP literal checks still apply.
-- The planning prompt requires every `search_terms` entry to name the actual subject and to pair history/origin questions with terms such as history, timeline, or milestones, instead of searching bare words like “accessibility”.
+- The planning prompt requires every `search_terms` entry to name the actual subject and to pair history/origin sections with terms such as history, timeline, or milestones, instead of searching bare words like “accessibility”.
 
 ### Writing and verification
 
-- Argumentative outline: every section has a purpose, an associated research question, key claims, supporting and opposing evidence, a target word count, and a status. A standalone contradictions section is included only when the outline model judges that disagreements cut across questions; refuting evidence otherwise stays inside its question section.
+- Argumentative outline: every section has a stable ID, role, purpose, search terms, target word count, and coverage status. A standalone contradictions section is included only when the planning model judges that disagreements cut across sections; refuting evidence otherwise stays inside its own section.
 - Continuous prose per section instead of a list of evidence; the introduction frames the tension and through-line, and the conclusion only synthesizes.
 - Optional model outlining, model writing, and article polishing. Every output passes strict structural validation (citation-marker set, numeric consistency, no reference section, and more) and falls back to deterministic writing if any check fails.
 - The article's limitations section keeps only evidence-relevant caveats: budget caps, retrieval degradation, model fallbacks, missing full text, and source-count audit notes stay in the run workspace instead of leaking into the finished article.
@@ -57,9 +75,9 @@ A Next.js 16 + React 19 single-page research workspace with Chinese/English UI a
 
 | Page | Contents |
 |---|---|
-| Project list / creation | Topic, scope, language, depth, target length, date range, citation style, audience, and budget |
+| Project list / creation | Topic, article type, scope, language, depth, target length, date range, citation style, audience, and budget |
 | Run overview | Phase progress, live SSE events, search and source status, evidence/claim/section metrics, cost, cancellation |
-| Approvals | Review, edit, approve, or reject the research plan and outline; approval history is preserved |
+| Approvals | Review, edit, approve, or reject the outline; approval history is preserved |
 | Sources / evidence | Fetch and parse status, evidence filters, original-text locators, supporting/refuting relations |
 | Article | Table of contents, editing that creates new versions, click-through citations to evidence, re-verification and export |
 
@@ -135,7 +153,7 @@ docker compose down                  # stop while keeping data
 # 1. Create a project
 PROJECT_ID=$(curl -s -X POST http://localhost:8000/api/v1/projects \
   -H 'Content-Type: application/json' \
-  -d '{"title":"Example research","topic":"Traceable evidence chains","language":"en"}' \
+  -d '{"title":"Example research","topic":"Traceable evidence chains","article_type":"explainer","language":"en"}' \
   | python -c 'import json,sys; print(json.load(sys.stdin)["id"])')
 
 # 2. Start a run (Idempotency-Key supported; repeats return the same run)
@@ -148,7 +166,7 @@ RUN_ID=$(curl -s -X POST "http://localhost:8000/api/v1/projects/$PROJECT_ID/runs
 curl -N "http://localhost:8000/api/v1/runs/$RUN_ID/events/stream" -H 'Last-Event-ID: 0'
 ```
 
-The run first pauses for research-plan approval:
+The run first pauses for outline approval. The pending approval contains the proposed sections, their IDs, roles, search terms, and word budgets:
 
 ```bash
 curl -s "http://localhost:8000/api/v1/runs/$RUN_ID/approvals?status=pending"
@@ -156,7 +174,7 @@ curl -s -X POST "http://localhost:8000/api/v1/runs/$RUN_ID/approvals/$APPROVAL_I
   -H 'Content-Type: application/json' -d '{"decision":"approved"}'
 ```
 
-Search, fetching, evidence, outline approval, writing, and verification follow. Once the run is finalized, five artifact types are available for download:
+After approval, the evidence agent collects material inside those sections, followed by deterministic writing and verification. Once the run is finalized, five artifact types are available for download:
 
 ```bash
 curl -s "http://localhost:8000/api/v1/runs/$RUN_ID/artifacts"
@@ -183,17 +201,21 @@ See `/docs` for the full list.
 ## Research workflow
 
 ```text
-queued → planning ⇄ plan approval → searching → processing_sources → building_evidence
-              ▲                                      │
-              └──────── gap-driven search ◀──────────┘
-                                                     │ (no gaps or budget exhausted)
-                                                     ▼
-                        outline approval → writing → polish → verifying → completed
+queued → planning → outline approval → searching → processing_sources → building_evidence
+                           ▲                              │
+                           │                              ├── gap-driven evidence agent ──┐
+                           │                              │                              │
+                           └──── rejected with feedback ◀─┘                              │
+                                                                                         │
+                                          (no gaps or budget exhausted) ◀────────────────┘
+                                                          │
+                                                          ▼
+                                    writing → polish → verifying → completed
 
 any non-terminal state → failed / cancelled
 ```
 
-- **Approvals**: approving, rejecting, or editing actually changes the downstream workflow; rejection re-plans with feedback, and edited content takes effect directly.
+- **Approvals**: exactly one outline approval. Approving freezes the section IDs; editing changes the outline directly; rejection sends feedback back to the planning agent. Approval history is preserved.
 - **Cancellation**: queued and awaiting-approval runs stop immediately; running tasks check the cancellation flag at node boundaries and inside fetch/parse loops, with Celery revoke used only for acceleration.
 - **Budgets**: search rounds, query count, source count, fetch count, evidence count, per-node timeout, and token/cost budgets are all configurable. A budget stop does not fail the run; the report states the limitation.
 - **Failure semantics**: transient errors (timeouts, momentary database/storage failures) go to Celery with exponential backoff; permanent errors fail immediately with a readable `error_summary`.
@@ -207,17 +229,14 @@ See [`.env.example`](.env.example) for every variable and its default. The most 
 | `RESEARCH_PROVIDER_MODE` | `auto` | `auto` / `real` / `mock`; falls back to mock when no real provider is configured |
 | `OPENAI_API_KEY` | empty | When set, registers an OpenAI-compatible LLM; empty means fully offline |
 | `OPENAI_BASE_URL` / `OPENAI_MODEL` | OpenAI / `gpt-4o-mini` | Can point to any compatible gateway (vLLM, Ollama, etc.) |
-| `RESEARCH_LLM_PLANNING_ENABLED` | `false` | Let the model generate research questions |
-| `RESEARCH_LLM_OUTLINE_ENABLED` | `false` | Let the model order and title body sections |
+| `RESEARCH_LLM_OUTLINE_ENABLED` | `false` | One-shot model outline when the tool-using planning agent is off |
 | `RESEARCH_LLM_WRITING_ENABLED` | `false` | Model writes section by section (may request one bounded follow-up search) |
 | `RESEARCH_LLM_POLISH_ENABLED` | `false` | Whole-article language polishing |
-| `RESEARCH_LLM_RECON_ENABLED` | `false` | Bounded tool recon before planning (requires planning to be enabled) |
-| `RESEARCH_AGENT_ENABLED` | `false` | Tool-using research agent before planning; requires a tool-calling LLM and an enabled search provider, otherwise the run uses recon and deterministic planning |
+| `RESEARCH_AGENT_ENABLED` | `false` | Tool-using planning agent before approval and evidence agent after approval; requires a tool-calling LLM and an enabled search provider, otherwise the run uses the deterministic outline and retrieval path |
 | `RESEARCH_AGENT_MAX_ROUNDS` / `RESEARCH_AGENT_MAX_TOOL_CALLS` | `6` / `18` | Model rounds and total tool calls per agent run |
 | `RESEARCH_AGENT_MAX_SEARCHES` / `RESEARCH_AGENT_MAX_SOURCES` / `RESEARCH_AGENT_MAX_FETCHES` / `RESEARCH_AGENT_MAX_CITATION_CALLS` | `12` / `16` / `6` / `4` | Per-run caps on indexed searches, stored sources, page fetches, and reference/citation lookups |
 | `RESEARCH_CLAIM_LLM_REVIEW` | `false` | Conservative model review of failed claims; can only downgrade |
-| `RESEARCH_PLAN_APPROVAL_REQUIRED` | `true` | Plan approval; disable for fully automatic runs |
-| `RESEARCH_OUTLINE_APPROVAL_REQUIRED` | `true` | Outline approval |
+| `RESEARCH_OUTLINE_APPROVAL_REQUIRED` | `true` | Single outline approval; disable for fully automatic runs |
 | `RESEARCH_MAX_SEARCH_ROUNDS` | `3` | Maximum search rounds |
 | `RESEARCH_MAX_SOURCES` / `RESEARCH_MAX_EVIDENCE` | `20` / `40` | Source and evidence limits |
 | `RESEARCH_TOKEN_BUDGET` / `RESEARCH_COST_BUDGET_USD` | `0` | Budgets; 0 means unlimited |
@@ -240,7 +259,7 @@ Changing the public API address `NEXT_PUBLIC_API_BASE_URL` requires rebuilding `
 Tests are fully isolated from real keys: `docker-compose.test.yml` forces `RESEARCH_PROVIDER_MODE=mock` and clears every provider key and LLM switch, so even a `.env` with real keys never reaches the network or consumes quota.
 
 ```bash
-# Unit + integration + evaluation (currently 335 passed)
+# Unit + integration + evaluation (currently 324 passed)
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -272,7 +291,7 @@ docker compose exec api python -m dr_core.maintenance   # file-record reconcilia
 - No real embedding service is wired in yet. Offline runs use deterministic term-hash vectors, so semantic recall is limited; `auto` mode falls back to keyword search.
 - Local parsing does not include OCR; scanned or encrypted PDFs fail explicitly, and table extraction is best-effort.
 - The quality evaluation set uses mock providers, so its metrics describe offline behavior; re-run it after connecting real services.
-- The research agent needs an OpenAI-compatible tool-calling model and a real search provider. Offline and mock runs use recon plus deterministic planning; the agent's questions, summary, and provisional outline are validated model output and never become citation authority.
+- The planning and evidence agents need an OpenAI-compatible tool-calling model and a real search provider. Offline and mock runs use the one-shot model outline (if enabled) or the deterministic template plus deterministic retrieval; agent output is always validated and never becomes citation authority.
 - Citation chasing depends on academic metadata: DOI-less or unstructured references are returned to the agent as leads, not ingested. Agent searches appear as run events rather than search-query rows.
-- The provisional outline titles and frames one body section per research question; it does not let the agent add sources or claims outside the stored evidence.
+- The approved outline is authoritative: agents cannot add sources or claims outside stored evidence, and the evidence agent cannot alter section structure.
 - Cancellation is cooperative. An in-flight provider HTTP request is not forcibly aborted; it is bounded by timeouts.

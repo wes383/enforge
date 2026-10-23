@@ -49,11 +49,88 @@ export function runStatusVariant(status: string): BadgeVariant {
   return RUN_STATUS[status]?.variant ?? "secondary";
 }
 
+export const ARTICLE_TYPES: Record<
+  string,
+  { label: Copy; description: Copy }
+> = {
+  explainer: {
+    label: { zh: "解释型文章", en: "Explainer" },
+    description: {
+      zh: "解释概念、运作方式与重要性",
+      en: "Explain a concept, how it works, and why it matters",
+    },
+  },
+  mechanism_analysis: {
+    label: { zh: "机制分析", en: "Mechanism Analysis" },
+    description: {
+      zh: "分析现象背后的机制与持续原因",
+      en: "Analyze the mechanisms behind a phenomenon and why it persists",
+    },
+  },
+  investigative_research: {
+    label: { zh: "调查与深度研究", en: "Investigative Research" },
+    description: {
+      zh: "梳理复杂议题的事实、证据与争议",
+      en: "Map the facts, evidence, and disputes around a complex issue",
+    },
+  },
+  case_study: {
+    label: { zh: "案例研究", en: "Case Study" },
+    description: {
+      zh: "复盘具体案例的经过、原因与结果",
+      en: "Examine what happened in a specific case, why, and with what outcome",
+    },
+  },
+  comparative_analysis: {
+    label: { zh: "比较与评估", en: "Comparative Analysis" },
+    description: {
+      zh: "在共同标准下比较对象并给出评估",
+      en: "Compare options against shared criteria and assess fit",
+    },
+  },
+  argument_critique: {
+    label: { zh: "观点与批判性评论", en: "Argument & Critique" },
+    description: {
+      zh: "检验观点是否成立，检讨流行解释",
+      en: "Test a claim and examine where popular explanations fall short",
+    },
+  },
+  trend_scenario: {
+    label: { zh: "趋势与情景分析", en: "Trend & Scenario Analysis" },
+    description: {
+      zh: "分析领域变化与可能的未来情景",
+      en: "Analyze what is changing and plausible future scenarios",
+    },
+  },
+  decision_strategy: {
+    label: { zh: "决策与策略报告", en: "Decision & Strategy" },
+    description: {
+      zh: "面向具体处境提出行动方案与理由",
+      en: "Recommend actions for a situation and explain why",
+    },
+  },
+  historical_development: {
+    label: { zh: "历史演进与发展史", en: "Historical Development" },
+    description: {
+      zh: "追溯事物的发展脉络与演变过程",
+      en: "Trace how something developed into its present form",
+    },
+  },
+};
+
+export function articleTypeLabel(type: string, locale: Locale): string {
+  return label(ARTICLE_TYPES[type]?.label, locale) || type;
+}
+
+export function articleTypeDescription(type: string, locale: Locale): string {
+  return label(ARTICLE_TYPES[type]?.description, locale) || "";
+}
+
 export const STAGES: { key: string; statuses: string[]; label: Copy }[] = [
   {
     key: "planning",
     statuses: ["queued", "planning"],
-    label: { zh: "研究规划", en: "Research plan" },
+    label: { zh: "提纲规划", en: "Outline planning" },
   },
   {
     key: "searching",

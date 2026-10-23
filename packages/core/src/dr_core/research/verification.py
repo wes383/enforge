@@ -9,6 +9,7 @@ from dr_core.db.enums import (
     CitationIssueType,
     ClaimVerificationStatus,
     ParserStatus,
+    SectionRole,
 )
 from dr_core.db.models import DocumentChunk, SourceVersion
 from dr_core.db.repositories import (
@@ -37,22 +38,22 @@ from dr_core.schemas import (
 
 logger = logging.getLogger(__name__)
 
+# Sections that describe the state of the evidence rather than making claims
+# about it may legitimately carry no citation markers.
+_UNCITED_SECTION_ROLES = frozenset(
+    {SectionRole.CONTRADICTIONS, SectionRole.LIMITATIONS}
+)
 
-def audit_section(section, sources: dict[UUID, Any]) -> CitationAuditCreate:
+
+def audit_section(
+    section,
+    sources: dict[UUID, Any],
+    *,
+    role: SectionRole | None = None,
+) -> CitationAuditCreate:
     markers = citation_markers(section.content_markdown)
     citation_map = dict(section.citation_map or {})
-    exempt = any(
-        word in section.title.casefold()
-        for word in (
-            "局限",
-            "矛盾",
-            "limitation",
-            "contradiction",
-            "approval feedback",
-            "审批反馈",
-        )
-    )
-    if not markers and not exempt:
+    if not markers and role not in _UNCITED_SECTION_ROLES:
         return CitationAuditCreate(
             draft_section_id=section.id,
             status=CitationAuditStatus.WARNING,

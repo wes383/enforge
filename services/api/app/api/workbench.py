@@ -16,10 +16,9 @@ from app.api.schemas import (
     EvidenceResponse,
     EventResponse,
     ExportResponse,
+    OutlineSectionResponse,
     OutlineWorkspaceResponse,
     ProjectResponse,
-    QuestionListResponse,
-    ResearchQuestionResponse,
     RunListResponse,
     RunOverviewResponse,
     RunResponse,
@@ -49,8 +48,8 @@ from dr_core.db.repositories import (
     DraftSectionRepository,
     EvidenceRepository,
     OutlineRepository,
+    OutlineSectionRepository,
     ProjectRepository,
-    ResearchQuestionRepository,
     RunApprovalRepository,
     RunEventRepository,
     RunRepository,
@@ -189,7 +188,7 @@ def list_project_runs(
 @router.get("/runs/{run_id}/overview", response_model=RunOverviewResponse)
 def get_run_overview(run_id: UUID, session: SessionDep) -> RunOverviewResponse:
     run, project = _run_and_project(session, run_id)
-    questions = ResearchQuestionRepository(session).list_for_run(
+    outline_sections = OutlineSectionRepository(session).list_for_run(
         run.project_id,
         run.id,
     )
@@ -266,19 +265,19 @@ def get_run_overview(run_id: UUID, session: SessionDep) -> RunOverviewResponse:
     )
     gaps = []
     if evidence:
-        for question in questions:
-            if question.coverage_status.value == "covered":
+        for section in outline_sections:
+            if section.coverage_status.value == "covered":
                 continue
             gaps.append(
                 {
-                    "question_id": str(question.id),
-                    "question": question.question,
+                    "section_id": str(section.id),
+                    "section_title": section.title,
                     "severity": (
                         "high"
-                        if question.coverage_status.value == "insufficient"
+                        if section.coverage_status.value == "insufficient"
                         else "medium"
                     ),
-                    "coverage_status": question.coverage_status.value,
+                    "coverage_status": section.coverage_status.value,
                 }
             )
     claims = ClaimRepository(session).list_for_run(run.project_id, run.id)
@@ -290,16 +289,19 @@ def get_run_overview(run_id: UUID, session: SessionDep) -> RunOverviewResponse:
     return RunOverviewResponse(
         run=RunResponse.model_validate(run),
         project=ProjectResponse.model_validate(project),
-        questions=[
-            ResearchQuestionResponse(
+        outline_sections=[
+            OutlineSectionResponse(
                 id=item.id,
-                question=item.question,
+                title=item.title,
+                role=item.role.value,
+                purpose=item.purpose,
+                search_terms=list(item.search_terms or []),
+                target_words=item.target_words,
                 priority=item.priority,
-                parent_id=item.parent_id,
                 coverage_status=item.coverage_status.value,
                 created_at=item.created_at,
             )
-            for item in questions
+            for item in outline_sections
         ],
         counts={
             "sources": len(sources),
@@ -315,34 +317,6 @@ def get_run_overview(run_id: UUID, session: SessionDep) -> RunOverviewResponse:
         latest_events=[
             EventResponse.model_validate(item) for item in events[-20:]
         ],
-    )
-
-
-@router.get(
-    "/runs/{run_id}/questions",
-    response_model=QuestionListResponse,
-)
-def list_run_questions(
-    run_id: UUID,
-    session: SessionDep,
-) -> QuestionListResponse:
-    run, _ = _run_and_project(session, run_id)
-    questions = ResearchQuestionRepository(session).list_for_run(
-        run.project_id,
-        run.id,
-    )
-    return QuestionListResponse(
-        items=[
-            ResearchQuestionResponse(
-                id=item.id,
-                question=item.question,
-                priority=item.priority,
-                parent_id=item.parent_id,
-                coverage_status=item.coverage_status.value,
-                created_at=item.created_at,
-            )
-            for item in questions
-        ]
     )
 
 
@@ -382,11 +356,11 @@ def list_run_sources(run_id: UUID, session: SessionDep) -> SourceListResponse:
                     _version_response(item)
                     for item in versions_by_source.get(source.id, [])
                 ],
-                question_ids=list(
+                section_ids=list(
                     dict.fromkeys(
-                        str(item.research_question_id)
+                        str(item.outline_section_id)
                         for item in evidence_by_source.get(source.id, [])
-                        if item.research_question_id
+                        if item.outline_section_id
                     )
                 ),
                 evidence_count=len(evidence_by_source.get(source.id, [])),
@@ -404,7 +378,7 @@ def list_run_sources(run_id: UUID, session: SessionDep) -> SourceListResponse:
 def list_run_evidence(
     run_id: UUID,
     session: SessionDep,
-    question_id: UUID | None = None,
+    section_id: UUID | None = None,
     evidence_type: str | None = None,
     source_id: UUID | None = None,
     limit: Annotated[int, Query(ge=1, le=500)] = 200,
@@ -412,9 +386,9 @@ def list_run_evidence(
 ) -> EvidenceListResponse:
     run, _ = _run_and_project(session, run_id)
     evidence = EvidenceRepository(session).list_for_run(run.project_id, run.id)
-    if question_id is not None:
+    if section_id is not None:
         evidence = [
-            item for item in evidence if item.research_question_id == question_id
+            item for item in evidence if item.outline_section_id == section_id
         ]
     if evidence_type is not None:
         evidence = [
@@ -455,7 +429,7 @@ def list_run_evidence(
                 id=item.id,
                 source_id=item.source_id,
                 source_version_id=item.source_version_id,
-                research_question_id=item.research_question_id,
+                outline_section_id=item.outline_section_id,
                 evidence_type=item.evidence_type.value,
                 claim_summary=item.claim_summary,
                 quoted_text=item.quoted_text,

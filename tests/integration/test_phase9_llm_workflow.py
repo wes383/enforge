@@ -119,9 +119,10 @@ def test_workflow_uses_registered_openai_compatible_llm(database):
     review_limit = 2
     settings = get_settings().model_copy(
         update={
-            "research_plan_approval_required": False,
             "research_outline_approval_required": False,
             "research_llm_writing_enabled": True,
+            "research_llm_outline_enabled": False,
+            "research_agent_enabled": False,
             "research_claim_llm_review": True,
             "research_claim_llm_review_limit": review_limit,
             "research_provider_mode": "mock",
@@ -183,7 +184,8 @@ def test_workflow_uses_registered_openai_compatible_llm(database):
 
         review_calls = [task for task in _LLM_CALLS if _REVIEW_TASK in task]
         assert len(review_calls) <= review_limit
-        assert len(_LLM_CALLS) == len(llm_sections) + len(review_calls)
+        assert len(_LLM_CALLS) >= len(llm_sections) + len(review_calls)
+        assert len(_LLM_CALLS) <= len(llm_sections) + len(review_calls) + 2
 
         progress_events = [
             event

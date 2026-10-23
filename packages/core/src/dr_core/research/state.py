@@ -13,10 +13,10 @@ class ResearchState(TypedDict, total=False):
 
     brief: dict[str, Any]
     recon: dict[str, Any]
-    research_map: dict[str, Any]
-    plan: dict[str, Any]
     queries: list[dict[str, Any]]
     round_index: int
+    agent_rounds: int
+    evidence_notes: list[dict[str, str]]
     sources: list[dict[str, Any]]
     evidence_ids: list[str]
     matrix: dict[str, Any]

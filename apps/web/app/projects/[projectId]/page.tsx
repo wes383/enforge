@@ -31,6 +31,7 @@ import {
   shortId,
 } from "@/lib/format";
 import {
+  articleTypeLabel,
   runStatusLabel,
   runStatusVariant,
   TERMINAL_RUN_STATUSES,
@@ -207,8 +208,12 @@ export default function ProjectPage() {
         </Notice>
       ) : null}
 
-      <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="mt-6 grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {[
+          {
+            label: pick(locale, "文章类型", "Article type"),
+            value: articleTypeLabel(project.article_type, locale),
+          },
           {
             label: pick(locale, "语言 / 深度", "Language / depth"),
             value:
@@ -307,8 +312,8 @@ export default function ProjectPage() {
               title={pick(locale, "还没有运行记录", "No runs yet")}
               description={pick(
                 locale,
-                "启动一次研究，工作流会生成研究计划与提纲等待审批。",
-                "Start a run to generate a research plan and outline for approval.",
+                "启动一次研究，规划 agent 会先提出提纲，审批通过后再取证与写作。",
+                "Start a run: the planning agent proposes an outline, and evidence collection and writing begin after approval.",
               )}
               action={
                 <Button onClick={() => void startRun()} loading={starting}>

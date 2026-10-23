@@ -123,7 +123,7 @@ def test_progress_event_failure_does_not_hide_the_model_result():
         provider,
         broken_emit,
         stage=RunStatus.PLANNING,
-        label="Planning research questions",
+        label="Planning outline",
         key_prefix="llm:planning",
     )
 

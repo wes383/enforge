@@ -88,7 +88,7 @@ export default function ProjectsPage() {
         title={pick(locale, "研究项目", "Research projects")}
         description={pick(
           locale,
-          "从研究计划、证据检索到长篇写作与引用核验，所有产出均保留可追溯来源。",
+          "从提纲规划、证据检索到长篇写作与引用核验，所有产出均保留可追溯来源。",
           "From planning and evidence retrieval to long-form writing and citation verification, every output stays traceable.",
         )}
         actions={

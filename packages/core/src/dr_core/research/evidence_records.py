@@ -33,7 +33,7 @@ def evidence_type(sentence: str) -> EvidenceType:
 def evidence_from_hit(
     hit: Any,
     *,
-    question_id: UUID | None,
+    section_id: UUID | None,
     sentence: str,
     start: int,
     end: int,
@@ -59,7 +59,7 @@ def evidence_from_hit(
     return EvidenceCreate(
         source_id=hit.source_id,
         source_version_id=hit.source_version_id,
-        research_question_id=question_id,
+        outline_section_id=section_id,
         evidence_type=evidence_type(sentence),
         claim_summary=sentence[:1000],
         quoted_text=sentence,
@@ -77,17 +77,18 @@ def evidence_from_hit(
 def evidence_from_text(
     record: Any,
     *,
-    question_id: UUID | None,
+    section_id: UUID | None,
     text: str,
     sentence: str,
     start: int,
     end: int,
+    kind: str = "source_text",
 ) -> EvidenceCreate:
     raw = text[start:end]
     verified = " ".join(raw.split()) == sentence
     before, after = context_window(text, start, end)
     locator = {
-        "kind": "search_snippet" if not record.has_full_text else "source_text",
+        "kind": kind,
         "source_version_id": str(record.source_version_id),
         "url": record.fetch_url or record.url,
         "provider": record.provider,
@@ -100,7 +101,7 @@ def evidence_from_text(
     return EvidenceCreate(
         source_id=record.source_id,
         source_version_id=record.source_version_id,
-        research_question_id=question_id,
+        outline_section_id=section_id,
         evidence_type=evidence_type(sentence),
         claim_summary=sentence[:1000],
         quoted_text=sentence,

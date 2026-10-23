@@ -67,7 +67,6 @@ class EvaluationOptions:
 def evaluation_settings() -> Settings:
     return get_settings().model_copy(
         update={
-            "research_plan_approval_required": False,
             "research_outline_approval_required": False,
             "research_provider_mode": "mock",
             "research_max_search_rounds": 3,
@@ -162,8 +161,8 @@ def run_evaluation(
                 "all claims with evidence links. Deterministic rules, not an LLM "
                 "judge."
             ),
-            "question_coverage": (
-                "Research questions marked covered divided by all questions."
+            "section_coverage": (
+                "Outline sections marked covered divided by all sections."
             ),
             "unsupported_claim_ratio": (
                 "Claims not verified as SUPPORTED divided by all claims."

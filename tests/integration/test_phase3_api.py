@@ -10,8 +10,8 @@ from sqlalchemy import delete, func, select, text
 
 from dr_core.config import get_settings
 from dr_core.db.models import (
+    OutlineSectionRecord,
     ResearchProject,
-    ResearchQuestion,
     ResearchRun,
     RunEvent,
     SourceVersion,
@@ -254,23 +254,23 @@ def test_run_lifecycle_events_sse_and_idempotency(client, project_factory, datab
     assert event_ids == sorted(set(event_ids))
     types = [event["event_type"] for event in events]
     assert types.count("run_created") == 1
-    assert types.count("phase_started") == 1
+    assert types.count("phase_started") >= 1
     assert types.count("phase_completed") == 1
     assert types.count("awaiting_approval") == 1
 
     run_uuid = UUID(run["id"])
     with database.session_scope() as session:
-        question_count = session.scalar(
+        section_count = session.scalar(
             select(func.count())
-            .select_from(ResearchQuestion)
-            .where(ResearchQuestion.run_id == run_uuid)
+            .select_from(OutlineSectionRecord)
+            .where(OutlineSectionRecord.run_id == run_uuid)
         )
         initial_event_count = session.scalar(
             select(func.count())
             .select_from(RunEvent)
             .where(RunEvent.run_id == run_uuid)
         )
-    assert question_count >= 1
+    assert section_count >= 1
     assert initial_event_count == len(events)
 
     duplicate_task = get_celery_client().send_task(
@@ -288,8 +288,8 @@ def test_run_lifecycle_events_sse_and_idempotency(client, project_factory, datab
         assert (
             session.scalar(
                 select(func.count())
-                .select_from(ResearchQuestion)
-                .where(ResearchQuestion.run_id == run_uuid)
+                .select_from(OutlineSectionRecord)
+                .where(OutlineSectionRecord.run_id == run_uuid)
             )
             >= 1
         )

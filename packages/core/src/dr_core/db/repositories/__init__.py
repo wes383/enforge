@@ -13,7 +13,7 @@ from dr_core.db.repositories.exceptions import (
 )
 from dr_core.db.repositories.projects import ProjectRepository
 from dr_core.db.repositories.research import (
-    ResearchQuestionRepository,
+    OutlineSectionRepository,
     SearchQueryRepository,
 )
 from dr_core.db.repositories.runs import RunRepository
@@ -41,9 +41,9 @@ __all__ = [
     "EntityNotFound",
     "EvidenceRepository",
     "OutlineRepository",
+    "OutlineSectionRepository",
     "ProjectRepository",
     "RepositoryError",
-    "ResearchQuestionRepository",
     "RunApprovalRepository",
     "RunEventRepository",
     "RunRepository",

@@ -13,8 +13,8 @@ from dr_core.providers.http import RetryPolicy
 from dr_core.providers.llm import OpenAICompatibleLLMProvider
 from dr_core.providers.registry import build_provider_registry
 from dr_core.research.nodes import (
-    _outline_node_timeout,
     _polish_node_timeout,
+    _research_agent_node_timeout,
     _verification_node_timeout,
     _writing_node_timeout,
 )
@@ -339,7 +339,7 @@ def test_outline_adds_two_model_calls_to_the_run_budget():
         registry=SimpleNamespace(llm=llm),
         record_usage=lambda response: None,
     )
-    assert _outline_node_timeout(ctx) == 90
+    assert _research_agent_node_timeout(ctx) == 90
 
     outlining = SimpleNamespace(
         settings=settings.model_copy(update={"research_llm_outline_enabled": True}),
@@ -347,8 +347,8 @@ def test_outline_adds_two_model_calls_to_the_run_budget():
         record_usage=lambda response: None,
     )
     assert outlining.settings.llm_workflow_enabled is True
-    # one outline version per approval round, so the node keeps one call
-    assert _outline_node_timeout(outlining) == 90 + 120
+    # the non-tool outline fallback keeps one call per approval round
+    assert _research_agent_node_timeout(outlining) == 90 + 120
     assert (
         outlining.settings.llm_run_time_floor_seconds
         - settings.llm_run_time_floor_seconds

@@ -22,9 +22,8 @@ function inferredStageIndex({
   pendingApproval: Approval | null;
 }): number {
   if (status === "completed") return STAGES.length;
-  if (status === "awaiting_approval") {
-    if (pendingApproval?.kind === "plan") return 0;
-    if (pendingApproval?.kind === "outline") return 3;
+  if (status === "awaiting_approval" && pendingApproval) {
+    return 0;
   }
   const direct = stageIndexForStatus(status);
   if (direct >= 0) return direct;

@@ -24,7 +24,7 @@ from dr_core.providers.http import RetryPolicy
 from dr_core.providers.llm import OpenAICompatibleLLMProvider
 from dr_core.providers.registry import build_provider_registry
 from dr_core.research.graph import run_research_workflow
-from dr_core.research.outlining import OUTLINE_TASK
+from dr_core.research.planning import OUTLINE_PLANNING_TASK
 from dr_core.schemas import ProjectCreate, RunCreate
 from dr_core.storage import StorageError, StorageFileNotFound, get_file_storage
 
@@ -32,25 +32,50 @@ pytestmark = pytest.mark.integration
 
 _LLM_CALLS: list[str] = []
 
+_MODEL_TITLES = [
+    "Peer review reliability",
+    "Reviewer bias and error detection",
+]
 
-def _outline_reply(prompt: dict, *, skip_last: bool = False) -> str:
-    entries = list(prompt.get("sections", []))
-    if skip_last:
-        entries = entries[:-1]
+
+def _outline_reply(*, invalid: bool = False) -> str:
+    if invalid:
+        return json.dumps({"summary": "Too short."})
     return json.dumps(
         {
-            "line": "The article reads the measured gains against the cost they carry.",
+            "summary": (
+                "The article examines peer review evidence, its reliability "
+                "limits and the disagreements that remain."
+            ),
             "sections": [
                 {
-                    "question_id": item["question_id"],
-                    "title": f"Model section {position}",
-                    "purpose": (
-                        "What this part of the argument settles before the next "
-                        "one picks it up."
-                    ),
+                    "title": "Introduction",
+                    "role": "introduction",
+                    "purpose": "Frame the reliability issue.",
+                    "search_terms": ["peer review reliability"],
                     "target_words": 300,
-                }
-                for position, item in enumerate(reversed(entries))
+                },
+                {
+                    "title": _MODEL_TITLES[0],
+                    "role": "body",
+                    "purpose": "Weigh what peer review changes.",
+                    "search_terms": ["peer review reliability evidence"],
+                    "target_words": 600,
+                },
+                {
+                    "title": _MODEL_TITLES[1],
+                    "role": "body",
+                    "purpose": "Explain reviewer bias and its limits.",
+                    "search_terms": ["peer review bias error detection"],
+                    "target_words": 600,
+                },
+                {
+                    "title": "Conclusion",
+                    "role": "conclusion",
+                    "purpose": "Synthesize the evidence.",
+                    "search_terms": ["peer review conclusion"],
+                    "target_words": 300,
+                },
             ],
         }
     )
@@ -70,13 +95,13 @@ def _section_reply(prompt: dict) -> str:
     )
 
 
-def _llm_handler(request: httpx.Request, *, skip_last_question: bool = False):
+def _llm_handler(request: httpx.Request, *, invalid_outline: bool = False):
     body = json.loads(request.content)
     prompt = json.loads(body["messages"][-1]["content"])
     task = str(prompt.get("task", ""))
     _LLM_CALLS.append(task)
-    if task == OUTLINE_TASK:
-        content = _outline_reply(prompt, skip_last=skip_last_question)
+    if task == OUTLINE_PLANNING_TASK:
+        content = _outline_reply(invalid=invalid_outline)
     else:
         content = _section_reply(prompt)
     return httpx.Response(
@@ -91,10 +116,10 @@ def _llm_handler(request: httpx.Request, *, skip_last_question: bool = False):
 
 def _settings(**overrides):
     values = {
-        "research_plan_approval_required": False,
         "research_outline_approval_required": False,
         "research_llm_writing_enabled": True,
         "research_llm_outline_enabled": True,
+        "research_agent_enabled": False,
         "research_provider_mode": "mock",
         "langfuse_enabled": False,
         "research_max_search_rounds": 1,
@@ -201,7 +226,7 @@ def _report_text(database, run_id: UUID) -> str:
     return get_file_storage().read(artifact.storage_key).decode("utf-8")
 
 
-def test_model_outline_reorders_the_body_and_the_article_follows_it(database):
+def test_model_outline_sets_the_article_structure(database):
     _LLM_CALLS.clear()
     settings = _settings()
     project_id, run_id = _start_run(database)
@@ -215,8 +240,8 @@ def test_model_outline_reorders_the_body_and_the_article_follows_it(database):
             registry=registry,
         )
         assert outcome.status.value == "completed"
-        assert _LLM_CALLS.count(OUTLINE_TASK) == 1
-        assert _outline_payload(database, run_id)["outliner"] == "llm"
+        assert _LLM_CALLS.count(OUTLINE_PLANNING_TASK) == 1
+        assert _outline_payload(database, run_id)["planner"] == "llm"
 
         with database.session() as session:
             outline = session.scalar(select(Outline).where(Outline.run_id == run_id))
@@ -227,26 +252,18 @@ def test_model_outline_reorders_the_body_and_the_article_follows_it(database):
             )
 
         titles = [section["title"] for section in outline.content["sections"]]
-        bodies = [title for title in titles if title.startswith("Model section")]
-        assert bodies, "the model titles should reach the stored outline"
-        assert titles[0] == "Introduction"
-        assert titles[-1] == "Conclusion"
-        question_ids = [
-            section["question_id"]
-            for section in outline.content["sections"]
-            if section.get("question_id")
-        ]
-        assert len(question_ids) == len(set(question_ids)), "no question was dropped"
+        assert titles == ["Introduction", *_MODEL_TITLES, "Conclusion"]
+        assert all(section.get("section_id") for section in outline.content["sections"])
         assert "<UNTRUSTED_SOURCE_DATA" not in outline.content["summary"]
 
         drafted = sorted(sections, key=lambda item: item.section_index)
         assert all(
             item.generation_status is not DraftSectionStatus.FAILED for item in drafted
         )
-        assert [item.title for item in drafted if item.title.startswith("Model section")] == bodies
+        assert [item.title for item in drafted] == titles
 
         report = _report_text(database, run_id)
-        positions = [report.index(f"## {title}") for title in bodies]
+        positions = [report.index(f"## {title}") for title in _MODEL_TITLES]
         assert positions == sorted(positions), "the article follows the model ordering"
         assert report.index("## Introduction") < positions[0]
         assert positions[-1] < report.index("## Conclusion")
@@ -258,8 +275,9 @@ def test_a_rejected_model_outline_falls_back_to_the_template(database):
     _LLM_CALLS.clear()
     settings = _settings()
     project_id, run_id = _start_run(database)
+
     def handler(request: httpx.Request) -> httpx.Response:
-        return _llm_handler(request, skip_last_question=True)
+        return _llm_handler(request, invalid_outline=True)
 
     registry = _registry(handler, settings)
     try:
@@ -271,19 +289,13 @@ def test_a_rejected_model_outline_falls_back_to_the_template(database):
             registry=registry,
         )
         assert outcome.status.value == "completed"
-        assert _LLM_CALLS.count(OUTLINE_TASK) == 1
-        assert _outline_payload(database, run_id)["outliner"] == "template"
+        assert _LLM_CALLS.count(OUTLINE_PLANNING_TASK) == 1
+        assert _outline_payload(database, run_id)["planner"] == "template"
 
         with database.session() as session:
             outline = session.scalar(select(Outline).where(Outline.run_id == run_id))
-            report_artifact = session.scalar(
-                select(Artifact).where(
-                    Artifact.run_id == run_id,
-                    Artifact.artifact_type == ArtifactType.RESEARCH_REPORT,
-                )
-            )
         titles = [section["title"] for section in outline.content["sections"]]
-        assert not any(title.startswith("Model section") for title in titles)
+        assert not any(title in _MODEL_TITLES for title in titles)
         assert titles[0] == "Introduction"
         assert titles[-1] == "Conclusion"
         assert len(titles) >= 4

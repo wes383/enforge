@@ -122,16 +122,16 @@ def query_fingerprint(query_text: str) -> str:
     return text_sha256(normalized_text(query_text))
 
 
-def question_fingerprint(question: str) -> str:
-    return text_sha256(normalized_text(question))
+def section_fingerprint(title: str) -> str:
+    return text_sha256(normalized_text(title))
 
 
 def evidence_fingerprint(
     source_version_id: str,
     quoted_text: str,
-    research_question_id: str | None = None,
+    outline_section_id: str | None = None,
 ) -> str:
     payload = f"{source_version_id}:{normalized_text(quoted_text)}"
-    if research_question_id is not None:
-        payload = f"{payload}:{research_question_id}"
+    if outline_section_id is not None:
+        payload = f"{payload}:{outline_section_id}"
     return text_sha256(payload)

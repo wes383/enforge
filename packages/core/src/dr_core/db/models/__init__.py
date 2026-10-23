@@ -3,8 +3,8 @@ from dr_core.db.models.artifact import Artifact
 from dr_core.db.models.event import RunEvent
 from dr_core.db.models.evidence import Claim, ClaimEvidence, EvidenceItem
 from dr_core.db.models.project import (
+    OutlineSectionRecord,
     ResearchProject,
-    ResearchQuestion,
     ResearchRun,
     SearchQuery,
 )
@@ -20,8 +20,8 @@ __all__ = [
     "DraftSection",
     "EvidenceItem",
     "Outline",
+    "OutlineSectionRecord",
     "ResearchProject",
-    "ResearchQuestion",
     "ResearchRun",
     "RunApproval",
     "RunEvent",

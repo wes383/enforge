@@ -78,7 +78,7 @@ def _send_to_langfuse(report: dict) -> None:
         "recovery_success_rate",
         "citation_validity_rate",
         "citation_support_accuracy",
-        "question_coverage_rate",
+        "section_coverage_rate",
         "unsupported_claim_ratio",
         "metadata_accuracy_rate",
         "assertion_pass_rate",

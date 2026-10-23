@@ -28,12 +28,7 @@ import {
   TERMINAL_RUN_STATUSES,
 } from "@/lib/labels";
 import { pick, useLocale } from "@/lib/locale";
-import type {
-  QuestionListResponse,
-  ResearchQuestion,
-  Source,
-  SourceListResponse,
-} from "@/lib/types";
+import type { Source, SourceListResponse } from "@/lib/types";
 
 type StatusFilter = "all" | "parsed" | "pending" | "failed" | "snippet";
 
@@ -45,10 +40,9 @@ export default function SourcesPage() {
   const locale = useLocale();
   const { runId, overview, registerRefresh } = useRunWorkspace();
   const [sources, setSources] = useState<Source[] | null>(null);
-  const [questions, setQuestions] = useState<ResearchQuestion[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [questionFilter, setQuestionFilter] = useState("all");
+  const [sectionFilter, setSectionFilter] = useState("all");
   const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
   const [query, setQuery] = useState("");
 
@@ -58,12 +52,10 @@ export default function SourcesPage() {
 
   const load = useCallback(async () => {
     try {
-      const [sourceData, questionData] = await Promise.all([
-        apiFetch<SourceListResponse>(`/runs/${runId}/sources`),
-        apiFetch<QuestionListResponse>(`/runs/${runId}/questions`),
-      ]);
+      const sourceData = await apiFetch<SourceListResponse>(
+        `/runs/${runId}/sources`,
+      );
       setSources(sourceData.items);
-      setQuestions(questionData.items);
       setError(null);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.detail : String(caught));
@@ -92,13 +84,17 @@ export default function SourcesPage() {
   }, [activeRun, load]);
 
   useEffect(() => {
-    const initial = new URLSearchParams(window.location.search).get("question");
-    if (initial) setQuestionFilter(initial);
+    const initial = new URLSearchParams(window.location.search).get("section");
+    if (initial) setSectionFilter(initial);
   }, []);
 
-  const questionMap = useMemo(
-    () => new Map(questions.map((question) => [question.id, question.question])),
-    [questions],
+  const sections = useMemo(
+    () => overview?.outline_sections ?? [],
+    [overview],
+  );
+  const sectionMap = useMemo(
+    () => new Map(sections.map((section) => [section.id, section.title])),
+    [sections],
   );
 
   const filtered = useMemo(() => {
@@ -106,8 +102,8 @@ export default function SourcesPage() {
     const normalizedQuery = query.trim().toLowerCase();
     return sources.filter((source) => {
       if (
-        questionFilter !== "all" &&
-        !source.question_ids.includes(questionFilter)
+        sectionFilter !== "all" &&
+        !source.section_ids.includes(sectionFilter)
       ) {
         return false;
       }
@@ -148,7 +144,7 @@ export default function SourcesPage() {
         .toLowerCase()
         .includes(normalizedQuery);
     });
-  }, [query, questionFilter, sources, statusFilter]);
+  }, [query, sectionFilter, sources, statusFilter]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -185,16 +181,16 @@ export default function SourcesPage() {
           />
         </div>
         <Select
-          value={questionFilter}
-          onChange={(event) => setQuestionFilter(event.target.value)}
-          aria-label={pick(locale, "按研究问题筛选", "Filter by research question")}
+          value={sectionFilter}
+          onChange={(event) => setSectionFilter(event.target.value)}
+          aria-label={pick(locale, "按章节筛选", "Filter by section")}
         >
           <option value="all">
-            {pick(locale, "全部研究问题", "All questions")}
+            {pick(locale, "全部章节", "All sections")}
           </option>
-          {questions.map((question) => (
-            <option key={question.id} value={question.id}>
-              {question.question}
+          {sections.map((section) => (
+            <option key={section.id} value={section.id}>
+              {section.title}
             </option>
           ))}
         </Select>
@@ -315,16 +311,13 @@ export default function SourcesPage() {
                       DOI {source.doi}
                     </a>
                   ) : null}
-                  {source.question_ids.length > 0 ? (
+                  {source.section_ids.length > 0 ? (
                     <span>
-                      {pick(locale, "关联问题", "Questions")}:{" "}
-                      {source.question_ids
-                        .map((id, index) =>
-                          questionMap.has(id)
-                            ? `Q${questions.findIndex((q) => q.id === id) + 1}`
-                            : `Q${index + 1}`,
-                        )
-                        .join(", ")}
+                      {pick(locale, "关联章节", "Sections")}:{" "}
+                      {source.section_ids
+                        .map((id) => sectionMap.get(id))
+                        .filter(Boolean)
+                        .join(" / ")}
                     </span>
                   ) : null}
                 </div>

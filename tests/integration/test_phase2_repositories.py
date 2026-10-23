@@ -15,8 +15,9 @@ from dr_core.db.enums import (
     EvidenceVerificationStatus,
     OutlineStatus,
     ParserStatus,
-    QuestionCoverageStatus,
     RunEventType,
+    SectionCoverageStatus,
+    SectionRole,
     RunStatus,
     SearchProviderName,
     SourceOrigin,
@@ -32,8 +33,8 @@ from dr_core.db.models import (
     DraftSection,
     EvidenceItem,
     Outline,
+    OutlineSectionRecord,
     ResearchProject,
-    ResearchQuestion,
     ResearchRun,
     RunEvent,
     SearchQuery,
@@ -51,8 +52,8 @@ from dr_core.db.repositories import (
     EntityNotFound,
     EvidenceRepository,
     OutlineRepository,
+    OutlineSectionRepository,
     ProjectRepository,
-    ResearchQuestionRepository,
     RunEventRepository,
     RunRepository,
     RepositoryError,
@@ -70,9 +71,9 @@ from dr_core.schemas import (
     DraftSectionCreate,
     EvidenceCreate,
     OutlineCreate,
+    OutlineSectionCreate,
     ProjectCreate,
     ProjectUpdate,
-    ResearchQuestionCreate,
     RunCreate,
     RunEventCreate,
     SearchQueryCreate,
@@ -145,7 +146,7 @@ def _create_evidence(
     version,
     *,
     quote: str = "The quoted evidence.",
-    question_id=None,
+    section_id=None,
     evidence_type="direct_support",
 ) -> EvidenceItem:
     return EvidenceRepository(session).create(
@@ -154,7 +155,7 @@ def _create_evidence(
         EvidenceCreate(
             source_id=source.id,
             source_version_id=version.id,
-            research_question_id=question_id,
+            outline_section_id=section_id,
             evidence_type=evidence_type,
             claim_summary="A traceable finding",
             quoted_text=quote,
@@ -290,37 +291,52 @@ def test_run_idempotency_status_and_project_scope(session, project, project_fact
     }
 
 
-def test_questions_and_search_queries_are_idempotent(session, project, run):
-    question_repository = ResearchQuestionRepository(session)
-    question = question_repository.create(
+def test_outline_sections_and_search_queries_are_idempotent(session, project, run):
+    section_repository = OutlineSectionRepository(session)
+    section = section_repository.create(
         project.id,
         run.id,
-        ResearchQuestionCreate(question="What is the evidence?", priority=5),
+        OutlineSectionCreate(
+            title="Evidence quality",
+            role=SectionRole.BODY,
+            purpose="Weigh the evidence.",
+            search_terms=["evidence quality"],
+            priority=5,
+        ),
     )
-    duplicate = question_repository.create(
+    duplicate = section_repository.create(
         project.id,
         run.id,
-        ResearchQuestionCreate(question="  what   is the EVIDENCE?  ", priority=1),
+        OutlineSectionCreate(
+            title="  evidence   QUALITY  ",
+            role=SectionRole.BODY,
+            purpose="Weigh the evidence and its limits.",
+            search_terms=["evidence quality", "source reliability"],
+            priority=1,
+        ),
     )
-    child = question_repository.create(
+    second = section_repository.create(
         project.id,
         run.id,
-        ResearchQuestionCreate(
-            question="Which studies are most reliable?",
-            parent_id=question.id,
+        OutlineSectionCreate(
+            title="Evidence gaps",
+            role=SectionRole.BODY,
+            purpose="State what remains unknown.",
+            search_terms=["evidence gaps"],
         ),
     )
 
-    assert duplicate.id == question.id
-    assert child.parent_id == question.id
-    assert len(question_repository.list_for_run(project.id, run.id)) == 2
+    assert duplicate.id == section.id
+    assert duplicate.purpose == "Weigh the evidence and its limits."
+    assert second.id != section.id
+    assert len(section_repository.list_for_run(project.id, run.id)) == 2
 
-    covered = question_repository.update_coverage(
-        question.id,
-        QuestionCoverageStatus.COVERED,
+    covered = section_repository.update_coverage(
+        section.id,
+        SectionCoverageStatus.COVERED,
         project_id=project.id,
     )
-    assert covered.coverage_status is QuestionCoverageStatus.COVERED
+    assert covered.coverage_status is SectionCoverageStatus.COVERED
 
     query_repository = SearchQueryRepository(session)
     query = query_repository.create(
@@ -329,7 +345,7 @@ def test_questions_and_search_queries_are_idempotent(session, project, run):
         SearchQueryCreate(
             query_text="traceable evidence",
             provider=SearchProviderName.TAVILY,
-            research_question_id=question.id,
+            outline_section_id=section.id,
         ),
     )
     duplicate_query = query_repository.create(
@@ -338,7 +354,16 @@ def test_questions_and_search_queries_are_idempotent(session, project, run):
         SearchQueryCreate(
             query_text="Traceable   Evidence",
             provider=SearchProviderName.TAVILY,
-            research_question_id=question.id,
+            outline_section_id=section.id,
+        ),
+    )
+    other_section = query_repository.create(
+        project.id,
+        run.id,
+        SearchQueryCreate(
+            query_text="traceable evidence",
+            provider=SearchProviderName.TAVILY,
+            outline_section_id=second.id,
         ),
     )
     other_provider = query_repository.create(
@@ -347,6 +372,7 @@ def test_questions_and_search_queries_are_idempotent(session, project, run):
         SearchQueryCreate(
             query_text="traceable evidence",
             provider=SearchProviderName.CROSSREF,
+            outline_section_id=section.id,
         ),
     )
     next_round = query_repository.create(
@@ -356,13 +382,15 @@ def test_questions_and_search_queries_are_idempotent(session, project, run):
             query_text="traceable evidence",
             provider=SearchProviderName.TAVILY,
             round_index=2,
+            outline_section_id=section.id,
         ),
     )
 
     assert duplicate_query.id == query.id
+    assert other_section.id != query.id
     assert other_provider.id != query.id
     assert next_round.id != query.id
-    assert len(query_repository.list_for_run(project.id, run.id)) == 3
+    assert len(query_repository.list_for_run(project.id, run.id)) == 4
 
     completed = query_repository.mark_completed(
         query.id,
@@ -379,9 +407,9 @@ def test_questions_and_search_queries_are_idempotent(session, project, run):
             project.id,
             second_run.id,
             SearchQueryCreate(
-                query_text="foreign question",
+                query_text="foreign section",
                 provider=SearchProviderName.TAVILY,
-                research_question_id=question.id,
+                outline_section_id=section.id,
             ),
         )
 
@@ -598,10 +626,13 @@ def test_document_chunks_and_pgvector_search(session, project):
 
 
 def test_evidence_traceability_claims_and_links(session, project, run):
-    question = ResearchQuestionRepository(session).create(
+    section = OutlineSectionRepository(session).create(
         project.id,
         run.id,
-        ResearchQuestionCreate(question="Is the effect real?"),
+        OutlineSectionCreate(
+            title="The effect",
+            purpose="Assess whether the effect is real.",
+        ),
     )
     source = _create_source(session, project)
     version = _create_version(session, project, source)
@@ -614,7 +645,7 @@ def test_evidence_traceability_claims_and_links(session, project, run):
         source,
         version,
         quote="The effect was statistically significant.",
-        question_id=question.id,
+        section_id=section.id,
     )
     duplicate = _create_evidence(
         session,
@@ -623,7 +654,7 @@ def test_evidence_traceability_claims_and_links(session, project, run):
         source,
         version,
         quote="  The effect was statistically   significant.  ",
-        question_id=question.id,
+        section_id=section.id,
     )
     counter = _create_evidence(
         session,
@@ -632,33 +663,36 @@ def test_evidence_traceability_claims_and_links(session, project, run):
         source,
         version,
         quote="A later cohort did not replicate the effect.",
-        question_id=question.id,
+        section_id=section.id,
         evidence_type="refutation",
     )
 
-    second_question = ResearchQuestionRepository(session).create(
+    second_section = OutlineSectionRepository(session).create(
         project.id,
         run.id,
-        ResearchQuestionCreate(question="Does the effect hold across cohorts?"),
+        OutlineSectionCreate(
+            title="Differences across cohorts",
+            purpose="Check whether the effect holds across cohorts.",
+        ),
     )
-    same_quote_for_other_question = _create_evidence(
+    same_quote_for_other_section = _create_evidence(
         session,
         project,
         run,
         source,
         version,
         quote="The effect was statistically significant.",
-        question_id=second_question.id,
+        section_id=second_section.id,
     )
 
     assert duplicate.id == first.id
-    assert same_quote_for_other_question.id != first.id
+    assert same_quote_for_other_section.id != first.id
     assert first.source_id == source.id
     assert first.source_version_id == version.id
     assert first.locator["page"] == 3
-    assert len(evidence_repository.list_for_question(project.id, question.id)) == 2
+    assert len(evidence_repository.list_for_section(project.id, section.id)) == 2
     assert (
-        len(evidence_repository.list_for_question(project.id, second_question.id))
+        len(evidence_repository.list_for_section(project.id, second_section.id))
         == 1
     )
     assert len(evidence_repository.list_for_source_version(project.id, version.id)) == 3
@@ -1002,10 +1036,10 @@ def test_project_delete_cascades_all_research_records(session, project):
     )
     try:
         run = RunRepository(session).create(project.id, RunCreate())
-        question = ResearchQuestionRepository(session).create(
+        section = OutlineSectionRepository(session).create(
             project.id,
             run.id,
-            ResearchQuestionCreate(question="Cascade question?"),
+            OutlineSectionCreate(title="Cascade section", purpose="Cascade check."),
         )
         SearchQueryRepository(session).create(
             project.id,
@@ -1013,7 +1047,7 @@ def test_project_delete_cascades_all_research_records(session, project):
             SearchQueryCreate(
                 query_text="cascade query",
                 provider=SearchProviderName.TAVILY,
-                research_question_id=question.id,
+                outline_section_id=section.id,
             ),
         )
         source = _create_source(session, project)
@@ -1092,7 +1126,7 @@ def test_project_delete_cascades_all_research_records(session, project):
 
         models = [
             ResearchRun,
-            ResearchQuestion,
+            OutlineSectionRecord,
             SearchQuery,
             Source,
             SourceVersion,

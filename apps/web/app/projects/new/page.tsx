@@ -28,8 +28,8 @@ export default function NewProjectPage() {
         title={pick(locale, "新建研究项目", "New research project")}
         description={pick(
           locale,
-          "设定研究范围、深度、目标字数、时间范围与引用格式。启动运行后，工作流会按这些参数生成计划与提纲。",
-          "Set the scope, depth, target length, date range, and citation style. The workflow uses these parameters for its plan and outline.",
+          "设定研究范围、深度、目标字数、时间范围与引用格式。启动运行后，规划 agent 会结合这些参数提出提纲。",
+          "Set the scope, depth, target length, date range, and citation style. The planning agent uses these to propose an outline.",
         )}
       />
       <Card className="mt-8 p-6 lg:p-8">

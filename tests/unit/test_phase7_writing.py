@@ -10,6 +10,7 @@ from dr_core.db.enums import (
     EvidenceType,
     ProjectLanguage,
     ResearchDepth,
+    SectionRole,
     SourceType,
 )
 from dr_core.research.claims import (
@@ -20,14 +21,11 @@ from dr_core.research.claims import (
     review_claim_with_llm,
     verify_claim,
 )
-from dr_core.research.generation import build_outline
 from dr_core.research.models import (
     EvidenceMatrix,
     EvidenceRow,
+    OutlineSection,
     ResearchBrief,
-    ResearchGap,
-    ResearchPlan,
-    ResearchQuestion,
 )
 from dr_core.research.writing import (
     WriteSearchOutcome,
@@ -68,7 +66,7 @@ def _source(*, title="Regulatory study", **overrides):
 
 
 def _evidence(
-    question_id,
+    section_id,
     source_id,
     *,
     evidence_type=EvidenceType.DIRECT_SUPPORT,
@@ -80,7 +78,7 @@ def _evidence(
 ):
     return SimpleNamespace(
         id=uuid4(),
-        research_question_id=question_id,
+        outline_section_id=section_id,
         source_id=source_id,
         source_version_id=uuid4(),
         evidence_type=evidence_type,
@@ -93,10 +91,11 @@ def _evidence(
 
 
 def _section(
-    question_id,
+    section_id,
     *,
     index=1,
-    title="Question",
+    title="Enforcement outcomes",
+    role=SectionRole.BODY,
     key_claims=None,
     evidence=(),
     matrix=None,
@@ -118,8 +117,8 @@ def _section(
         matrix = EvidenceMatrix(
             rows=[
                 EvidenceRow(
-                    question_id=question_id,
-                    question=title,
+                    section_id=section_id,
+                    section_title=title,
                     support_count=len(support),
                     refute_count=len(refute),
                     independent_source_count=2,
@@ -144,11 +143,12 @@ def _section(
             source_id: position + 1
             for position, source_id in enumerate(sources)
         }
-    draft_section = SimpleNamespace(
+    draft_section = OutlineSection(
         index=index,
         title=title,
+        role=role,
         purpose="Synthesize the evidence.",
-        question_id=question_id,
+        section_id=section_id,
         key_claims=key_claims or [],
         target_words=400,
         evidence_ids=[item.id for item in evidence],
@@ -195,125 +195,26 @@ class _SequenceLLM:
         return SimpleNamespace(text=self.payloads.pop(0))
 
 
-def test_outline_populates_claims_evidence_and_target_words():
-    question_id = uuid4()
-    source_a = _source(title="Support study")
-    source_b = _source(title="Refuting study")
-    support = _evidence(question_id, source_a.id)
-    refute = _evidence(
-        question_id,
-        source_b.id,
-        evidence_type=EvidenceType.REFUTATION,
-        claim_summary="Audits do not improve compliance in small firms.",
-        quoted_text="Audits do not improve compliance in small firms.",
-    )
-    plan = ResearchPlan(
-        summary="Plan",
-        questions=[
-            ResearchQuestion(question_id=question_id, question="Does enforcement work?")
-        ],
-    )
-    matrix = EvidenceMatrix(
-        rows=[
-            EvidenceRow(
-                question_id=question_id,
-                question="Does enforcement work?",
-                support_count=1,
-                refute_count=1,
-                independent_source_count=2,
-                conclusion="Evidence is mixed; the conclusion is provisional.",
-                support_evidence_ids=[support.id],
-                refute_evidence_ids=[refute.id],
-            )
-        ],
-        total_evidence=2,
-        source_count=2,
-        independent_source_count=2,
-        contradiction_count=1,
-        coverage_ratio=1.0,
-    )
-    outline = build_outline(
-        _brief(),
-        plan,
-        matrix,
-        [ResearchGap(question="Open question", reason="Missing data")],
-        version=1,
-        evidence_by_question={question_id: [support, refute]},
-        include_contradictions=True,
-    )
-
-    assert outline.sections[0].key_claims
-    assert outline.sections[0].support_evidence_ids
-    assert outline.sections[0].target_words >= 50
-    question_section = outline.sections[1]
-    assert question_section.question_id == question_id
-    assert question_section.support_evidence_ids == [support.id]
-    assert question_section.refute_evidence_ids == [refute.id]
-    assert question_section.evidence_ids == [support.id, refute.id]
-    assert question_section.key_claims[0].startswith("Enforcement improves")
-    assert question_section.status == "planned"
-    titles = [section.title for section in outline.sections]
-    assert "Contradictions and Counter-Evidence" in titles
-    assert "Limitations and Open Questions" in titles
-    assert outline.sections[-1].evidence_ids == [support.id, refute.id]
-
-    default_outline = build_outline(
-        _brief(),
-        plan,
-        matrix,
-        [],
-        version=1,
-        evidence_by_question={question_id: [support, refute]},
-    )
-    assert "Contradictions and Counter-Evidence" not in [
-        section.title for section in default_outline.sections
-    ]
-    default_question = next(
-        section
-        for section in default_outline.sections
-        if section.question_id == question_id
-    )
-    assert default_question.refute_evidence_ids == [refute.id]
-
-    deep = build_outline(
-        _brief(research_depth=ResearchDepth.DEEP),
-        plan,
-        matrix,
-        [],
-        version=1,
-        evidence_by_question={question_id: [support, refute]},
-    )
-    quick = build_outline(
-        _brief(research_depth=ResearchDepth.QUICK),
-        plan,
-        matrix,
-        [],
-        version=1,
-        evidence_by_question={question_id: [support, refute]},
-    )
-    assert deep.sections[1].target_words > quick.sections[1].target_words
-
-
 def test_deterministic_section_writes_narrative_without_report_scaffolding():
-    question_id = uuid4()
+    section_id = uuid4()
     source_a = _source(title="Support study")
     source_b = _source(title="Refuting study")
-    support = _evidence(question_id, source_a.id)
+    support = _evidence(section_id, source_a.id)
     refute = _evidence(
-        question_id,
+        section_id,
         source_b.id,
         evidence_type=EvidenceType.REFUTATION,
         claim_summary="Audits do not improve compliance in small firms.",
         quoted_text="Audits do not improve compliance in small firms.",
     )
     draft, sources, numbering, _ = _section(
-        question_id,
-        title="Does enforcement work?",
+        section_id,
+        title="Enforcement outcomes",
         key_claims=[support.claim_summary],
         evidence=[support, refute],
     )
 
-    assert draft.content.startswith("## Does enforcement work?")
+    assert draft.content.startswith("## Enforcement outcomes")
     assert "This section addresses:" not in draft.content
     assert "Purpose:" not in draft.content
     assert "Key findings include:" not in draft.content
@@ -333,20 +234,21 @@ def test_deterministic_section_writes_narrative_without_report_scaffolding():
 
 
 def test_deterministic_intro_frames_the_article_without_report_statistics():
-    question_id = uuid4()
+    section_id = uuid4()
     source_a = _source(title="First study")
     source_b = _source(title="Second study")
-    first = _evidence(question_id, source_a.id)
+    first = _evidence(section_id, source_a.id)
     second = _evidence(
-        question_id,
+        section_id,
         source_b.id,
         claim_summary="Small firms face higher compliance costs.",
         quoted_text="Small firms face higher compliance costs after audits.",
     )
     draft, _, numbering, _ = _section(
-        question_id,
+        section_id,
         index=0,
         title="Introduction",
+        role=SectionRole.INTRODUCTION,
         evidence=[first, second],
     )
 
@@ -361,10 +263,10 @@ def test_deterministic_intro_frames_the_article_without_report_statistics():
 
 
 def test_deterministic_conclusion_deduplicates_repeated_row_conclusions():
-    question_id = uuid4()
+    section_id = uuid4()
     items = [
         _evidence(
-            question_id,
+            section_id,
             uuid4(),
             claim_summary=f"Finding {index} about enforcement effects.",
             quoted_text=f"Finding {index} about enforcement effects across firms.",
@@ -375,8 +277,8 @@ def test_deterministic_conclusion_deduplicates_repeated_row_conclusions():
     matrix = EvidenceMatrix(
         rows=[
             EvidenceRow(
-                question_id=question_id,
-                question=f"Question {index}?",
+                section_id=section_id,
+                section_title=f"Section {index}",
                 support_count=1,
                 independent_source_count=1,
                 conclusion=repeated,
@@ -390,8 +292,9 @@ def test_deterministic_conclusion_deduplicates_repeated_row_conclusions():
         coverage_ratio=1.0,
     )
     draft, _, _, _ = _section(
-        question_id,
+        section_id,
         title="Conclusion",
+        role=SectionRole.CONCLUSION,
         evidence=items,
         matrix=matrix,
     )
@@ -403,16 +306,16 @@ def test_deterministic_conclusion_deduplicates_repeated_row_conclusions():
 
 
 def test_limitations_section_drops_process_notes_and_deduplicates():
-    question_id = uuid4()
+    section_id = uuid4()
     evidence_row = EvidenceRow(
-        question_id=question_id,
-        question="Question?",
+        section_id=section_id,
+        section_title="Enforcement outcomes",
         support_count=1,
         independent_source_count=1,
         conclusion="Limited support.",
         limitations=[
-            "Only one independent source supports this question; treat the conclusion as provisional.",
-            "Only one independent source supports this question; treat the conclusion as provisional.",
+            "Only one independent source supports this section; treat the conclusion as provisional.",
+            "Only one independent source supports this section; treat the conclusion as provisional.",
             "Some sources lack a publication date, so temporal relevance cannot be judged.",
         ],
     )
@@ -424,8 +327,9 @@ def test_limitations_section_drops_process_notes_and_deduplicates():
         coverage_ratio=0.5,
     )
     draft, _, _, _ = _section(
-        question_id,
-        title="Limitations and Open Questions",
+        section_id,
+        title="Limitations and Applicability",
+        role=SectionRole.LIMITATIONS,
         evidence=[],
         matrix=matrix,
         limitations=[
@@ -449,12 +353,12 @@ def test_limitations_section_drops_process_notes_and_deduplicates():
 
 
 def test_limitations_section_drops_pipeline_and_model_fallback_notes():
-    question_id = uuid4()
+    section_id = uuid4()
     matrix = EvidenceMatrix(
         rows=[
             EvidenceRow(
-                question_id=question_id,
-                question="Question?",
+                section_id=section_id,
+                section_title="Enforcement outcomes",
                 support_count=0,
                 independent_source_count=0,
                 conclusion="No direct evidence.",
@@ -467,19 +371,20 @@ def test_limitations_section_drops_pipeline_and_model_fallback_notes():
         coverage_ratio=0.0,
     )
     draft, _, _, _ = _section(
-        question_id,
-        title="Limitations and Open Questions",
+        section_id,
+        title="Limitations and Applicability",
+        role=SectionRole.LIMITATIONS,
         evidence=[],
         matrix=matrix,
         limitations=[
-            "Background reconnaissance did not complete; research questions rely on the brief only.",
+            "Background reconnaissance did not complete; the outline relies on the brief only.",
             "The model outline failed validation, so the report outline came from the deterministic template.",
-            "No independent source supports this question.",
+            "No independent source supports this section.",
             "No web content provider is configured; only search snippets are available.",
             "Full text was unavailable for “Example” (failed).",
-            "前置侦察未完成，研究问题仅依据项目简介生成。",
+            "前置侦察未完成，提纲仅依据项目简介生成。",
             "报告提纲模型输出未通过校验，提纲改用确定性模板生成。",
-            "无独立来源支持该问题。",
+            "无独立来源支持该章节。",
             "未配置网页正文提供商，来源仅使用检索摘要。",
             "Some sources lack a publication date, so temporal relevance cannot be judged.",
         ],
@@ -514,16 +419,16 @@ def test_metadata_sentences_are_filtered_from_evidence():
     assert len(spans) == 1
     assert spans[0][0].startswith("This study reports")
 
-    question_id = uuid4()
+    section_id = uuid4()
     metadata = _evidence(
-        question_id,
+        section_id,
         uuid4(),
         claim_summary="关键词：生成式人工智能；学习效果；元分析；实验研究",
         quoted_text="关键词：生成式人工智能；学习效果；元分析；实验研究",
     )
-    substantive = _evidence(question_id, uuid4())
+    substantive = _evidence(section_id, uuid4())
     draft, _, numbering, _ = _section(
-        question_id,
+        section_id,
         title="Evidence",
         evidence=[metadata, substantive],
     )
@@ -533,94 +438,8 @@ def test_metadata_sentences_are_filtered_from_evidence():
     assert set(draft.citation_map) == {f"S{numbering[substantive.source_id]}"}
 
 
-def test_outline_titles_are_topic_phrases_not_questions():
-    question_id = uuid4()
-    question = "生成式人工智能提升大学生学习效果的证据有哪些？"
-    support = _evidence(question_id, uuid4())
-    plan = ResearchPlan(
-        summary="Plan",
-        questions=[
-            ResearchQuestion(question_id=question_id, question=question)
-        ],
-    )
-    matrix = EvidenceMatrix(
-        rows=[
-            EvidenceRow(
-                question_id=question_id,
-                question=question,
-                support_count=1,
-                independent_source_count=1,
-                conclusion="Limited support.",
-                support_evidence_ids=[support.id],
-            )
-        ],
-        total_evidence=1,
-        source_count=1,
-        independent_source_count=1,
-        coverage_ratio=0.5,
-    )
-    outline = build_outline(
-        _brief(language=ProjectLanguage.ZH),
-        plan,
-        matrix,
-        [],
-        version=1,
-        evidence_by_question={question_id: [support]},
-    )
-    titles = [section.title for section in outline.sections]
-    assert "生成式人工智能提升大学生学习效果的证据" in titles
-    assert all(not title.endswith("？") for title in titles)
-
-
-def test_outline_uses_research_map_framing_for_question_sections():
-    question_id = uuid4()
-    question = "Which accessibility milestones changed assistive technology?"
-    support = _evidence(question_id, uuid4())
-    plan = ResearchPlan(
-        summary="Plan",
-        questions=[
-            ResearchQuestion(question_id=question_id, question=question)
-        ],
-    )
-    matrix = EvidenceMatrix(
-        rows=[
-            EvidenceRow(
-                question_id=question_id,
-                question=question,
-                support_count=1,
-                independent_source_count=1,
-                conclusion="Limited support.",
-                support_evidence_ids=[support.id],
-            )
-        ],
-        total_evidence=1,
-        source_count=1,
-        independent_source_count=1,
-        coverage_ratio=0.5,
-    )
-    outline = build_outline(
-        _brief(),
-        plan,
-        matrix,
-        [],
-        version=1,
-        evidence_by_question={question_id: [support]},
-        section_framing={
-            0: (
-                "From Braille to screen readers",
-                "Trace the technology line.",
-            )
-        },
-    )
-    section = next(
-        item for item in outline.sections if item.question_id == question_id
-    )
-    assert section.title == "From Braille to screen readers"
-    assert section.purpose == "Trace the technology line."
-
-
 def test_section_without_evidence_does_not_assert_conclusions():
-    draft, _, _, _ = _section(uuid4(), title="Unanswered question", evidence=[])
+    draft, _, _, _ = _section(uuid4(), title="Unanswered dimension", evidence=[])
 
     assert "does not yet support a grounded judgment" in draft.content
     assert not draft.citation_map
@@ -628,14 +447,14 @@ def test_section_without_evidence_does_not_assert_conclusions():
 
 
 def test_llm_section_accepts_valid_markdown_with_only_supplied_markers():
-    question_id = uuid4()
-    support = _evidence(question_id, uuid4())
+    section_id = uuid4()
+    support = _evidence(section_id, uuid4())
     llm = _FakeLLM(
         {"markdown": "## Question\n\nEnforcement improves compliance [S1]."}
     )
     draft, sources, numbering, matrix = _section(
-        question_id,
-        title="Does enforcement work?",
+        section_id,
+        title="Enforcement outcomes",
         evidence=[support],
         llm=llm,
     )
@@ -647,10 +466,10 @@ def test_llm_section_accepts_valid_markdown_with_only_supplied_markers():
 
 
 def test_llm_section_supplements_evidence_then_rewrites():
-    question_id = uuid4()
-    original = _evidence(question_id, uuid4())
+    section_id = uuid4()
+    original = _evidence(section_id, uuid4())
     added = _evidence(
-        question_id,
+        section_id,
         uuid4(),
         claim_summary="A second study confirms the finding.",
         quoted_text="A second study confirms the same compliance finding.",
@@ -689,8 +508,8 @@ def test_llm_section_supplements_evidence_then_rewrites():
         )
 
     draft, _, _, _ = _section(
-        question_id,
-        title="Does enforcement work?",
+        section_id,
+        title="Enforcement outcomes",
         evidence=[original],
         llm=llm,
         numbering=numbering,
@@ -711,8 +530,8 @@ def test_llm_section_supplements_evidence_then_rewrites():
 
 
 def test_llm_section_requests_sources_when_the_section_has_no_evidence():
-    question_id = uuid4()
-    added = _evidence(question_id, uuid4())
+    section_id = uuid4()
+    added = _evidence(section_id, uuid4())
     numbering = {}
     llm = _SequenceLLM(
         [
@@ -727,7 +546,7 @@ def test_llm_section_requests_sources_when_the_section_has_no_evidence():
             },
             {
                 "markdown": (
-                    "## Unanswered question\n\n"
+                    "## Unanswered dimension\n\n"
                     "New evidence addresses the question [S1]."
                 )
             },
@@ -745,8 +564,8 @@ def test_llm_section_requests_sources_when_the_section_has_no_evidence():
         )
 
     draft, _, _, _ = _section(
-        question_id,
-        title="Unanswered question",
+        section_id,
+        title="Unanswered dimension",
         evidence=[],
         llm=llm,
         numbering=numbering,
@@ -763,8 +582,8 @@ def test_llm_section_requests_sources_when_the_section_has_no_evidence():
 
 
 def test_llm_section_writes_with_existing_evidence_when_search_finds_nothing():
-    question_id = uuid4()
-    support = _evidence(question_id, uuid4())
+    section_id = uuid4()
+    support = _evidence(section_id, uuid4())
     llm = _SequenceLLM(
         [
             {
@@ -789,8 +608,8 @@ def test_llm_section_writes_with_existing_evidence_when_search_finds_nothing():
         )
 
     draft, _, _, _ = _section(
-        question_id,
-        title="Question",
+        section_id,
+        title="Enforcement outcomes",
         evidence=[support],
         llm=llm,
         supplement=supplement,
@@ -807,8 +626,8 @@ def test_llm_section_writes_with_existing_evidence_when_search_finds_nothing():
 
 
 def test_llm_section_returns_model_summary_for_later_context():
-    question_id = uuid4()
-    support = _evidence(question_id, uuid4())
+    section_id = uuid4()
+    support = _evidence(section_id, uuid4())
     llm = _FakeLLM(
         {
             "markdown": "## Question\n\nEnforcement improves compliance [S1].",
@@ -817,8 +636,8 @@ def test_llm_section_returns_model_summary_for_later_context():
     )
 
     draft, _, _, _ = _section(
-        question_id,
-        title="Does enforcement work?",
+        section_id,
+        title="Enforcement outcomes",
         evidence=[support],
         llm=llm,
     )
@@ -828,15 +647,15 @@ def test_llm_section_returns_model_summary_for_later_context():
 
 
 def test_llm_section_summary_falls_back_to_the_opening_sentences():
-    question_id = uuid4()
-    support = _evidence(question_id, uuid4())
+    section_id = uuid4()
+    support = _evidence(section_id, uuid4())
     llm = _FakeLLM(
         {"markdown": "## Question\n\nEnforcement improves compliance [S1]."}
     )
 
     draft, _, _, _ = _section(
-        question_id,
-        title="Does enforcement work?",
+        section_id,
+        title="Enforcement outcomes",
         evidence=[support],
         llm=llm,
     )
@@ -847,8 +666,8 @@ def test_llm_section_summary_falls_back_to_the_opening_sentences():
 
 
 def test_llm_section_receives_prior_section_context():
-    question_id = uuid4()
-    support = _evidence(question_id, uuid4())
+    section_id = uuid4()
+    support = _evidence(section_id, uuid4())
     llm = _SequenceLLM(
         [
             {
@@ -861,8 +680,8 @@ def test_llm_section_receives_prior_section_context():
     )
 
     draft, _, _, _ = _section(
-        question_id,
-        title="Question",
+        section_id,
+        title="Enforcement outcomes",
         evidence=[support],
         llm=llm,
         prior_sections=[
@@ -900,13 +719,13 @@ def test_summarize_section_content_keeps_leading_sentences_without_markers():
 
 
 def test_llm_section_falls_back_on_unsafe_output():
-    question_id = uuid4()
-    support = _evidence(question_id, uuid4())
+    section_id = uuid4()
+    support = _evidence(section_id, uuid4())
     source_id = support.source_id
 
     unknown = _FakeLLM({"markdown": "## Q\n\nClaim [S7]."})
     draft, _, _, _ = _section(
-        question_id, evidence=[support], llm=unknown
+        section_id, evidence=[support], llm=unknown
     )
     assert not draft.used_llm
     assert "Claim [S7]" not in draft.content
@@ -915,7 +734,7 @@ def test_llm_section_falls_back_on_unsafe_output():
         {"markdown": "## Q\n\nEfficiency rose 87% [S1]."}
     )
     draft, _, _, _ = _section(
-        question_id, evidence=[support], llm=invented_number
+        section_id, evidence=[support], llm=invented_number
     )
     assert not draft.used_llm
     assert "87%" not in draft.content
@@ -929,19 +748,19 @@ def test_llm_section_falls_back_on_unsafe_output():
         }
     )
     draft, _, _, _ = _section(
-        question_id, evidence=[support], llm=reference_list
+        section_id, evidence=[support], llm=reference_list
     )
     assert not draft.used_llm
     assert draft.citation_map == {"S1": str(source_id)}
 
 
 def test_llm_section_rejects_uncited_paragraphs():
-    question_id = uuid4()
-    support = _evidence(question_id, uuid4())
+    section_id = uuid4()
+    support = _evidence(section_id, uuid4())
     llm = _FakeLLM(
         {"markdown": "## Q\n\nFirst claim [S1].\n\nSecond unsupported sentence."}
     )
-    draft, _, _, _ = _section(question_id, evidence=[support], llm=llm)
+    draft, _, _, _ = _section(section_id, evidence=[support], llm=llm)
 
     assert not draft.used_llm
 
@@ -949,7 +768,7 @@ def test_llm_section_rejects_uncited_paragraphs():
 def test_claim_extraction_flags_uncited_numeric_claims():
     section = SimpleNamespace(
         section_index=1,
-        title="Question",
+        title="Enforcement outcomes",
         content_markdown=(
             "## Question\n\n"
             "Enforcement improves compliance in audited firms [S1]. "
@@ -995,10 +814,10 @@ def test_claim_extraction_keeps_markers_after_quoted_questions():
     )
 
 
-def _assessment(claim_text, *, markers, evidence=None, section_title="Q"):
-    question_id = uuid4()
+def _assessment(claim_text, *, markers, evidence=None, section_title="Enforcement outcomes"):
+    section_id = uuid4()
     source = _source()
-    item = _evidence(question_id, source.id)
+    item = _evidence(section_id, source.id)
     if evidence is not None:
         item = evidence
         source = _source(id=item.source_id)
@@ -1036,10 +855,10 @@ def test_claim_verification_accepts_traceable_evidence():
 
 
 def test_claim_verification_downgrades_for_numeric_and_locator_mismatch():
-    question_id = uuid4()
+    section_id = uuid4()
     source = _source()
     item = _evidence(
-        question_id,
+        section_id,
         source.id,
         quoted_text="Enforcement improves compliance in 40 percent of audited firms.",
     )
@@ -1069,10 +888,10 @@ def test_claim_verification_downgrades_for_numeric_and_locator_mismatch():
 
 
 def test_claim_verification_treats_refutation_as_contradiction():
-    question_id = uuid4()
+    section_id = uuid4()
     source = _source()
     refute = _evidence(
-        question_id,
+        section_id,
         source.id,
         evidence_type=EvidenceType.REFUTATION,
         claim_summary="Audits fail to improve compliance in small firms.",
@@ -1082,7 +901,7 @@ def test_claim_verification_treats_refutation_as_contradiction():
         "Enforcement improves compliance in audited firms.",
         markers=("S1",),
         evidence=refute,
-        section_title="Question",
+        section_title="Enforcement outcomes",
     )
 
     assert assessment.status is ClaimVerificationStatus.CONTRADICTED

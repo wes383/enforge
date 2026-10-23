@@ -29,12 +29,7 @@ import {
   TERMINAL_RUN_STATUSES,
 } from "@/lib/labels";
 import { pick, useLocale } from "@/lib/locale";
-import type {
-  Evidence,
-  EvidenceListResponse,
-  QuestionListResponse,
-  ResearchQuestion,
-} from "@/lib/types";
+import type { Evidence, EvidenceListResponse } from "@/lib/types";
 
 const PAGE_SIZE = 200;
 
@@ -55,11 +50,10 @@ export default function EvidencePage() {
   const { runId, overview, registerRefresh } = useRunWorkspace();
   const [items, setItems] = useState<Evidence[]>([]);
   const [total, setTotal] = useState(0);
-  const [questions, setQuestions] = useState<ResearchQuestion[]>([]);
   const [loading, setLoading] = useState(true);
   const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [questionFilter, setQuestionFilter] = useState("all");
+  const [sectionFilter, setSectionFilter] = useState("all");
   const [typeFilter, setTypeFilter] = useState("all");
   const [relationFilter, setRelationFilter] = useState("all");
   const [sourceFilter, setSourceFilter] = useState("all");
@@ -71,15 +65,11 @@ export default function EvidencePage() {
 
   const loadInitial = useCallback(async () => {
     try {
-      const [evidenceData, questionData] = await Promise.all([
-        apiFetch<EvidenceListResponse>(
-          `/runs/${runId}/evidence?limit=${PAGE_SIZE}&offset=0`,
-        ),
-        apiFetch<QuestionListResponse>(`/runs/${runId}/questions`),
-      ]);
+      const evidenceData = await apiFetch<EvidenceListResponse>(
+        `/runs/${runId}/evidence?limit=${PAGE_SIZE}&offset=0`,
+      );
       setItems(evidenceData.items);
       setTotal(evidenceData.total);
-      setQuestions(questionData.items);
       setError(null);
     } catch (caught) {
       setError(caught instanceof ApiError ? caught.detail : String(caught));
@@ -127,13 +117,17 @@ export default function EvidencePage() {
   }, [loadInitial]);
 
   useEffect(() => {
-    const initial = new URLSearchParams(window.location.search).get("question");
-    if (initial) setQuestionFilter(initial);
+    const initial = new URLSearchParams(window.location.search).get("section");
+    if (initial) setSectionFilter(initial);
   }, []);
 
-  const questionMap = useMemo(
-    () => new Map(questions.map((question) => [question.id, question])),
-    [questions],
+  const sections = useMemo(
+    () => overview?.outline_sections ?? [],
+    [overview],
+  );
+  const sectionMap = useMemo(
+    () => new Map(sections.map((section) => [section.id, section])),
+    [sections],
   );
 
   const sourceOptions = useMemo(() => {
@@ -146,8 +140,8 @@ export default function EvidencePage() {
     const normalized = query.trim().toLowerCase();
     return items.filter((item) => {
       if (
-        questionFilter !== "all" &&
-        item.research_question_id !== questionFilter
+        sectionFilter !== "all" &&
+        item.outline_section_id !== sectionFilter
       ) {
         return false;
       }
@@ -162,7 +156,7 @@ export default function EvidencePage() {
         .toLowerCase()
         .includes(normalized);
     });
-  }, [items, query, questionFilter, relationFilter, sourceFilter, typeFilter]);
+  }, [items, query, sectionFilter, relationFilter, sourceFilter, typeFilter]);
 
   return (
     <div className="flex flex-col gap-4">
@@ -199,14 +193,14 @@ export default function EvidencePage() {
           />
         </div>
         <Select
-          value={questionFilter}
-          onChange={(event) => setQuestionFilter(event.target.value)}
-          aria-label={pick(locale, "按研究问题筛选", "Filter by question")}
+          value={sectionFilter}
+          onChange={(event) => setSectionFilter(event.target.value)}
+          aria-label={pick(locale, "按章节筛选", "Filter by section")}
         >
-          <option value="all">{pick(locale, "全部问题", "All questions")}</option>
-          {questions.map((question, index) => (
-            <option key={question.id} value={question.id}>
-              Q{index + 1}. {question.question}
+          <option value="all">{pick(locale, "全部章节", "All sections")}</option>
+          {sections.map((section, index) => (
+            <option key={section.id} value={section.id}>
+              {String(index + 1).padStart(2, "0")}. {section.title}
             </option>
           ))}
         </Select>
@@ -292,8 +286,8 @@ export default function EvidencePage() {
             {filtered.map((item) => {
               const relation = relationOf(item.evidence_type);
               const locators = formatLocator(item.locator);
-              const question = item.research_question_id
-                ? questionMap.get(item.research_question_id)
+              const section = item.outline_section_id
+                ? sectionMap.get(item.outline_section_id)
                 : null;
               return (
                 <Card key={item.id} className="flex min-w-0 flex-col p-5">
@@ -320,13 +314,13 @@ export default function EvidencePage() {
                     >
                       {evidenceVerificationLabel(item.verification_status, locale)}
                     </Badge>
-                    {question ? (
+                    {section ? (
                       <Badge
                         variant="secondary"
                         size="xs"
                         className="min-w-0 max-w-full truncate"
                       >
-                        {question.question}
+                        {section.title}
                       </Badge>
                     ) : null}
                   </div>

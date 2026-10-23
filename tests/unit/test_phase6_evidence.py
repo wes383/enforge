@@ -6,7 +6,8 @@ from uuid import uuid4
 from dr_core.db.enums import (
     EvidenceType,
     ProjectLanguage,
-    QuestionCoverageStatus,
+    SectionCoverageStatus,
+    SectionRole,
     SourceType,
     SourceVersionKind,
 )
@@ -17,8 +18,8 @@ from dr_core.providers.models import (
     ParseStatus,
 )
 from dr_core.research.indexing import chunk_document, snippet_chunks
-from dr_core.research.models import ResearchQuestion
-from dr_core.research.nodes import _question_queries
+from dr_core.research.models import OutlineSection
+from dr_core.research.nodes import _section_queries
 from dr_core.research.quality import (
     assess_evidence_quality,
     assess_source_quality,
@@ -66,10 +67,10 @@ def _source(**overrides):
     return FakeSource(**values)
 
 
-def _evidence(question_id, source_id, *, evidence_type=EvidenceType.DIRECT_SUPPORT):
+def _evidence(section_id, source_id, *, evidence_type=EvidenceType.DIRECT_SUPPORT):
     return SimpleNamespace(
         id=uuid4(),
-        research_question_id=question_id,
+        outline_section_id=section_id,
         source_id=source_id,
         evidence_type=evidence_type,
         claim_summary="Regulatory enforcement improves compliance in audited firms.",
@@ -177,8 +178,11 @@ def test_sentence_span_and_context_are_traceable():
 
 
 def test_sentence_matching_uses_search_terms_for_english_sources():
-    question = ResearchQuestion(
-        question="哪些证据讨论青少年社交媒体使用与心理健康的关系？",
+    section = OutlineSection(
+        index=0,
+        role=SectionRole.BODY,
+        title="青少年社交媒体使用与心理健康",
+        purpose="解释这一关系及其边界。",
         search_terms=["adolescent social media mental health"],
     )
     text = (
@@ -186,12 +190,12 @@ def test_sentence_matching_uses_search_terms_for_english_sources():
         "adolescent mental health, with stronger adverse consequences for girls."
     )
 
-    assert best_sentence_span(text, question.question, limit=1) == []
+    assert best_sentence_span(text, section.title, limit=1) == []
 
-    queries = _question_queries(question)
+    queries = _section_queries(section)
     assert queries == [
-        question.question,
         "adolescent social media mental health",
+        section.title,
     ]
     match = best_sentence_span_for_queries(text, queries)
     assert match is not None
@@ -273,17 +277,20 @@ def test_evidence_quality_explains_independence_and_context():
 
 
 def test_evidence_matrix_keeps_counter_evidence_and_duplicate_sources():
-    question_covered = ResearchQuestion(
-        question_id=uuid4(),
-        question="Does enforcement improve compliance?",
+    section_covered = OutlineSection(
+        index=0,
+        title="Does enforcement improve compliance?",
+        purpose="Assess the compliance effect.",
     )
-    question_mixed = ResearchQuestion(
-        question_id=uuid4(),
-        question="What are the costs of enforcement?",
+    section_mixed = OutlineSection(
+        index=1,
+        title="What are the costs of enforcement?",
+        purpose="Assess the costs.",
     )
-    question_empty = ResearchQuestion(
-        question_id=uuid4(),
-        question="How should enforcement be evaluated?",
+    section_empty = OutlineSection(
+        index=2,
+        title="How should enforcement be evaluated?",
+        purpose="Discuss evaluation.",
     )
     source_a = _source(
         title="Primary study",
@@ -303,17 +310,17 @@ def test_evidence_matrix_keeps_counter_evidence_and_duplicate_sources():
         published_at=date(2023, 1, 1),
         source_type=SourceType.REPORT,
     )
-    support_a = _evidence(question_covered.question_id, source_a.id)
-    support_b = _evidence(question_covered.question_id, source_b.id)
-    mixed_support = _evidence(question_mixed.question_id, source_a.id)
+    support_a = _evidence(section_covered.section_id, source_a.id)
+    support_b = _evidence(section_covered.section_id, source_b.id)
+    mixed_support = _evidence(section_mixed.section_id, source_a.id)
     mixed_refute = _evidence(
-        question_mixed.question_id,
+        section_mixed.section_id,
         source_c.id,
         evidence_type=EvidenceType.REFUTATION,
     )
 
     matrix = build_evidence_matrix(
-        [question_covered, question_mixed, question_empty],
+        [section_covered, section_mixed, section_empty],
         [support_a, support_b, mixed_support, mixed_refute],
         {source.id: source for source in (source_a, source_b, source_c)},
         language=ProjectLanguage.EN,
@@ -326,7 +333,7 @@ def test_evidence_matrix_keeps_counter_evidence_and_duplicate_sources():
 
     assert covered_row.support_count == 2
     assert covered_row.independent_source_count == 1
-    assert covered_row.coverage_status is QuestionCoverageStatus.PARTIAL
+    assert covered_row.coverage_status is SectionCoverageStatus.PARTIAL
     assert covered_row.conclusion
     assert matrix.duplicate_source_groups
     assert any(
@@ -346,7 +353,7 @@ def test_evidence_matrix_keeps_counter_evidence_and_duplicate_sources():
         for quality in mixed_row.evidence_quality
     )
 
-    assert empty_row.coverage_status is QuestionCoverageStatus.INSUFFICIENT
+    assert empty_row.coverage_status is SectionCoverageStatus.INSUFFICIENT
     assert empty_row.gap
     assert matrix.coverage_ratio == 0.3333
     assert matrix.independent_source_count == 2

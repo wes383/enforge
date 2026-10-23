@@ -5,141 +5,87 @@ from typing import Iterable
 from uuid import UUID
 
 from dr_core.db.enums import (
-    EvidenceType,
+    ArticleType,
     ProjectLanguage,
-    QuestionCoverageStatus,
     ResearchDepth,
     SearchProviderName,
+    SectionRole,
 )
 from dr_core.research.models import (
-    EvidenceMatrix,
-    EvidenceRow,
     Outline,
     OutlineSection,
     ResearchBrief,
     ResearchGap,
-    ResearchPlan,
-    ResearchQuestion,
     SearchQuery,
 )
 
+_LATIN_RE = re.compile(r"[A-Za-z]")
 
-_QUESTION_LIMITS = {
+_DEPTH_SCALE = {
+    ResearchDepth.QUICK: 0.8,
+    ResearchDepth.STANDARD: 1.0,
+    ResearchDepth.DEEP: 1.3,
+}
+_DEFAULT_SECTIONS = {
     ResearchDepth.QUICK: 3,
     ResearchDepth.STANDARD: 4,
     ResearchDepth.DEEP: 5,
 }
 
-
-def depth_question_limit(brief: ResearchBrief) -> int:
-    return _QUESTION_LIMITS[brief.research_depth]
-
-
-def default_priority(index: int) -> int:
-    return max(10, 90 - index * 10)
-
-
-def build_plan(
-    brief: ResearchBrief,
-    *,
-    version: int = 1,
-    feedback: str | None = None,
-) -> ResearchPlan:
-    topic = brief.topic.strip().rstrip("。.!?！？")
-    scope = (brief.research_scope or "").strip()
-    limit = depth_question_limit(brief)
-    if brief.language is ProjectLanguage.ZH:
-        candidates = [
-            f"{topic}的核心概念、现状与主要结论是什么？",
-            f"有哪些关键证据、数据或案例支持关于{topic}的判断？",
-            f"{topic}存在哪些争议、反方观点、风险或适用边界？",
-            (
-                f"在{scope}范围内，{topic}的实践路径和影响如何？"
-                if scope
-                else f"{topic}的最新进展、趋势与实践影响如何？"
-            ),
-            f"如何评价{topic}相关结论的可靠性、证据质量与可推广性？",
-        ]
-        summary = f"围绕“{topic}”建立多角度研究计划，优先覆盖事实、证据、争议、实践与可靠性。"
-    else:
-        candidates = [
-            f"What are the core concepts, current state, and main conclusions of {topic}?",
-            f"What key evidence, data, or cases support or challenge claims about {topic}?",
-            f"What controversies, counterarguments, risks, or boundary conditions surround {topic}?",
-            (
-                f"How does {topic} play out in practice within {scope}?"
-                if scope
-                else f"What recent developments and practical implications shape {topic}?"
-            ),
-            f"How reliable, well-evidenced, and generalizable are conclusions about {topic}?",
-        ]
-        summary = (
-            f"Build a multi-angle research plan for “{topic}” covering facts, "
-            "evidence, debate, practice, and reliability."
-        )
-
-    if feedback:
-        if brief.language is ProjectLanguage.ZH:
-            candidates.insert(0, f"根据审批反馈需要补充研究：{feedback[:400]}")
-        else:
-            candidates.insert(0, f"Address the approval feedback: {feedback[:400]}")
-
-    deduped: list[str] = []
-    seen: set[str] = set()
-    for question in candidates:
-        key = question.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        deduped.append(question)
-        if len(deduped) >= limit:
-            break
-
-    questions = [
-        ResearchQuestion(
-            question=question,
-            priority=default_priority(index),
-        )
-        for index, question in enumerate(deduped)
-    ]
-    return ResearchPlan(
-        version=version,
-        summary=summary,
-        questions=questions,
-        scope_notes=scope or None,
-    )
+_TYPE_TITLES: dict[ArticleType, dict[ProjectLanguage, tuple[str, ...]]] = {
+    ArticleType.EXPLAINER: {
+        ProjectLanguage.ZH: ("核心概念与定义", "运作机制", "为什么重要", "常见误解与边界"),
+        ProjectLanguage.EN: ("Core concepts and definitions", "How it works", "Why it matters", "Common misunderstandings and limits"),
+    },
+    ArticleType.MECHANISM_ANALYSIS: {
+        ProjectLanguage.ZH: ("待解释的现象", "竞争性解释", "因果机制", "证据检验与适用条件"),
+        ProjectLanguage.EN: ("The phenomenon to explain", "Competing explanations", "Causal mechanisms", "Testing explanations and boundary conditions"),
+    },
+    ArticleType.INVESTIGATIVE_RESEARCH: {
+        ProjectLanguage.ZH: ("议题背景与边界", "已确认的事实", "关键证据与数据", "争议与不同立场", "研究缺口"),
+        ProjectLanguage.EN: ("Background and boundaries", "Established facts", "Key evidence and data", "Disputes and positions", "Research gaps"),
+    },
+    ArticleType.CASE_STUDY: {
+        ProjectLanguage.ZH: ("案例选择与背景", "事件时间线", "关键决策与参与者", "结果与成因", "可迁移条件"),
+        ProjectLanguage.EN: ("Case selection and context", "Timeline", "Decisions and actors", "Outcomes and causes", "Transferable conditions"),
+    },
+    ArticleType.COMPARATIVE_ANALYSIS: {
+        ProjectLanguage.ZH: ("比较对象与标准", "维度对比", "差异来源", "适用条件与结论"),
+        ProjectLanguage.EN: ("Objects and criteria", "Comparison", "Sources of difference", "Applicability and conclusions"),
+    },
+    ArticleType.ARGUMENT_CRITIQUE: {
+        ProjectLanguage.ZH: ("核心主张", "论证结构", "支持证据", "最强反方观点", "回应与结论"),
+        ProjectLanguage.EN: ("The central claim", "Argument structure", "Supporting evidence", "The strongest objection", "Response and conclusion"),
+    },
+    ArticleType.TREND_SCENARIO: {
+        ProjectLanguage.ZH: ("趋势与观察窗口", "历史轨迹与驱动因素", "确定性与不确定性", "情景分析", "需要观察的信号"),
+        ProjectLanguage.EN: ("Trend and observation window", "Trajectory and drivers", "Certainties and uncertainties", "Scenarios", "Signals to watch"),
+    },
+    ArticleType.DECISION_STRATEGY: {
+        ProjectLanguage.ZH: ("决策目标与约束", "备选方案", "评估标准与证据", "权衡与敏感性", "建议与实施路径"),
+        ProjectLanguage.EN: ("Decision, goals and constraints", "Options", "Criteria and evidence", "Tradeoffs and sensitivity", "Recommendation and roadmap"),
+    },
+    ArticleType.HISTORICAL_DEVELOPMENT: {
+        ProjectLanguage.ZH: ("研究对象与范围", "起源与前身", "发展阶段", "转折点与机制", "连续、断裂与争议"),
+        ProjectLanguage.EN: ("Object and scope", "Origins and precursors", "Phases of development", "Turning points and mechanisms", "Continuity, rupture and disputes"),
+    },
+}
 
 
-_LATIN_RE = re.compile(r"[A-Za-z]")
-
-
-def query_pair(
-    question: str,
-    search_terms: list[str],
-) -> tuple[str, str]:
+def query_pair(title: str, search_terms: list[str]) -> tuple[str, str]:
     """(primary, latin) query text: web uses primary, academic uses latin."""
     terms = [
         " ".join(term.split())
         for term in search_terms
         if term and term.strip()
     ]
-    primary = terms[0] if terms else question
+    primary = terms[0] if terms else title
     latin = next((term for term in terms if _LATIN_RE.search(term)), primary)
     return primary, latin
 
 
-def web_query_text(question: ResearchQuestion) -> str:
-    """In-project-language query for a research question."""
-    return query_pair(question.question, question.search_terms)[0]
-
-
-def academic_query_text(question: ResearchQuestion) -> str:
-    """Academic indexes match English best, so prefer a Latin-script term."""
-    return query_pair(question.question, question.search_terms)[1]
-
-
 def build_queries(
-    plan: ResearchPlan,
+    outline: Outline,
     *,
     round_index: int,
     web_providers: list[SearchProviderName],
@@ -147,29 +93,41 @@ def build_queries(
     limit: int,
 ) -> list[SearchQuery]:
     queries: list[SearchQuery] = []
-    for index, question in enumerate(plan.questions):
+    searchable = [
+        section
+        for section in outline.sections
+        if section.role
+        in {
+            SectionRole.INTRODUCTION,
+            SectionRole.BODY,
+            SectionRole.CONTRADICTIONS,
+            SectionRole.CONCLUSION,
+        }
+    ]
+    for index, section in enumerate(searchable):
         if len(queries) >= limit:
             break
+        primary, latin = query_pair(section.title, section.search_terms)
         if web_providers:
             queries.append(
                 SearchQuery(
-                    query_text=web_query_text(question),
+                    query_text=primary,
                     kind="web",
                     provider=web_providers[index % len(web_providers)],
                     round_index=round_index,
-                    research_question_id=question.question_id,
+                    outline_section_id=section.section_id,
                 )
             )
         if len(queries) < limit and academic_providers:
             queries.append(
                 SearchQuery(
-                    query_text=academic_query_text(question),
+                    query_text=latin,
                     kind="academic",
                     provider=academic_providers[
                         index % len(academic_providers)
                     ],
                     round_index=round_index,
-                    research_question_id=question.question_id,
+                    outline_section_id=section.section_id,
                 )
             )
     return queries
@@ -200,7 +158,7 @@ def build_gap_queries(
             kind = "web" if provider_pool is web_providers else "academic"
             if not provider_pool:
                 continue
-            query_text = text if gap.suggested_queries else f"{gap.question} {suffix}"
+            query_text = text if gap.suggested_queries else f"{gap.section_title} {suffix}"
             queries.append(
                 SearchQuery(
                     query_text=query_text,
@@ -209,265 +167,169 @@ def build_gap_queries(
                         (gap_index + query_index) % len(provider_pool)
                     ],
                     round_index=round_index,
-                    research_question_id=gap.question_id,
+                    outline_section_id=gap.section_id,
                 )
             )
     return queries
 
 
-def build_outline(
+def build_outline_template(
     brief: ResearchBrief,
-    plan: ResearchPlan,
-    matrix: EvidenceMatrix,
-    gaps: list[ResearchGap],
     *,
-    version: int,
-    evidence_by_question: dict[UUID | None, list],
+    version: int = 1,
     feedback: str | None = None,
-    section_framing: dict[int, tuple[str, str]] | None = None,
-    include_contradictions: bool = False,
 ) -> Outline:
-    sections: list[OutlineSection] = []
-    framing = section_framing or {}
-    section_budget = (
-        max(100, round(brief.target_words / (len(plan.questions) + 3)))
-        if brief.target_words
-        else None
-    )
-    all_items = [
-        item for items in evidence_by_question.values() for item in items
-    ]
-    contradiction_ids = [
-        evidence_id
-        for row in matrix.rows
-        if row.support_count and row.refute_count
-        for evidence_id in [*row.support_evidence_ids, *row.refute_evidence_ids]
-    ]
-    if brief.language is ProjectLanguage.ZH:
-        sections.append(
-            OutlineSection(
-                index=0,
-                title="引言",
-                purpose="引出研究问题、范围与文章主线，不罗列证据清单。",
-                key_claims=[item.claim_summary[:300] for item in all_items[:3]],
-                support_evidence_ids=[item.id for item in all_items[:3]],
-                evidence_ids=[item.id for item in all_items[:3]],
-                target_words=_target_words(brief, "intro", section_budget),
-            )
-        )
-        for position, question in enumerate(plan.questions):
-            items = evidence_by_question.get(question.question_id, [])
-            support, refute = _split_evidence(items)
-            title, purpose = _framed_section(
-                framing,
-                position,
-                question.question,
-                "综合证据解释这一维度，并交代证据强度与适用条件。",
-            )
-            sections.append(
-                OutlineSection(
-                    index=len(sections),
-                    title=title,
-                    purpose=purpose,
-                    question_id=question.question_id,
-                    key_claims=[item.claim_summary[:300] for item in support[:3]],
-                    evidence_ids=[item.id for item in [*support, *refute]],
-                    support_evidence_ids=[item.id for item in support],
-                    refute_evidence_ids=[item.id for item in refute],
-                    target_words=_target_words(brief, "question", section_budget),
-                )
-            )
-        if include_contradictions and matrix.contradiction_count:
-            sections.append(
-                OutlineSection(
-                    index=len(sections),
-                    title="矛盾与反方证据",
-                    purpose="对比相互冲突的证据并解释分歧来源。",
-                    key_claims=[
-                        row.conclusion
-                        for row in matrix.rows
-                        if row.support_count and row.refute_count
-                    ][:3],
-                    evidence_ids=contradiction_ids,
-                    support_evidence_ids=[
-                        evidence_id
-                        for row in matrix.rows
-                        if row.support_count and row.refute_count
-                        for evidence_id in row.support_evidence_ids
-                    ],
-                    refute_evidence_ids=[
-                        evidence_id
-                        for row in matrix.rows
-                        if row.support_count and row.refute_count
-                        for evidence_id in row.refute_evidence_ids
-                    ],
-                    target_words=_target_words(brief, "contradiction", section_budget),
-                )
-            )
-        if gaps:
-            sections.append(
-                OutlineSection(
-                    index=len(sections),
-                    title="研究局限与未解决问题",
-                    purpose="说明检索和证据覆盖的不足，不将空白包装成结论。",
-                    key_claims=[gap.reason[:300] for gap in gaps[:3]],
-                    target_words=_target_words(brief, "limitations", section_budget),
-                )
-            )
-        sections.append(
-            OutlineSection(
-                index=len(sections),
-                title="结论",
-                purpose="综合证据回答主问题，并说明适用边界。",
-                key_claims=[item.claim_summary[:300] for item in all_items[:3]],
-                evidence_ids=[item.id for item in all_items],
-                support_evidence_ids=[
-                    evidence_id
-                    for row in matrix.rows
-                    for evidence_id in row.support_evidence_ids
-                ],
-                refute_evidence_ids=[
-                    evidence_id
-                    for row in matrix.rows
-                    for evidence_id in row.refute_evidence_ids
-                ],
-                target_words=_target_words(brief, "conclusion", section_budget),
-            )
-        )
-    else:
-        sections.append(
-            OutlineSection(
-                index=0,
-                title="Introduction",
-                purpose="Frame the stakes, scope, and line of argument without listing evidence.",
-                key_claims=[item.claim_summary[:300] for item in all_items[:3]],
-                support_evidence_ids=[item.id for item in all_items[:3]],
-                evidence_ids=[item.id for item in all_items[:3]],
-                target_words=_target_words(brief, "intro", section_budget),
-            )
-        )
-        for position, question in enumerate(plan.questions):
-            items = evidence_by_question.get(question.question_id, [])
-            support, refute = _split_evidence(items)
-            title, purpose = _framed_section(
-                framing,
-                position,
-                question.question,
-                (
-                    "Interpret this dimension of the evidence and explain "
-                    "its strength and conditions of applicability."
-                ),
-            )
-            sections.append(
-                OutlineSection(
-                    index=len(sections),
-                    title=title,
-                    purpose=purpose,
-                    question_id=question.question_id,
-                    key_claims=[item.claim_summary[:300] for item in support[:3]],
-                    evidence_ids=[item.id for item in [*support, *refute]],
-                    support_evidence_ids=[item.id for item in support],
-                    refute_evidence_ids=[item.id for item in refute],
-                    target_words=_target_words(brief, "question", section_budget),
-                )
-            )
-        if include_contradictions and matrix.contradiction_count:
-            sections.append(
-                OutlineSection(
-                    index=len(sections),
-                    title="Contradictions and Counter-Evidence",
-                    purpose="Compare conflicting evidence and explain the disagreement.",
-                    key_claims=[
-                        row.conclusion
-                        for row in matrix.rows
-                        if row.support_count and row.refute_count
-                    ][:3],
-                    evidence_ids=contradiction_ids,
-                    support_evidence_ids=[
-                        evidence_id
-                        for row in matrix.rows
-                        if row.support_count and row.refute_count
-                        for evidence_id in row.support_evidence_ids
-                    ],
-                    refute_evidence_ids=[
-                        evidence_id
-                        for row in matrix.rows
-                        if row.support_count and row.refute_count
-                        for evidence_id in row.refute_evidence_ids
-                    ],
-                    target_words=_target_words(brief, "contradiction", section_budget),
-                )
-            )
-        if gaps:
-            sections.append(
-                OutlineSection(
-                    index=len(sections),
-                    title="Limitations and Open Questions",
-                    purpose="State evidence gaps without presenting them as conclusions.",
-                    key_claims=[gap.reason[:300] for gap in gaps[:3]],
-                    target_words=_target_words(brief, "limitations", section_budget),
-                )
-            )
-        sections.append(
-            OutlineSection(
-                index=len(sections),
-                title="Conclusion",
-                purpose="Answer the main question and state boundary conditions.",
-                key_claims=[item.claim_summary[:300] for item in all_items[:3]],
-                evidence_ids=[item.id for item in all_items],
-                support_evidence_ids=[
-                    evidence_id
-                    for row in matrix.rows
-                    for evidence_id in row.support_evidence_ids
-                ],
-                refute_evidence_ids=[
-                    evidence_id
-                    for row in matrix.rows
-                    for evidence_id in row.refute_evidence_ids
-                ],
-                target_words=_target_words(brief, "conclusion", section_budget),
-            )
+    """Deterministic article outline used when no planning model is available."""
+    zh = brief.language is ProjectLanguage.ZH
+    topic = brief.topic.strip().rstrip("。.!?！？")
+    titles = _TYPE_TITLES[brief.article_type][brief.language]
+    body_count = _body_count(brief, len(titles))
+    body_titles = list(titles[:body_count])
+    while len(body_titles) < body_count:
+        body_titles.append(
+            f"补充分析 {len(body_titles) + 1}"
+            if zh
+            else f"Further analysis {len(body_titles) + 1}"
         )
 
+    sections: list[OutlineSection] = [
+        OutlineSection(
+            index=0,
+            role=SectionRole.INTRODUCTION,
+            title="引言" if zh else "Introduction",
+            purpose=(
+                f"引出“{topic}”的利害、范围与文章主线，不罗列证据清单。"
+                if zh
+                else (
+                    f"Frame the stakes, scope and line of argument for “{topic}” "
+                    "without listing evidence."
+                )
+            ),
+            search_terms=_terms(brief, "背景" if zh else "background"),
+            target_words=_section_words(
+                brief, SectionRole.INTRODUCTION, body_count
+            ),
+        )
+    ]
+    for position, title in enumerate(body_titles):
+        sections.append(
+            OutlineSection(
+                index=len(sections),
+                role=SectionRole.BODY,
+                title=title,
+                purpose=(
+                    f"围绕“{topic}”展开这一维度，说明证据支持什么、边界在哪里，"
+                    "并把结论交给下一节。"
+                    if zh
+                    else (
+                        f"Develop this dimension of “{topic}”: what the evidence "
+                        "supports, where its limits lie, and what the next section "
+                        "inherits."
+                    )
+                ),
+                search_terms=_terms(brief, title),
+                target_words=_section_words(brief, SectionRole.BODY, body_count),
+                key_claims=(
+                    [feedback[:300]]
+                    if feedback and position == 0
+                    else []
+                ),
+            )
+        )
+    if brief.article_type in {
+        ArticleType.ARGUMENT_CRITIQUE,
+        ArticleType.INVESTIGATIVE_RESEARCH,
+        ArticleType.MECHANISM_ANALYSIS,
+    }:
+        sections.append(
+            OutlineSection(
+                index=len(sections),
+                role=SectionRole.CONTRADICTIONS,
+                title="争议与反方证据" if zh else "Disputes and Counter-Evidence",
+                purpose=(
+                    "对比相互冲突的材料，解释分歧来源，不把单方证据当成定论。"
+                    if zh
+                    else (
+                        "Compare conflicting material, explain the disagreement and "
+                        "avoid treating one side as settled."
+                    )
+                ),
+                search_terms=_terms(
+                    brief,
+                    "反方证据 争议" if zh else "counter-evidence controversy",
+                ),
+                target_words=_section_words(
+                    brief, SectionRole.CONTRADICTIONS, body_count
+                ),
+            )
+        )
+    sections.append(
+        OutlineSection(
+            index=len(sections),
+            role=SectionRole.LIMITATIONS,
+            title="研究局限与适用范围" if zh else "Limitations and Applicability",
+            purpose=(
+                "说明证据覆盖、来源质量与适用条件的不足，不将空白包装成结论。"
+                if zh
+                else (
+                    "State gaps in evidence coverage, source quality and "
+                    "applicability without presenting blanks as conclusions."
+                )
+            ),
+            target_words=_section_words(brief, SectionRole.LIMITATIONS, body_count),
+        )
+    )
+    sections.append(
+        OutlineSection(
+            index=len(sections),
+            role=SectionRole.CONCLUSION,
+            title="结论" if zh else "Conclusion",
+            purpose=(
+                "综合证据回答主问题，并说明结论成立的条件。"
+                if zh
+                else (
+                    "Answer the main issue by synthesizing the evidence and state "
+                    "the conditions under which the conclusion holds."
+                )
+            ),
+            search_terms=_terms(brief, "结论 趋势" if zh else "conclusion outlook"),
+            target_words=_section_words(brief, SectionRole.CONCLUSION, body_count),
+        )
+    )
+
     summary = (
-        f"围绕 {len(plan.questions)} 个研究问题组织报告，覆盖 {matrix.source_count} 个来源。"
-        if brief.language is ProjectLanguage.ZH
+        f"围绕“{topic}”组织一篇{_type_label(brief, zh)}，先界定问题，再讨论证据、"
+        "分歧与适用条件。"
+        if zh
         else (
-            f"Organize the report around {len(plan.questions)} research questions "
-            f"using {matrix.source_count} sources."
+            f"Organize a {_type_label(brief, zh)} on “{topic}” that defines the "
+            "issue, then examines evidence, disagreement and conditions of "
+            "applicability."
         )
     )
     if feedback:
-        if brief.language is ProjectLanguage.ZH:
-            sections.insert(
-                len(sections) - 1,
-                OutlineSection(
-                    index=len(sections) - 1,
-                    title="审批反馈",
-                    purpose=f"回应提纲审批意见：{feedback[:500]}",
-                ),
-            )
-            for index, section in enumerate(sections):
-                section.index = index
-            summary += f" 本版本回应审批反馈：{feedback[:300]}"
-        else:
-            sections.insert(
-                len(sections) - 1,
-                OutlineSection(
-                    index=len(sections) - 1,
-                    title="Approval Feedback",
-                    purpose=f"Address the outline feedback: {feedback[:500]}",
-                ),
-            )
-            for index, section in enumerate(sections):
-                section.index = index
-            summary += f" This version addresses feedback: {feedback[:300]}"
+        summary += (
+            f" 本次提纲回应审批意见：{feedback[:300]}"
+            if zh
+            else f" This outline responds to the approval feedback: {feedback[:300]}"
+        )
     return Outline(
         version=version,
         title=brief.title,
         sections=sections,
-        summary=summary,
+        summary=summary[:20000],
     )
+
+
+def target_section_range(brief: ResearchBrief) -> tuple[int, int]:
+    """Soft range shown to the planning model; not a validation limit."""
+    if brief.target_words:
+        low = max(3, round(brief.target_words / 1800))
+        high = max(low + 2, round(brief.target_words / 700))
+    else:
+        base = _DEFAULT_SECTIONS[brief.research_depth]
+        low, high = max(3, base - 1), base + 3
+    return low, high
 
 
 def source_numbering(
@@ -480,87 +342,68 @@ def source_numbering(
     return {source_id: index + 1 for index, source_id in enumerate(source_ids)}
 
 
-def _split_evidence(items: list) -> tuple[list, list]:
-    support = [
-        item for item in items if item.evidence_type is not EvidenceType.REFUTATION
-    ]
-    refute = [
-        item for item in items if item.evidence_type is EvidenceType.REFUTATION
-    ]
-    return support, refute
-
-
-_DEPTH_WORD_SCALE = {
-    ResearchDepth.QUICK: 0.75,
-    ResearchDepth.STANDARD: 1.0,
-    ResearchDepth.DEEP: 1.35,
-}
-_BASE_WORDS = {
-    "intro": 260,
-    "question": 520,
-    "contradiction": 420,
-    "limitations": 260,
-    "conclusion": 360,
-}
-_TARGET_FACTORS = {
-    "intro": 0.55,
-    "question": 1.15,
-    "contradiction": 0.9,
-    "limitations": 0.5,
-    "conclusion": 0.7,
-}
-
-
-def _target_words(
-    brief: ResearchBrief,
-    kind: str,
-    section_budget: int | None = None,
-) -> int:
+def _body_count(brief: ResearchBrief, available: int) -> int:
     if brief.target_words:
-        budget = section_budget or max(100, brief.target_words // 4)
-        return max(50, min(5000, round(budget * _TARGET_FACTORS[kind])))
-    scale = _DEPTH_WORD_SCALE[brief.research_depth]
-    return max(50, min(5000, round(_BASE_WORDS[kind] * scale)))
+        count = max(2, round(brief.target_words * 0.72 / 1200))
+    else:
+        count = _DEFAULT_SECTIONS[brief.research_depth]
+    return max(1, min(available, count)) if available else count
 
 
-def _short_title(question: str) -> str:
-    cleaned = " ".join(question.strip().split())
-    cleaned = cleaned.rstrip("？?。.")
-    if re.match(r"^[\x00-\x7f]+$", cleaned):
-        cleaned = re.sub(
-            r"^(what|which|who|where|when|why|how)\s+"
-            r"(is|are|was|were|does|do|did|can|could|should|would|has|have)\s+",
-            "",
-            cleaned,
-            flags=re.IGNORECASE,
-        )
-        cleaned = re.sub(
-            r"^(what|which|how|why|when|where|who|does|do|is|are|can|should|could|would)\b[\s:,-]*",
-            "",
-            cleaned,
-            flags=re.IGNORECASE,
-        )
-    for phrase in ("包括哪些", "存在哪些", "有哪些", "是什么", "为什么", "怎么样", "怎样"):
-        cleaned = cleaned.replace(phrase, "")
-    if cleaned.startswith("如何"):
-        cleaned = cleaned[2:]
-    cleaned = " ".join(cleaned.split()).strip("，,；;：: ")
-    if cleaned.endswith("的"):
-        cleaned = cleaned[:-1].rstrip()
-    if not cleaned:
-        cleaned = " ".join(question.strip().split()).rstrip("？?。.")
-    if cleaned and cleaned[0].islower():
-        cleaned = cleaned[0].upper() + cleaned[1:]
-    if len(cleaned) <= 80:
-        return cleaned
-    return cleaned[:77] + "..."
+def _terms(brief: ResearchBrief, angle: str) -> list[str]:
+    topic = " ".join(brief.topic.split())[:200]
+    terms = [f"{topic} {angle}", topic]
+    if angle.casefold() in topic.casefold():
+        terms = [topic]
+    seen: set[str] = set()
+    cleaned: list[str] = []
+    for term in terms:
+        key = term.casefold()
+        if not term or key in seen:
+            continue
+        seen.add(key)
+        cleaned.append(term)
+    return cleaned[:3]
 
 
-def _framed_section(
-    framing: dict[int, tuple[str, str]],
-    position: int,
-    question: str,
-    default_purpose: str,
-) -> tuple[str, str]:
-    title, purpose = framing.get(position, ("", ""))
-    return (title or _short_title(question), purpose or default_purpose)
+def _base_words(brief: ResearchBrief) -> int:
+    if brief.target_words:
+        return max(100, brief.target_words)
+    return {
+        ResearchDepth.QUICK: 1200,
+        ResearchDepth.STANDARD: 2200,
+        ResearchDepth.DEEP: 3400,
+    }[brief.research_depth]
+
+
+def _section_words(
+    brief: ResearchBrief,
+    role: SectionRole,
+    body_count: int,
+) -> int:
+    total = _base_words(brief)
+    intro_share = 0.1
+    conclusion_share = 0.1
+    limitations_share = 0.06
+    contradiction_share = 0.1
+    if role is SectionRole.INTRODUCTION:
+        words = total * intro_share
+    elif role is SectionRole.CONCLUSION:
+        words = total * conclusion_share
+    elif role is SectionRole.LIMITATIONS:
+        words = total * limitations_share
+    elif role is SectionRole.CONTRADICTIONS:
+        words = total * contradiction_share
+    else:
+        words = total * (
+            1 - intro_share - conclusion_share - limitations_share
+        ) / max(1, body_count)
+    scale = _DEPTH_SCALE[brief.research_depth]
+    return max(50, min(5000, round(words * scale)))
+
+
+def _type_label(brief: ResearchBrief, zh: bool) -> str:
+    from dr_core.research.article_types import article_type_guide
+
+    guide = article_type_guide(brief.article_type)
+    return guide.label_zh if zh else guide.label_en

@@ -18,7 +18,7 @@ from dr_core.db.repositories import (
     ClaimRepository,
     DraftSectionRepository,
     EvidenceRepository,
-    ResearchQuestionRepository,
+    OutlineSectionRepository,
     RunEventRepository,
     SourceRepository,
 )
@@ -28,9 +28,9 @@ from dr_core.research.claims import audit_references
 from dr_core.research.models import (
     CitationAudit,
     CitationIssue,
+    OutlineSection,
     ReferenceAudit,
     ResearchBrief,
-    ResearchQuestion as ResearchQuestionModel,
 )
 from dr_core.research.quality import build_evidence_matrix
 from dr_core.research.reporting import (
@@ -78,7 +78,7 @@ def export_run(
         )
         if not sections:
             raise PermanentRunError("The run has no draft sections to export")
-        questions = ResearchQuestionRepository(session).list_for_run(
+        outline_sections = OutlineSectionRepository(session).list_for_run(
             project_id,
             run_id,
         )
@@ -95,6 +95,7 @@ def export_run(
         title=project.title,
         topic=project.topic,
         research_scope=project.research_scope,
+        article_type=project.article_type,
         language=project.language,
         target_audience=project.target_audience,
         research_depth=project.research_depth,
@@ -106,14 +107,17 @@ def export_run(
     )
     matrix = build_evidence_matrix(
         [
-            ResearchQuestionModel(
-                question_id=item.id,
-                question=item.question,
-                priority=item.priority,
-                parent_id=item.parent_id,
+            OutlineSection(
+                section_id=item.id,
+                index=index,
+                role=item.role,
+                title=item.title,
+                purpose=item.purpose or item.title,
+                search_terms=list(item.search_terms or []),
+                target_words=item.target_words or 400,
                 coverage_status=item.coverage_status,
             )
-            for item in questions
+            for index, item in enumerate(outline_sections)
         ],
         evidence,
         {source.id: source for source in source_records},
@@ -121,13 +125,20 @@ def export_run(
     )
 
     audited_section_ids: set[UUID] = set()
+    roles_by_index = {
+        index: item.role for index, item in enumerate(outline_sections)
+    }
     with database.session_scope() as session:
         audit_repo = CitationAuditRepository(session)
         sections_repo = DraftSectionRepository(session)
         for section in sections:
             existing = audit_repo.list_for_section(project_id, section.id)
             if not existing:
-                value = audit_section(section, sources)
+                value = audit_section(
+                    section,
+                    sources,
+                    role=roles_by_index.get(section.section_index),
+                )
                 audit_repo.create(project_id, run_id, value)
             audited_section_ids.add(section.id)
             latest = audit_repo.list_for_section(project_id, section.id)

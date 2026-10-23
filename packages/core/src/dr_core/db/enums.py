@@ -19,6 +19,18 @@ class CitationStyle(StrEnum):
     MLA = "mla"
 
 
+class ArticleType(StrEnum):
+    EXPLAINER = "explainer"
+    MECHANISM_ANALYSIS = "mechanism_analysis"
+    INVESTIGATIVE_RESEARCH = "investigative_research"
+    CASE_STUDY = "case_study"
+    COMPARATIVE_ANALYSIS = "comparative_analysis"
+    ARGUMENT_CRITIQUE = "argument_critique"
+    TREND_SCENARIO = "trend_scenario"
+    DECISION_STRATEGY = "decision_strategy"
+    HISTORICAL_DEVELOPMENT = "historical_development"
+
+
 class ProjectStatus(StrEnum):
     ACTIVE = "active"
     ARCHIVED = "archived"
@@ -47,11 +59,19 @@ TERMINAL_RUN_STATUSES = frozenset(
 )
 
 
-class QuestionCoverageStatus(StrEnum):
+class SectionCoverageStatus(StrEnum):
     OPEN = "open"
     PARTIAL = "partial"
     COVERED = "covered"
     INSUFFICIENT = "insufficient"
+
+
+class SectionRole(StrEnum):
+    INTRODUCTION = "introduction"
+    BODY = "body"
+    CONTRADICTIONS = "contradictions"
+    LIMITATIONS = "limitations"
+    CONCLUSION = "conclusion"
 
 
 class SearchProviderName(StrEnum):

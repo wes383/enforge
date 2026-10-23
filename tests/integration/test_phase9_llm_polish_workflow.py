@@ -161,9 +161,10 @@ def _cleanup(database, project_id: UUID) -> None:
 
 def _settings(**overrides):
     values = {
-        "research_plan_approval_required": False,
         "research_outline_approval_required": False,
         "research_llm_writing_enabled": True,
+        "research_llm_outline_enabled": False,
+        "research_agent_enabled": False,
         "research_llm_polish_enabled": True,
         "research_provider_mode": "mock",
         "langfuse_enabled": False,

@@ -12,6 +12,7 @@ from dr_core.db.enums import ProjectLanguage
 from dr_core.db.models import DocumentChunk, ResearchProject
 from dr_core.db.repositories import (
     EvidenceRepository,
+    OutlineSectionRepository,
     ProjectRepository,
     RunRepository,
 )
@@ -19,7 +20,7 @@ from dr_core.providers.registry import build_provider_registry
 from dr_core.research.models import OutlineSection, ResearchBrief
 from dr_core.research.write_search import WriteSearchSession
 from dr_core.research.writing import WriteSearchRequest
-from dr_core.schemas import ProjectCreate, RunCreate
+from dr_core.schemas import OutlineSectionCreate, ProjectCreate, RunCreate
 from dr_core.storage import get_file_storage
 
 pytestmark = pytest.mark.integration
@@ -73,11 +74,25 @@ def test_write_search_ingests_indexes_and_extracts_evidence(database):
     )
     section = OutlineSection(
         index=1,
-        title="Does peer review improve reliability?",
+        title="Peer review reliability evidence",
         purpose="Synthesize the evidence.",
         key_claims=["peer review reliability"],
         target_words=300,
     )
+    with database.session_scope() as db:
+        OutlineSectionRepository(db).create(
+            project_id,
+            run_id,
+            OutlineSectionCreate(
+                id=section.section_id,
+                title=section.title,
+                role=section.role,
+                purpose=section.purpose,
+                search_terms=section.search_terms,
+                target_words=section.target_words,
+                priority=section.index,
+            ),
+        )
     try:
         numbering: dict = {}
         sources: dict = {}

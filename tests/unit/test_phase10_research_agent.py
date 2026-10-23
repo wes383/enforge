@@ -1,31 +1,29 @@
 from __future__ import annotations
 
 import json
-from types import SimpleNamespace
 from uuid import uuid4
 
-from dr_core.db.enums import ProjectLanguage, ResearchDepth
+from dr_core.db.enums import ArticleType, ProjectLanguage, ResearchDepth, SectionRole
 from dr_core.providers.models import LLMResponse, LLMToolCall
 from dr_core.research.agent import AGENT_TASK, run_research_agent
-from dr_core.research.models import (
-    ResearchBrief,
-    ResearchPlan,
-    ResearchQuestion,
-    SourceRecord,
-)
-from dr_core.research.nodes import _research_map_framing
+from dr_core.research.models import ResearchBrief, SourceRecord
 
 SOURCE_ID = uuid4()
-_QUESTIONS = [
+
+_SECTIONS = [
     {
-        "question": "Which accessibility milestones changed assistive technology?",
-        "priority": 900,
+        "title": "From Braille to screen readers",
+        "role": "body",
+        "purpose": "Trace the accessibility technology line.",
         "search_terms": ["accessibility assistive technology milestones"],
+        "target_words": 700,
     },
     {
-        "question": "How did accessibility law change digital design practice?",
-        "priority": 700,
+        "title": "Law and digital practice",
+        "role": "body",
+        "purpose": "Explain the accessibility regulatory turn.",
         "search_terms": ["accessibility law digital design"],
+        "target_words": 700,
     },
 ]
 
@@ -38,6 +36,7 @@ def _brief(**overrides) -> ResearchBrief:
         "topic": "How have people worked for accessibility?",
         "language": ProjectLanguage.EN,
         "research_depth": ResearchDepth.STANDARD,
+        "article_type": ArticleType.HISTORICAL_DEVELOPMENT,
     }
     values.update(overrides)
     return ResearchBrief(**values)
@@ -52,24 +51,7 @@ def _final(**overrides) -> str:
         "themes": ["assistive technology", "disability rights"],
         "terminology": ["screen reader"],
         "controversies": ["medical versus social model of disability"],
-        "questions": list(_QUESTIONS),
-        "outline": [
-            {
-                "title": "From Braille to screen readers",
-                "purpose": "Trace the technology line.",
-                "question_index": 0,
-            },
-            {
-                "title": "Law and digital practice",
-                "purpose": "Explain the regulatory turn.",
-                "question_index": 1,
-            },
-            {
-                "title": "Was this a turning point?",
-                "purpose": "Question-shaped titles are dropped.",
-                "question_index": 0,
-            },
-        ],
+        "sections": [dict(section) for section in _SECTIONS],
         "gaps": ["The material is thin on non-Western history."],
         "next_steps": ["Search national disability laws."],
     }
@@ -100,15 +82,7 @@ class _FakeToolbox:
         if name == "search_sources":
             self.searches += 1
             if not self.records:
-                self.records = [
-                    SourceRecord(
-                        source_id=SOURCE_ID,
-                        title="Accessibility timeline",
-                        url="https://example.org/timeline",
-                        provider="mock",
-                        snippet="Blind readers used tactile writing before screen readers.",
-                    )
-                ]
+                self.records = [_existing_source()]
             return {
                 "results": [
                     {"source_id": str(SOURCE_ID), "title": "Accessibility timeline"}
@@ -166,7 +140,17 @@ def _text_response(text: str) -> LLMResponse:
     return LLMResponse(text=text, model="fake-agent")
 
 
-def test_agent_researches_before_committing_to_questions_and_outline():
+def _existing_source() -> SourceRecord:
+    return SourceRecord(
+        source_id=SOURCE_ID,
+        title="Accessibility timeline",
+        url="https://example.org/timeline",
+        provider="mock",
+        snippet="Blind readers used tactile writing before screen readers.",
+    )
+
+
+def test_planning_agent_researches_then_commits_to_an_outline():
     toolbox = _FakeToolbox()
     llm = _FakeToolLLM(
         [
@@ -193,18 +177,20 @@ def test_agent_researches_before_committing_to_questions_and_outline():
     )
 
     assert outcome.error is None
-    assert outcome.plan is not None
-    assert [item.question for item in outcome.plan.questions] == [
-        item["question"] for item in _QUESTIONS
-    ]
-    assert outcome.research_map is not None
-    assert outcome.research_map.outline
-    assert [item.title for item in outcome.research_map.outline] == [
+    assert outcome.outline is not None
+    assert [section.title for section in outcome.outline.sections] == [
         "From Braille to screen readers",
         "Law and digital practice",
     ]
-    assert outcome.research_map.source_count == 1
-    assert outcome.research_map.gaps
+    assert all(
+        section.role is SectionRole.BODY for section in outcome.outline.sections
+    )
+    assert outcome.outline.sections[0].search_terms == [
+        "accessibility assistive technology milestones"
+    ]
+    assert outcome.recon is not None
+    assert outcome.recon.source_count == 1
+    assert outcome.recon.themes == ["assistive technology", "disability rights"]
     assert [record.source_id for record in outcome.sources] == [SOURCE_ID]
     assert outcome.tool_calls == 2
     assert outcome.searches == 1
@@ -212,8 +198,11 @@ def test_agent_researches_before_committing_to_questions_and_outline():
 
     prompt = json.loads(llm.calls[0]["messages"][1]["content"])
     assert prompt["task"] == AGENT_TASK
-    assert prompt["limits"]["questions"] >= 2
+    assert prompt["limits"]["sections_hint"][1] >= 3
+    assert prompt["brief"]["article_type"]["id"] == ArticleType.HISTORICAL_DEVELOPMENT.value
     assert any("A -> B -> C" in rule for rule in prompt["rules"])
+    assert any("never a question" in rule for rule in prompt["rules"])
+    assert "questions" not in prompt
     assert llm.calls[0]["tools"] is not None
     assert any(
         tool["function"]["name"] == "follow_citations"
@@ -221,25 +210,11 @@ def test_agent_researches_before_committing_to_questions_and_outline():
     )
 
 
-def _seeded_toolbox() -> _FakeToolbox:
-    return _FakeToolbox(records=[_existing_source()])
-
-
-def _existing_source() -> SourceRecord:
-    return SourceRecord(
-        source_id=SOURCE_ID,
-        title="Accessibility timeline",
-        url="https://example.org/timeline",
-        provider="mock",
-        snippet="Blind readers used tactile writing before screen readers.",
-    )
-
-
-def test_agent_asks_the_model_to_repair_invalid_questions():
-    toolbox = _seeded_toolbox()
+def test_agent_repairs_an_invalid_outline_before_accepting_it():
+    toolbox = _FakeToolbox(records=[_existing_source()])
     llm = _FakeToolLLM(
         [
-            _text_response(_final(questions=[])),
+            _text_response(_final(sections=[])),
             _text_response(_final()),
         ]
     )
@@ -252,16 +227,16 @@ def test_agent_asks_the_model_to_repair_invalid_questions():
         max_tool_calls=2,
     )
 
-    assert outcome.plan is not None
+    assert outcome.outline is not None
     assert outcome.error is None
     assert len(llm.calls) == 2
     repair = llm.calls[1]["messages"][-1]
     assert repair["role"] == "user"
     assert "could not be used" in repair["content"]
-    assert "questions failed validation" in repair["content"]
+    assert "outline failed validation" in repair["content"]
 
 
-def test_agent_repairs_before_accepting_a_plan_without_sources():
+def test_agent_requires_a_stored_source_before_accepting_an_outline():
     toolbox = _FakeToolbox()
     llm = _FakeToolLLM([_text_response(_final()), _text_response(_final())])
 
@@ -273,9 +248,9 @@ def test_agent_repairs_before_accepting_a_plan_without_sources():
         max_tool_calls=1,
     )
 
-    assert outcome.plan is None
-    assert outcome.research_map is None
-    assert outcome.error == "research finished without any stored source"
+    assert outcome.outline is None
+    assert outcome.recon is None
+    assert outcome.error == "planning finished without any stored source"
     assert len(llm.calls) == 2
     assert "No search has succeeded yet" in llm.calls[1]["messages"][-1]["content"]
 
@@ -292,20 +267,14 @@ def test_agent_stops_at_the_tool_budget():
                         id="first",
                         name="search_sources",
                         arguments=json.dumps(
-                            {
-                                "query": "accessibility history",
-                                "kind": "web",
-                            }
+                            {"query": "accessibility history", "kind": "web"}
                         ),
                     ),
                     LLMToolCall(
                         id="second",
                         name="search_sources",
                         arguments=json.dumps(
-                            {
-                                "query": "accessibility law",
-                                "kind": "academic",
-                            }
+                            {"query": "accessibility law", "kind": "academic"}
                         ),
                     ),
                 ],
@@ -322,7 +291,7 @@ def test_agent_stops_at_the_tool_budget():
         max_tool_calls=1,
     )
 
-    assert outcome.plan is not None
+    assert outcome.outline is not None
     assert outcome.tool_calls == 1
     assert toolbox.calls == ["search_sources"]
     budget_messages = [
@@ -334,25 +303,22 @@ def test_agent_stops_at_the_tool_budget():
     assert "tool budget exhausted" in budget_messages[-1]["content"]
 
 
-def test_agent_rejects_a_question_shaped_outline_but_keeps_the_plan():
-    toolbox = _FakeToolbox()
+def test_agent_drops_question_titles_and_requires_a_complete_outline():
+    toolbox = _FakeToolbox(records=[_existing_source()])
+    question_only = _final(
+        sections=[
+            {
+                "title": "Why did accessibility change?",
+                "role": "body",
+                "purpose": "Question-shaped titles are dropped.",
+                "search_terms": ["accessibility history"],
+            }
+        ]
+    )
     llm = _FakeToolLLM(
         [
-            _tool_response(
-                "search_sources",
-                {"query": "accessibility history", "kind": "web"},
-                "call_search",
-            ),
-            _text_response(
-                _final(
-                    outline=[
-                        {
-                            "title": "Why did accessibility change?",
-                            "purpose": "Should be dropped.",
-                        }
-                    ]
-                )
-            ),
+            _text_response(question_only),
+            _text_response(_final()),
         ]
     )
 
@@ -364,20 +330,18 @@ def test_agent_rejects_a_question_shaped_outline_but_keeps_the_plan():
         max_tool_calls=2,
     )
 
-    assert outcome.plan is not None
-    assert outcome.research_map is not None
-    assert outcome.research_map.outline == []
+    assert outcome.outline is not None
+    assert [section.title for section in outcome.outline.sections] == [
+        "From Braille to screen readers",
+        "Law and digital practice",
+    ]
+    assert "outline failed validation" in llm.calls[1]["messages"][-1]["content"]
 
 
 def test_agent_summary_must_match_the_project_language():
-    toolbox = _FakeToolbox()
+    toolbox = _FakeToolbox(records=[_existing_source()])
     llm = _FakeToolLLM(
         [
-            _tool_response(
-                "search_sources",
-                {"query": "accessibility history", "kind": "web"},
-                "call_search",
-            ),
             _text_response(_final(summary="这是中文摘要，不符合英文项目。")),
             _text_response(_final()),
         ]
@@ -391,60 +355,32 @@ def test_agent_summary_must_match_the_project_language():
         max_tool_calls=2,
     )
 
-    assert outcome.plan is not None
-    assert len(llm.calls) == 3
-    assert "research summary failed validation" in llm.calls[2]["messages"][-1][
+    assert outcome.outline is not None
+    assert len(llm.calls) == 2
+    assert "research summary failed validation" in llm.calls[1]["messages"][-1][
         "content"
     ]
 
 
-def test_research_map_framing_skips_fixed_titles_and_bad_indexes():
-    plan = ResearchPlan(
-        summary="Plan",
-        questions=[
-            ResearchQuestion(question="Which accessibility milestones matter?"),
-        ],
-    )
-
-    framing = _research_map_framing(
-        {
-            "outline": [
-                {"title": "Conclusion", "question_index": 0},
-                {"title": "  From Braille   to screen readers ", "purpose": "Trace it.", "question_index": 0},
-                {"title": "Out of range", "question_index": 9},
-                {"title": "From Braille to screen readers", "purpose": "Duplicate.", "question_index": 0},
-                {"title": "Unmapped", "question_index": None},
-            ]
-        },
-        plan,
-    )
-
-    assert framing == {0: ("From Braille to screen readers", "Trace it.")}
-
-
-def test_agent_keeps_the_deterministic_prompt_and_limits_bounded():
-    toolbox = _FakeToolbox()
-    llm = _FakeToolLLM(
-        [
-            _tool_response(
-                "search_sources",
-                {"query": "accessibility history", "kind": "web"},
-                "call_search",
-            ),
-            _text_response(_final()),
-        ]
-    )
+def test_agent_keeps_the_prompt_bounded_and_carries_feedback():
+    toolbox = _FakeToolbox(records=[_existing_source()])
+    llm = _FakeToolLLM([_text_response(_final())])
 
     outcome = run_research_agent(
-        _brief(),
+        _brief(target_words=12000),
         llm,
         toolbox,
         max_rounds=2,
         max_tool_calls=2,
         version=4,
+        feedback="Cover the cost side earlier.",
     )
 
-    assert outcome.plan is not None
-    assert outcome.plan.version == 4
-    assert llm.calls[0]["max_tokens"] >= 2500
-    assert llm.calls[0]["max_tokens"] <= 8000
+    assert outcome.outline is not None
+    assert outcome.outline.version == 4
+    assert llm.calls[0]["max_tokens"] >= 3000
+    assert llm.calls[0]["max_tokens"] <= 9000
+    prompt = json.loads(llm.calls[0]["messages"][1]["content"])
+    assert prompt["limits"]["sections_hint"][1] > 10
+    assert "Cover the cost side earlier." in prompt["approver_feedback"]
+    assert any("revised outline" in rule for rule in prompt["rules"])

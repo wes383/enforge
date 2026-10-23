@@ -12,8 +12,8 @@ from dr_core.config import get_settings
 from dr_core.db.enums import RunEventType
 from dr_core.db.models import (
     Artifact,
+    OutlineSectionRecord,
     ResearchProject,
-    ResearchQuestion,
     ResearchRun,
     RunEvent,
     SearchQuery,
@@ -24,43 +24,52 @@ from dr_core.providers.http import RetryPolicy
 from dr_core.providers.llm import OpenAICompatibleLLMProvider
 from dr_core.providers.registry import build_provider_registry
 from dr_core.research.graph import run_research_workflow
-from dr_core.research.planning import PLANNING_TASK
+from dr_core.research.planning import OUTLINE_PLANNING_TASK
 from dr_core.schemas import ProjectCreate, RunCreate
 from dr_core.storage import StorageError, StorageFileNotFound, get_file_storage
 
 pytestmark = pytest.mark.integration
 
 _LLM_TASKS: list[str] = []
-_INVALID_PLAN: list[bool] = []
-_LLM_QUESTION = "Which peer review models most change reported error rates?"
-_LLM_SUMMARY = "Compare review models, bias evidence and reliability checks."
+_INVALID_OUTLINE: list[bool] = []
+_BODY_TERMS = ["peer review error rates", "peer review bias"]
 
 
-def _planning_payload() -> str:
+def _outline_payload() -> str:
     return json.dumps(
         {
-            "summary": _LLM_SUMMARY,
-            "questions": [
+            "summary": (
+                "Compare peer review models, bias evidence and the limits of "
+                "reliability claims."
+            ),
+            "sections": [
                 {
-                    "question": _LLM_QUESTION,
-                    "priority": 900,
-                    "search_terms": ["peer review error rates"],
+                    "title": "Introduction",
+                    "role": "introduction",
+                    "purpose": "Frame the reliability issue.",
+                    "search_terms": ["peer review reliability"],
+                    "target_words": 300,
                 },
                 {
-                    "question": "What evidence shows peer review bias against new ideas?",
-                    "search_terms": ["peer review bias"],
+                    "title": "Review models and error rates",
+                    "role": "body",
+                    "purpose": "Compare what the models change.",
+                    "search_terms": [_BODY_TERMS[0]],
+                    "target_words": 700,
                 },
                 {
-                    "question": "How do editors weigh conflicting peer review reports?",
-                    "search_terms": ["editor conflicting reviews"],
+                    "title": "Reviewer bias",
+                    "role": "body",
+                    "purpose": "Weigh the bias evidence.",
+                    "search_terms": [_BODY_TERMS[1]],
+                    "target_words": 700,
                 },
                 {
-                    "question": "Which limits constrain peer review reliability claims?",
-                    "search_terms": ["peer review reliability limits"],
-                },
-                {
-                    "question": "What do replication studies say about peer review?",
-                    "search_terms": ["peer review replication"],
+                    "title": "Conclusion",
+                    "role": "conclusion",
+                    "purpose": "Synthesize the evidence.",
+                    "search_terms": ["peer review conclusion"],
+                    "target_words": 300,
                 },
             ],
         },
@@ -73,8 +82,12 @@ def _fake_llm_handler(request: httpx.Request) -> httpx.Response:
     prompt = json.loads(body["messages"][-1]["content"])
     task = str(prompt.get("task", ""))
     _LLM_TASKS.append(task)
-    if task == PLANNING_TASK:
-        content = "the plan is: no questions" if _INVALID_PLAN else _planning_payload()
+    if task == OUTLINE_PLANNING_TASK:
+        content = (
+            "the outline is: not usable"
+            if _INVALID_OUTLINE
+            else _outline_payload()
+        )
     else:
         markers = [item["marker"] for item in prompt.get("evidence", [])]
         marker = markers[0] if markers else "S1"
@@ -107,14 +120,14 @@ def _settings(**overrides):
     values = {
         "research_provider_mode": "mock",
         "langfuse_enabled": False,
-        "research_plan_approval_required": False,
         "research_outline_approval_required": False,
-        "research_llm_planning_enabled": True,
+        "research_llm_outline_enabled": True,
         "research_llm_writing_enabled": False,
         "research_claim_llm_review": False,
+        "research_agent_enabled": False,
         "research_max_search_rounds": 1,
-        "research_max_queries_per_round": 4,
-        "research_max_sources": 6,
+        "research_max_queries_per_round": 8,
+        "research_max_sources": 20,
         "research_max_fetches_per_round": 2,
         "research_max_evidence": 8,
     }
@@ -135,13 +148,13 @@ def _create_run(database, topic: str) -> tuple[UUID, UUID]:
         return project.id, run.id
 
 
-def _plan_rows(database, run_id: UUID) -> list[str]:
+def _section_titles(database, run_id: UUID) -> list[str]:
     with database.session() as session:
         return list(
             session.scalars(
-                select(ResearchQuestion.question).where(
-                    ResearchQuestion.run_id == run_id
-                )
+                select(OutlineSectionRecord.title)
+                .where(OutlineSectionRecord.run_id == run_id)
+                .order_by(OutlineSectionRecord.priority.desc())
             )
         )
 
@@ -155,7 +168,7 @@ def _planning_event(database, run_id: UUID):
                     select(RunEvent).where(RunEvent.run_id == run_id)
                 )
                 if event.event_type is RunEventType.PHASE_COMPLETED
-                and "plan_version" in event.payload
+                and "planner" in (event.payload or {})
             ),
             None,
         )
@@ -244,27 +257,33 @@ def _run_with_fake_llm(database, topic: str, settings):
         registry.close()
 
 
-def test_workflow_uses_model_generated_research_questions(database):
+def test_model_outline_sections_drive_the_search_queries(database):
     _LLM_TASKS.clear()
-    del _INVALID_PLAN[:]
+    del _INVALID_OUTLINE[:]
     topic = "How does peer review affect research reliability?"
     outcome, project_id, run_id = _run_with_fake_llm(database, topic, _settings())
     try:
         assert outcome.status.value == "completed"
-        assert PLANNING_TASK in _LLM_TASKS
+        assert OUTLINE_PLANNING_TASK in _LLM_TASKS
 
-        questions = _plan_rows(database, run_id)
-        assert _LLM_QUESTION in questions
-        # the depth cap keeps 4 of the 5 questions the model proposed
-        assert len(questions) == 4
-        assert "What do replication studies say about peer review?" not in questions
+        titles = _section_titles(database, run_id)
+        assert len(titles) == 4, titles
+        assert "Review models and error rates" in titles
+        assert "Reviewer bias" in titles
+        assert "How does peer review affect research reliability" not in titles
 
         event = _planning_event(database, run_id)
         assert event is not None
         assert event.payload["planner"] == "llm"
+        assert "Review models and error rates" in event.payload["section_titles"]
+
+        query_texts = _query_texts(database, run_id)
+        assert query_texts
+        assert set(_BODY_TERMS) <= set(query_texts), (titles, query_texts)
+        assert not any("?" in text for text in query_texts)
 
         with database.session() as session:
-            planning_progress = [
+            progress = [
                 item
                 for item in session.scalars(
                     select(RunEvent).where(RunEvent.run_id == run_id)
@@ -272,41 +291,34 @@ def test_workflow_uses_model_generated_research_questions(database):
                 if item.event_type is RunEventType.PROGRESS
                 and isinstance((item.payload or {}).get("model_call"), int)
             ]
-        assert len(planning_progress) == 2
-        assert {
-            item.payload.get("node") for item in planning_progress
-        } == {"plan_research"}
+        assert progress
+        assert {item.payload.get("node") for item in progress} == {"research_agent"}
         assert any(
             item.payload.get("input_tokens") == 40
             and item.payload.get("output_tokens") == 20
-            for item in planning_progress
+            for item in progress
         )
-
-        query_texts = _query_texts(database, run_id)
-        assert query_texts
-        assert "peer review error rates" in query_texts
-        assert _LLM_QUESTION not in query_texts
     finally:
         _cleanup(database, project_id)
 
 
-def test_invalid_model_plan_falls_back_to_the_deterministic_template(database):
+def test_invalid_model_outline_falls_back_to_the_deterministic_template(database):
     _LLM_TASKS.clear()
-    _INVALID_PLAN.append(True)
+    _INVALID_OUTLINE.append(True)
     topic = "How does peer review affect research reliability?"
     outcome, project_id, run_id = _run_with_fake_llm(database, topic, _settings())
     try:
         assert outcome.status.value == "completed"
-        assert PLANNING_TASK in _LLM_TASKS
+        assert OUTLINE_PLANNING_TASK in _LLM_TASKS
 
-        questions = _plan_rows(database, run_id)
-        assert questions
-        assert _LLM_QUESTION not in questions
-        assert any("core concepts" in question for question in questions)
+        titles = _section_titles(database, run_id)
+        assert titles
+        assert "Review models and error rates" not in titles
+        assert "Introduction" in titles
 
         event = _planning_event(database, run_id)
         assert event is not None
         assert event.payload["planner"] == "template"
     finally:
-        del _INVALID_PLAN[:]
+        del _INVALID_OUTLINE[:]
         _cleanup(database, project_id)

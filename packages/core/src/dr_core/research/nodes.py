@@ -4,9 +4,11 @@ import contextvars
 import json
 import logging
 from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from uuid import UUID
+from typing import Any
+from uuid import UUID, uuid4
 
 from langgraph.types import interrupt
 from sqlalchemy import func, select
@@ -19,19 +21,21 @@ from dr_core.db.enums import (
     CitationAuditStatus,
     CitationIssueType,
     DraftSectionStatus,
+    EvidenceType,
     OutlineStatus,
     ParserStatus,
     ProjectLanguage,
-    QuestionCoverageStatus,
     RunEventType,
     RunStatus,
     SearchQueryStatus,
+    SectionCoverageStatus,
+    SectionRole,
     SourceOrigin,
     SourceType,
     SourceVersionKind,
 )
 from dr_core.db.models import (
-    ResearchQuestion,
+    OutlineSectionRecord,
     ResearchRun,
     Source,
 )
@@ -43,7 +47,7 @@ from dr_core.db.repositories import (
     DraftSectionRepository,
     EvidenceRepository,
     OutlineRepository,
-    ResearchQuestionRepository,
+    OutlineSectionRepository,
     RunApprovalRepository,
     SearchQueryRepository,
     SourceRepository,
@@ -68,14 +72,14 @@ from dr_core.research.context import (
     RunFinished,
     node_timeout,
 )
+from dr_core.research.evidence_agent import run_evidence_agent
 from dr_core.research.evidence_records import (
     evidence_from_hit as _evidence_from_hit,
     evidence_from_text as _evidence_from_text,
 )
 from dr_core.research.generation import (
     build_gap_queries,
-    build_outline,
-    build_plan,
+    build_outline_template,
     build_queries,
     query_pair,
     source_numbering,
@@ -87,24 +91,20 @@ from dr_core.research.models import (
     CitationIssue,
     EvidenceMatrix,
     Outline,
+    OutlineSection,
     ReferenceAudit,
     ResearchBrief,
     ResearchGap,
-    ResearchMap,
-    ResearchPlan,
-    ResearchQuestion as ResearchQuestionModel,
     SearchQuery as SearchQueryModel,
     SourceRecord,
 )
-from dr_core.research.outlining import build_outline_with_llm
-from dr_core.research.planning import build_plan_with_llm
+from dr_core.research.planning import build_outline_with_llm
 from dr_core.research.polish import (
     DraftArticleSection,
     polish_draft_sections,
     polish_reason_kind,
 )
-from dr_core.research.quality import build_evidence_matrix
-from dr_core.research.recon import run_recon
+from dr_core.research.quality import build_evidence_matrix, source_identity
 from dr_core.research.reporting import (
     claim_status_counts,
     persist_report_artifacts,
@@ -128,7 +128,8 @@ from dr_core.research.write_search import WriteSearchSession
 from dr_core.research.writing import compose_section, summarize_section_content
 from dr_core.schemas import (
     DraftSectionCreate,
-    ResearchQuestionCreate,
+    OutlineCreate,
+    OutlineSectionCreate,
     RunEventCreate,
     SearchQueryCreate,
 )
@@ -165,6 +166,7 @@ def parse_brief(ctx: ResearchContext):
                 title=project.title,
                 topic=project.topic,
                 research_scope=project.research_scope,
+                article_type=project.article_type,
                 language=project.language,
                 target_audience=project.target_audience,
                 research_depth=project.research_depth,
@@ -197,367 +199,174 @@ def parse_brief(ctx: ResearchContext):
 
 def research_agent(ctx: ResearchContext):
     def node(state: ResearchState) -> ResearchState:
-        agent_llm = _llm_research_agent(ctx)
-        if agent_llm is None:
-            return {"current_node": "research_agent"}
         with node_timeout(_research_agent_node_timeout(ctx)):
             ctx.guard()
             brief = _brief(state)
-            ctx.emit(
-                RunEventType.PHASE_STARTED,
-                message="Research agent started",
-                dedupe_key="phase:research-agent:started",
-                stage=RunStatus.PLANNING,
-            )
-            toolbox = ResearchToolbox(
-                ctx,
-                brief,
-                max_sources=ctx.settings.research_agent_max_sources,
-                max_searches=ctx.settings.research_agent_max_searches,
-                max_fetches=ctx.settings.research_agent_max_fetches,
-                max_citation_calls=ctx.settings.research_agent_max_citation_calls,
-                max_read_chars=ctx.settings.research_agent_read_chars,
-                existing=_source_records(state),
-            )
-            current = _plan_or_none(state)
-            version = 1 if current is None else current.version + 1
-            tool_events = 0
-
-            def record_tool(name: str, result: dict) -> None:
-                nonlocal tool_events
-                tool_events += 1
-                results = result.get("results")
-                query = result.get("query")
-                message = f"Research agent used {name}"
-                if name == "search_sources" and isinstance(query, str) and query:
-                    message = f'Research agent searched "{query[:120]}"'
-                elif name == "read_source":
-                    message = "Research agent read a source"
-                elif name == "fetch_source":
-                    message = "Research agent fetched a page"
-                elif name == "follow_citations":
-                    message = "Research agent followed citations"
-                ctx.emit(
-                    RunEventType.PROGRESS,
-                    message=message,
-                    payload={
-                        "tool": name,
-                        "query": query,
-                        "direction": result.get("direction"),
-                        "results": (
-                            len(results) if isinstance(results, list) else None
-                        ),
-                        "source_id": (
-                            result.get("source_id")
-                            or result.get("from_source_id")
-                        ),
-                        "title": (
-                            result.get("title") or result.get("from_title")
-                        ),
-                        "status": result.get("status"),
-                        "error": (result.get("error") or "")[:300] or None,
-                        "tool_calls": tool_events,
-                    },
-                    dedupe_key=f"research-agent:tool:{tool_events}",
-                    stage=RunStatus.PLANNING,
-                )
-
-            outcome = run_research_agent(
-                brief,
-                agent_llm,
-                toolbox,
-                max_rounds=ctx.settings.research_agent_max_rounds,
-                max_tool_calls=ctx.settings.research_agent_max_tool_calls,
-                version=version,
-                on_tool=record_tool,
-            )
-            if outcome.error:
-                logger.warning(
-                    "Research agent for run %s ended early: %s",
-                    ctx.run_id,
-                    outcome.error,
-                )
-            used_agent = outcome.plan is not None
-            plan = outcome.plan
-            limitations = list(state.get("limitations") or [])
-            if plan is None:
-                plan = build_plan(brief, version=version)
-                limitations = _with_limitations(
-                    state,
-                    _text(
-                        brief,
-                        "研究代理未产出可用问题，研究问题改用确定性模板生成。",
-                        "The research agent did not produce usable questions, "
-                        "so the deterministic template supplied them.",
-                    ),
-                )
-            plan = _sync_plan_questions(ctx, plan)
-            research_map = outcome.research_map or ResearchMap(
-                summary=(plan.summary or brief.topic)[:4000],
-                source_count=len(outcome.sources),
-                completed=False,
-            )
-            research_map.source_count = len(outcome.sources)
-            research_map.completed = used_agent
-            digest = {
-                "summary": research_map.summary,
-                "themes": list(research_map.themes),
-                "terminology": list(research_map.terminology),
-                "controversies": list(research_map.controversies),
-                "source_count": len(outcome.sources),
-            }
-            ctx.emit(
-                RunEventType.PHASE_COMPLETED,
-                message=(
-                    "Research agent completed"
-                    if used_agent
-                    else "Research agent fell back to the deterministic plan"
-                ),
-                payload={
-                    "agent": used_agent,
-                    "sources": len(outcome.sources),
-                    "searches": outcome.searches,
-                    "tool_calls": outcome.tool_calls,
-                    "llm_calls": outcome.llm_calls,
-                    "fetches": outcome.fetches,
-                    "citation_calls": outcome.citation_calls,
-                    "questions": len(plan.questions),
-                    "outline_sections": len(research_map.outline),
-                    "outline_titles": [
-                        section.title for section in research_map.outline
-                    ],
-                    "error": outcome.error,
-                },
-                dedupe_key=f"phase:research-agent:completed:{plan.version}",
-                stage=RunStatus.PLANNING,
-            )
-            return {
-                "plan": plan.model_dump(mode="json"),
-                "recon": digest,
-                "research_map": research_map.model_dump(mode="json"),
-                "sources": [
-                    record.model_dump(mode="json")
-                    for record in outcome.sources
-                ],
-                "limitations": limitations,
-                "feedback": {},
-                "current_node": "research_agent",
-            }
-
-    return node
-
-
-def research_recon(ctx: ResearchContext):
-    def node(state: ResearchState) -> ResearchState:
-        researcher = _llm_recon(ctx)
-        if researcher is None:
-            return {"current_node": "research_recon"}
-        with node_timeout(_recon_node_timeout(ctx)):
-            ctx.guard()
-            brief = _brief(state)
-            ctx.emit(
-                RunEventType.PHASE_STARTED,
-                message="Background research started",
-                dedupe_key="phase:recon:started",
-                stage=RunStatus.PLANNING,
-            )
-            toolbox = ResearchToolbox(
-                ctx,
-                brief,
-                max_sources=ctx.settings.research_recon_max_sources,
-                existing=_source_records(state),
-            )
-            outcome = run_recon(
-                brief,
-                researcher,
-                toolbox,
-                max_rounds=ctx.settings.research_recon_max_rounds,
-                max_tool_calls=ctx.settings.research_recon_max_tool_calls,
-            )
-            digest = outcome.digest
-            limitations = (
-                [
-                    _text(
-                        brief,
-                        "前置侦察未完成，研究问题仅依据项目简介生成。",
-                        "Background reconnaissance did not complete; research "
-                        "questions rely on the brief only.",
-                    )
-                ]
-                if digest is None
-                else []
-            )
-            if outcome.error:
-                logger.warning(
-                    "Reconnaissance for run %s ended early: %s",
-                    ctx.run_id,
-                    outcome.error,
-                )
-            ctx.emit(
-                RunEventType.PHASE_COMPLETED,
-                message="Background research completed",
-                payload={
-                    "sources": len(outcome.sources),
-                    "searches": outcome.searches,
-                    "tool_calls": outcome.tool_calls,
-                    "llm_calls": outcome.llm_calls,
-                    "completed": digest is not None,
-                },
-                dedupe_key="phase:recon:completed",
-                stage=RunStatus.PLANNING,
-            )
-            return {
-                "recon": (
-                    digest.model_dump(mode="json") if digest is not None else {}
-                ),
-                "sources": [
-                    record.model_dump(mode="json") for record in outcome.sources
-                ],
-                "limitations": _with_limitations(state, *limitations),
-                "current_node": "research_recon",
-            }
-
-    return node
-
-
-def plan_research(ctx: ResearchContext):
-    def node(state: ResearchState) -> ResearchState:
-        with node_timeout(_planning_node_timeout(ctx)):
-            ctx.guard()
-            brief = _brief(state)
             feedback_state = dict(state.get("feedback") or {})
-            feedback_text = feedback_state.get("feedback")
-            current_plan = _plan_or_none(state)
-            version = 1 if current_plan is None else current_plan.version + 1
-            recon = state.get("recon") or None
-            planner = _progress_llm(
-                ctx,
-                _llm_planner(ctx),
-                stage=RunStatus.PLANNING,
-                label="Planning research questions",
-                key_prefix=f"llm:planning:v{version}",
-                payload={
-                    "node": "plan_research",
-                    "version": version,
-                    "replan": bool(feedback_text),
-                },
-            )
-            plan = (
-                build_plan_with_llm(
-                    brief,
-                    planner,
-                    version=version,
-                    feedback=feedback_text,
-                    background=recon,
-                )
-                if planner is not None
+            feedback = (
+                feedback_state.get("feedback")
+                if feedback_state.get("decision") == "rejected"
                 else None
             )
-            used_planner = plan is not None
-            limitations = state.get("limitations") or []
-            if plan is None:
-                if planner is not None:
+            previous = _outline_or_none(state)
+            version = 1 if previous is None else previous.version + 1
+            ctx.emit(
+                RunEventType.PHASE_STARTED,
+                message="Planning agent started",
+                dedupe_key=f"phase:planning-agent:started:{version}",
+                stage=RunStatus.PLANNING,
+            )
+            existing = _source_records(state)
+            outcome = None
+            agent_llm = _llm_research_agent(ctx)
+            if agent_llm is not None:
+                toolbox = ResearchToolbox(
+                    ctx,
+                    brief,
+                    max_sources=ctx.settings.research_agent_max_sources,
+                    max_searches=ctx.settings.research_agent_max_searches,
+                    max_fetches=ctx.settings.research_agent_max_fetches,
+                    max_citation_calls=(
+                        ctx.settings.research_agent_max_citation_calls
+                    ),
+                    max_read_chars=ctx.settings.research_agent_read_chars,
+                    existing=existing,
+                )
+                tool_events = 0
+
+                def record_tool(name: str, result: dict) -> None:
+                    nonlocal tool_events
+                    tool_events += 1
+                    results = result.get("results")
+                    query = result.get("query")
+                    message = f"Planning agent used {name}"
+                    if name == "search_sources" and isinstance(query, str) and query:
+                        message = f'Planning agent searched "{query[:120]}"'
+                    elif name == "read_source":
+                        message = "Planning agent read a source"
+                    elif name == "fetch_source":
+                        message = "Planning agent fetched a page"
+                    elif name == "follow_citations":
+                        message = "Planning agent followed citations"
+                    ctx.emit(
+                        RunEventType.PROGRESS,
+                        message=message,
+                        payload={
+                            "tool": name,
+                            "query": query,
+                            "direction": result.get("direction"),
+                            "results": (
+                                len(results) if isinstance(results, list) else None
+                            ),
+                            "source_id": (
+                                result.get("source_id")
+                                or result.get("from_source_id")
+                            ),
+                            "title": (
+                                result.get("title") or result.get("from_title")
+                            ),
+                            "status": result.get("status"),
+                            "error": (result.get("error") or "")[:300] or None,
+                            "tool_calls": tool_events,
+                        },
+                        dedupe_key=f"planning-agent:tool:{tool_events}",
+                        stage=RunStatus.PLANNING,
+                    )
+
+                outcome = run_research_agent(
+                    brief,
+                    agent_llm,
+                    toolbox,
+                    max_rounds=ctx.settings.research_agent_max_rounds,
+                    max_tool_calls=ctx.settings.research_agent_max_tool_calls,
+                    version=version,
+                    feedback=feedback,
+                    on_tool=record_tool,
+                )
+                if outcome.error:
+                    logger.warning(
+                        "Planning agent for run %s ended early: %s",
+                        ctx.run_id,
+                        outcome.error,
+                    )
+
+            limitations = list(state.get("limitations") or [])
+            sources = list(outcome.sources) if outcome else existing
+            outline = outcome.outline if outcome else None
+            planner = "agent" if outline is not None else "template"
+            if outline is None:
+                outliner = _progress_llm(
+                    ctx,
+                    _llm_outliner(ctx),
+                    stage=RunStatus.PLANNING,
+                    label="Designing the article outline",
+                    key_prefix=f"llm:outline:v{version}",
+                    payload={"node": "research_agent", "version": version},
+                )
+                if outliner is not None:
+                    outline = build_outline_with_llm(
+                        brief,
+                        outliner,
+                        version=version,
+                        feedback=feedback,
+                        background=state.get("recon") or None,
+                    )
+                    planner = "llm" if outline is not None else "template"
+            if outline is None:
+                outline = build_outline_template(
+                    brief,
+                    version=version,
+                    feedback=feedback,
+                )
+                if agent_llm is not None or _llm_outliner(ctx) is not None:
                     limitations = _with_limitations(
                         state,
                         _text(
                             brief,
-                            "研究计划模型输出未通过校验，研究问题改用确定性模板生成。",
-                            "The model plan failed validation, so research questions "
-                            "came from the deterministic template.",
+                            "规划模型未产出可用提纲，已改用确定性模板。",
+                            "The planning model did not produce a usable outline, "
+                            "so the deterministic template supplied it.",
                         ),
                     )
-                plan = build_plan(
-                    brief,
-                    version=version,
-                    feedback=feedback_text,
-                )
-            plan = _sync_plan_questions(ctx, plan)
+
+            outline, outline_id = _persist_outline(
+                ctx,
+                outline,
+                feedback=feedback,
+            )
             ctx.emit(
                 RunEventType.PHASE_COMPLETED,
-                message="Research plan prepared",
+                message="Article outline prepared for approval",
                 payload={
-                    "plan_version": plan.version,
-                    "planner": "llm" if used_planner else "template",
-                    "recon_sources": int((recon or {}).get("source_count", 0)),
-                    "question_ids": [
-                        str(item.question_id) for item in plan.questions
+                    "planner": planner,
+                    "version": outline.version,
+                    "sections": len(outline.sections),
+                    "section_titles": [
+                        section.title for section in outline.sections
                     ],
+                    "sources": len(sources),
+                    "searches": outcome.searches if outcome else 0,
+                    "tool_calls": outcome.tool_calls if outcome else 0,
+                    "llm_calls": outcome.llm_calls if outcome else 0,
+                    "error": outcome.error if outcome else None,
                 },
-                dedupe_key=f"phase:planning:completed:{plan.version}",
+                dedupe_key=f"phase:planning-agent:completed:{outline.version}",
                 stage=RunStatus.PLANNING,
             )
             return {
-                "plan": plan.model_dump(mode="json"),
-                "feedback": {},
-                # A regenerated plan may reorder or replace questions, so the
-                # research map's question indexes no longer line up.
-                "research_map": {},
+                "outline": outline.model_dump(mode="json"),
+                "outline_id": str(outline_id),
+                "recon": (
+                    state.get("recon")
+                    if outcome is None or outcome.recon is None
+                    else outcome.recon.model_dump(mode="json")
+                ),
+                "sources": [
+                    record.model_dump(mode="json") for record in sources
+                ],
                 "limitations": limitations,
-                "current_node": "plan_research",
-            }
-
-    return node
-
-
-def await_plan_approval(ctx: ResearchContext):
-    def node(state: ResearchState) -> ResearchState:
-        with node_timeout(ctx.settings.research_node_timeout_seconds):
-            ctx.guard()
-            if not ctx.settings.research_plan_approval_required:
-                return {"feedback": {}, "current_node": "await_plan_approval"}
-            plan = _plan(state)
-            approval_id = _request_approval(
-                ctx,
-                ApprovalKind.PLAN,
-                plan.version,
-                plan.model_dump(mode="json"),
-                "Research plan ready for approval",
-            )
-            value = interrupt(
-                {
-                    "approval_id": str(approval_id),
-                    "kind": ApprovalKind.PLAN.value,
-                    "version": plan.version,
-                }
-            )
-            decision = _approval_decision(value)
-            if decision.decision is ApprovalStatus.REJECTED:
-                ctx.ensure_status(
-                    RunStatus.PLANNING,
-                    event_type=RunEventType.PHASE_STARTED,
-                    message="Plan revision requested by approver",
-                    dedupe_key=f"phase:planning:revised:{plan.version}",
-                )
-                return {
-                    "feedback": {
-                        "decision": "rejected",
-                        "feedback": decision.feedback or "Revise the research plan",
-                        "version": plan.version,
-                    },
-                    "current_node": "await_plan_approval",
-                }
-
-            if decision.decision is ApprovalStatus.MODIFIED:
-                if not decision.content:
-                    raise PermanentRunError(
-                        "Modified plan approval is missing updated plan content"
-                    )
-                revised = ResearchPlan.model_validate(decision.content)
-                revised = revised.model_copy(update={"version": plan.version + 1})
-                revised = _sync_plan_questions(ctx, revised)
-                plan = revised
-
-            ctx.ensure_status(
-                RunStatus.SEARCHING,
-                event_type=RunEventType.PHASE_STARTED,
-                message="Research plan approved; searching started",
-                dedupe_key=f"phase:searching:started:{state.get('round_index', 1)}",
-            )
-            return {
-                "plan": plan.model_dump(mode="json"),
                 "feedback": {},
-                "research_map": {},
-                "current_node": "await_plan_approval",
+                "current_node": "research_agent",
             }
 
     return node
@@ -576,7 +385,7 @@ def generate_queries(ctx: ResearchContext):
                 dedupe_key=f"phase:searching:started:{round_index}",
             )
             queries = build_queries(
-                _plan(state),
+                _outline(state),
                 round_index=round_index,
                 web_providers=_provider_names(ctx.registry.web_search),
                 academic_providers=_provider_names(ctx.registry.academic_search),
@@ -643,7 +452,7 @@ def search_sources(ctx: ResearchContext):
                                     query=query.query_text,
                                 ),
                                 result,
-                                query.research_question_id,
+                                query.outline_section_id,
                             )
                             for result in results
                         ]
@@ -660,7 +469,7 @@ def search_sources(ctx: ResearchContext):
                                     result,
                                 ),
                                 result,
-                                query.research_question_id,
+                                query.outline_section_id,
                             )
                             for result in results
                         ]
@@ -800,8 +609,7 @@ def rank_sources(ctx: ResearchContext):
         with node_timeout(ctx.settings.research_node_timeout_seconds):
             ctx.guard()
             brief = _brief(state)
-            plan = _plan(state)
-            query_tokens = _plan_tokens(plan)
+            query_tokens = _outline_tokens(_outline(state))
             ranked = []
             current_year = datetime.now(tz=UTC).year
             excluded_by_date = 0
@@ -1212,12 +1020,48 @@ def parse_documents(ctx: ResearchContext):
     return node
 
 
+@dataclass
+class _SectionEvidenceState:
+    """Tracks how well a section is supported by independent sources."""
+
+    support: int = 0
+    identities: set[str] = field(default_factory=set)
+    used_sources: set[UUID] = field(default_factory=set)
+
+    @property
+    def covered(self) -> bool:
+        return self.support >= 2 and len(self.identities) >= 2
+
+    def track(
+        self,
+        source_id: UUID,
+        identity: str,
+        *,
+        is_refutation: bool,
+    ) -> None:
+        self.used_sources.add(source_id)
+        if is_refutation:
+            return
+        self.support += 1
+        self.identities.add(identity)
+
+
+def _source_identity_for(
+    sources: dict[UUID, Any],
+    source_id: UUID,
+) -> str:
+    source = sources.get(source_id)
+    if source is None:
+        return f"source:{source_id}"
+    return source_identity(source)
+
+
 def extract_evidence(ctx: ResearchContext):
     def node(state: ResearchState) -> ResearchState:
         with node_timeout(ctx.settings.research_node_timeout_seconds):
             ctx.guard()
             brief = _brief(state)
-            plan = _plan(state)
+            sections = _searchable_sections(_outline(state))
             ctx.ensure_status(
                 RunStatus.BUILDING_EVIDENCE,
                 event_type=RunEventType.PHASE_STARTED,
@@ -1232,6 +1076,23 @@ def extract_evidence(ctx: ResearchContext):
                 )
                 evidence_ids.update(str(item.id) for item in existing)
                 total_evidence = len(existing)
+                sources = source_views(session, ctx.project_id)
+            section_states = {
+                section.section_id: _SectionEvidenceState() for section in sections
+            }
+            for item in existing:
+                if item.outline_section_id is None:
+                    continue
+                section_state = section_states.get(item.outline_section_id)
+                if section_state is None:
+                    continue
+                section_state.track(
+                    item.source_id,
+                    _source_identity_for(sources, item.source_id),
+                    is_refutation=(
+                        item.evidence_type is EvidenceType.REFUTATION
+                    ),
+                )
             if total_evidence >= brief.max_evidence:
                 return {
                     "evidence_ids": sorted(evidence_ids),
@@ -1244,15 +1105,6 @@ def extract_evidence(ctx: ResearchContext):
             skipped = 0
             retrieval_hits = 0
             retrieval_degraded: str | None = None
-            retrieved_questions: set[UUID | None] = set()
-            with ctx.database.session() as session:
-                existing = EvidenceRepository(session).list_for_run(
-                    ctx.project_id,
-                    ctx.run_id,
-                )
-                retrieved_questions.update(
-                    item.research_question_id for item in existing
-                )
             source_version_ids = [
                 record.source_version_id
                 for record in records
@@ -1272,13 +1124,17 @@ def extract_evidence(ctx: ResearchContext):
                         embedding=ctx.registry.embedding,
                         run_id=ctx.run_id,
                     )
-                    for question in plan.questions:
+                    for section in sections:
                         if total_evidence >= brief.max_evidence:
                             break
-                        queries = _question_queries(question)
-                        used_sources: set[UUID] = set()
+                        section_state = section_states[section.section_id]
+                        if section_state.covered:
+                            continue
+                        queries = _section_queries(section)
                         for query in queries:
                             if total_evidence >= brief.max_evidence:
+                                break
+                            if section_state.covered:
                                 break
                             result = retriever.search(
                                 query,
@@ -1295,7 +1151,9 @@ def extract_evidence(ctx: ResearchContext):
                             for hit in result.hits:
                                 if total_evidence >= brief.max_evidence:
                                     break
-                                if hit.source_id in used_sources:
+                                if section_state.covered:
+                                    break
+                                if hit.source_id in section_state.used_sources:
                                     continue
                                 match = best_sentence_span_for_queries(
                                     hit.text,
@@ -1310,7 +1168,7 @@ def extract_evidence(ctx: ResearchContext):
                                         ctx.run_id,
                                         _evidence_from_hit(
                                             hit,
-                                            question_id=question.question_id,
+                                            section_id=section.section_id,
                                             sentence=sentence,
                                             start=start,
                                             end=end,
@@ -1321,15 +1179,21 @@ def extract_evidence(ctx: ResearchContext):
                                     evidence_ids.add(str(item.id))
                                 total_evidence += 1
                                 created += 1
-                                used_sources.add(hit.source_id)
-                                retrieved_questions.add(question.question_id)
+                                section_state.track(
+                                    hit.source_id,
+                                    _source_identity_for(sources, hit.source_id),
+                                    is_refutation=(
+                                        item.evidence_type
+                                        is EvidenceType.REFUTATION
+                                    ),
+                                )
 
-            uncovered = [
-                question
-                for question in plan.questions
-                if question.question_id not in retrieved_questions
+            pending = [
+                section
+                for section in sections
+                if not section_states[section.section_id].covered
             ]
-            if uncovered and total_evidence < brief.max_evidence:
+            if pending and total_evidence < brief.max_evidence:
                 for record in records:
                     ctx.guard()
                     if total_evidence >= brief.max_evidence:
@@ -1337,32 +1201,41 @@ def extract_evidence(ctx: ResearchContext):
                     if not record.source_version_id:
                         continue
                     primary = _source_text(ctx, record, parser)
-                    texts = [primary] if primary else []
+                    texts: list[tuple[str, str]] = []
+                    if primary:
+                        texts.append((primary, "source_text"))
                     if record.snippet and record.snippet not in texts:
-                        texts.append(record.snippet)
+                        texts.append((record.snippet, "search_snippet"))
                     if not texts:
                         skipped += 1
                         continue
-                    source_questions = uncovered
-                    if record.question_ids:
-                        source_questions = [
-                            question
-                            for question in uncovered
-                            if question.question_id in record.question_ids
+                    source_sections = pending
+                    if record.section_ids:
+                        source_sections = [
+                            section
+                            for section in pending
+                            if section.section_id in record.section_ids
                         ]
-                    for question in source_questions:
+                    for section in source_sections:
                         if total_evidence >= brief.max_evidence:
                             break
-                        queries = _question_queries(question)
+                        section_state = section_states[section.section_id]
+                        if section_state.covered:
+                            continue
+                        if record.source_id in section_state.used_sources:
+                            continue
+                        queries = _section_queries(section)
                         match = None
                         matched_text = None
-                        for text in texts:
+                        matched_kind = "source_text"
+                        for text, kind in texts:
                             match = best_sentence_span_for_queries(
                                 text,
                                 queries,
                             )
                             if match is not None:
                                 matched_text = text
+                                matched_kind = kind
                                 break
                         if match is None or matched_text is None:
                             continue
@@ -1373,11 +1246,12 @@ def extract_evidence(ctx: ResearchContext):
                                 ctx.run_id,
                                 _evidence_from_text(
                                     record,
-                                    question_id=question.question_id,
+                                    section_id=section.section_id,
                                     text=matched_text,
                                     sentence=sentence,
                                     start=start,
                                     end=end,
+                                    kind=matched_kind,
                                 ),
                             )
                             if str(item.id) in evidence_ids:
@@ -1385,11 +1259,13 @@ def extract_evidence(ctx: ResearchContext):
                             evidence_ids.add(str(item.id))
                         total_evidence += 1
                         created += 1
-                        uncovered = [
-                            candidate
-                            for candidate in uncovered
-                            if candidate.question_id != question.question_id
-                        ]
+                        section_state.track(
+                            record.source_id,
+                            _source_identity_for(sources, record.source_id),
+                            is_refutation=(
+                                item.evidence_type is EvidenceType.REFUTATION
+                            ),
+                        )
 
             ctx.emit(
                 RunEventType.EVIDENCE_EXTRACTED,
@@ -1439,8 +1315,11 @@ def analyze_evidence(ctx: ResearchContext):
         with node_timeout(ctx.settings.research_node_timeout_seconds):
             ctx.guard()
             brief = _brief(state)
-            plan = _plan(state)
-            matrix = _refresh_evidence_matrix(ctx, plan, brief)
+            matrix = _refresh_evidence_matrix(
+                ctx,
+                _outline(state).sections,
+                brief,
+            )
             ctx.emit(
                 RunEventType.PROGRESS,
                 message="Evidence analysis completed",
@@ -1472,39 +1351,47 @@ def analyze_gaps(ctx: ResearchContext):
             brief = _brief(state)
             matrix = _matrix(state)
             round_index = int(state.get("round_index", 1))
-            terms_by_question = {
-                question.question_id: question.search_terms
-                for question in _plan(state).questions
-                if question.question_id is not None
+            outline = _outline(state)
+            roles = {
+                section.section_id: section.role
+                for section in outline.sections
+            }
+            terms_by_section = {
+                section.section_id: section.search_terms
+                for section in outline.sections
             }
             gaps: list[ResearchGap] = []
             for row in matrix.rows:
-                if row.coverage_status is QuestionCoverageStatus.COVERED:
+                if row.coverage_status is SectionCoverageStatus.COVERED:
                     continue
-                severe = row.coverage_status is QuestionCoverageStatus.INSUFFICIENT
+                if roles.get(row.section_id) is SectionRole.LIMITATIONS:
+                    continue
+                severe = (
+                    row.coverage_status is SectionCoverageStatus.INSUFFICIENT
+                )
                 gaps.append(
                     ResearchGap(
-                        question_id=row.question_id,
-                        question=row.question,
+                        section_id=row.section_id,
+                        section_title=row.section_title,
                         reason=row.gap
                         or _text(
                             brief,
                             (
-                                "该问题缺少足够的支持证据。"
+                                "该章节缺少足够的支持证据。"
                                 if severe
-                                else "该问题只有部分证据，尚不足以形成稳定结论。"
+                                else "该章节只有部分证据，尚不足以形成稳定结论。"
                             ),
                             (
-                                "The question lacks sufficient supporting evidence."
+                                "The section lacks sufficient supporting evidence."
                                 if severe
-                                else "Only partial evidence is available for this question."
+                                else "Only partial evidence is available for this section."
                             ),
                         ),
                         severity="high" if severe else "medium",
                         suggested_queries=_gap_queries(
                             brief,
-                            row.question,
-                            terms_by_question.get(row.question_id, []),
+                            row.section_title,
+                            terms_by_section.get(row.section_id, []),
                         ),
                     )
                 )
@@ -1517,15 +1404,16 @@ def analyze_gaps(ctx: ResearchContext):
                     (
                         row
                         for row in matrix.rows
-                        if row.coverage_status is QuestionCoverageStatus.COVERED
+                        if row.coverage_status is SectionCoverageStatus.COVERED
+                        and roles.get(row.section_id) is not SectionRole.LIMITATIONS
                     ),
                     matrix.rows[0] if matrix.rows else None,
                 )
                 if target is not None:
                     gaps.append(
                         ResearchGap(
-                            question_id=target.question_id,
-                            question=target.question,
+                            section_id=target.section_id,
+                            section_title=target.section_title,
                             reason=_text(
                                 brief,
                                 "现有证据缺少明确的反方或批评性观点，需要定向补充。",
@@ -1534,8 +1422,8 @@ def analyze_gaps(ctx: ResearchContext):
                             severity="medium",
                             suggested_queries=_counter_queries(
                                 brief,
-                                target.question,
-                                terms_by_question.get(target.question_id, []),
+                                target.section_title,
+                                terms_by_section.get(target.section_id, []),
                             ),
                         )
                     )
@@ -1662,100 +1550,227 @@ def revise_search_plan(ctx: ResearchContext):
     return node
 
 
-def generate_outline(ctx: ResearchContext):
+def evidence_agent(ctx: ResearchContext):
     def node(state: ResearchState) -> ResearchState:
-        with node_timeout(_outline_node_timeout(ctx)):
+        with node_timeout(_evidence_agent_node_timeout(ctx)):
             ctx.guard()
             brief = _brief(state)
-            plan = _plan(state)
-            matrix = _matrix(state)
+            outline = _outline(state)
             gaps = [
                 ResearchGap.model_validate(value)
                 for value in state.get("gaps", [])
             ]
-            feedback_state = dict(state.get("feedback") or {})
-            feedback = (
-                feedback_state.get("feedback")
-                if feedback_state.get("decision") == "rejected"
-                else None
+            previous_rounds = int(state.get("agent_rounds") or 0)
+            round_index = int(state.get("round_index", 1)) + (
+                1 if previous_rounds else 0
             )
-            with ctx.database.session_scope() as session:
+            ctx.ensure_status(
+                RunStatus.SEARCHING,
+                event_type=RunEventType.PHASE_STARTED,
+                message=f"Evidence agent round {round_index} started",
+                dedupe_key=f"phase:evidence-agent:started:{round_index}",
+            )
+            ctx.emit(
+                RunEventType.PHASE_STARTED,
+                message="Evidence agent started",
+                dedupe_key=f"evidence-agent:started:{round_index}",
+                stage=RunStatus.SEARCHING,
+            )
+            llm = _llm_evidence_agent(ctx)
+            if llm is None:
+                return {"current_node": "evidence_agent"}
+
+            toolbox = ResearchToolbox(
+                ctx,
+                brief,
+                max_sources=ctx.settings.research_agent_max_sources,
+                max_searches=ctx.settings.research_agent_max_searches,
+                max_fetches=ctx.settings.research_agent_max_fetches,
+                max_citation_calls=ctx.settings.research_agent_max_citation_calls,
+                max_read_chars=ctx.settings.research_agent_read_chars,
+                existing=_source_records(state),
+                section_ids=[section.section_id for section in outline.sections],
+                require_section=True,
+                round_index=round_index,
+            )
+            tool_events = 0
+
+            def record_tool(name: str, result: dict) -> None:
+                nonlocal tool_events
+                tool_events += 1
+                results = result.get("results")
+                query = result.get("query")
+                message = f"Evidence agent used {name}"
+                if name == "search_sources" and isinstance(query, str) and query:
+                    message = f'Evidence agent searched "{query[:120]}"'
+                elif name == "read_source":
+                    message = "Evidence agent read a source"
+                elif name == "fetch_source":
+                    message = "Evidence agent fetched a page"
+                elif name == "follow_citations":
+                    message = "Evidence agent followed citations"
+                ctx.emit(
+                    RunEventType.PROGRESS,
+                    message=message,
+                    payload={
+                        "tool": name,
+                        "query": query,
+                        "section_id": result.get("section_id"),
+                        "direction": result.get("direction"),
+                        "results": (
+                            len(results) if isinstance(results, list) else None
+                        ),
+                        "source_id": (
+                            result.get("source_id")
+                            or result.get("from_source_id")
+                        ),
+                        "title": (
+                            result.get("title") or result.get("from_title")
+                        ),
+                        "status": result.get("status"),
+                        "error": (result.get("error") or "")[:300] or None,
+                        "round": round_index,
+                        "tool_calls": tool_events,
+                    },
+                    dedupe_key=f"evidence-agent:tool:{round_index}:{tool_events}",
+                    stage=RunStatus.SEARCHING,
+                )
+
+            outcome = run_evidence_agent(
+                brief,
+                outline,
+                gaps,
+                llm,
+                toolbox,
+                round_index=round_index,
+                max_rounds=ctx.settings.research_agent_max_rounds,
+                max_tool_calls=ctx.settings.research_agent_max_tool_calls,
+                on_tool=record_tool,
+            )
+            if outcome.error:
+                logger.warning(
+                    "Evidence agent for run %s ended early: %s",
+                    ctx.run_id,
+                    outcome.error,
+                )
+            ctx.emit(
+                RunEventType.PHASE_COMPLETED,
+                message="Evidence agent completed",
+                payload={
+                    "round": round_index,
+                    "completed": outcome.completed,
+                    "sources": len(outcome.sources),
+                    "searches": outcome.searches,
+                    "fetches": outcome.fetches,
+                    "citation_calls": outcome.citation_calls,
+                    "tool_calls": outcome.tool_calls,
+                    "llm_calls": outcome.llm_calls,
+                    "section_notes": len(outcome.section_notes),
+                    "error": outcome.error,
+                },
+                dedupe_key=f"phase:evidence-agent:completed:{round_index}",
+                stage=RunStatus.SEARCHING,
+            )
+            return {
+                "sources": [
+                    record.model_dump(mode="json")
+                    for record in outcome.sources
+                ],
+                "evidence_notes": list(outcome.section_notes),
+                "agent_rounds": previous_rounds + 1,
+                "round_index": round_index,
+                "current_node": "evidence_agent",
+            }
+
+    return node
+
+
+def attach_evidence(ctx: ResearchContext):
+    def node(state: ResearchState) -> ResearchState:
+        with node_timeout(ctx.settings.research_node_timeout_seconds):
+            ctx.guard()
+            outline = _outline(state)
+            matrix = _matrix(state)
+            coverage = {
+                row.section_id: row.coverage_status for row in matrix.rows
+            }
+            with ctx.database.session() as session:
                 evidence = EvidenceRepository(session).list_for_run(
                     ctx.project_id,
                     ctx.run_id,
                 )
-                by_question: dict[UUID | None, list] = {}
-                for item in evidence:
-                    by_question.setdefault(
-                        item.research_question_id,
-                        [],
-                    ).append(item)
-                latest = OutlineRepository(session).latest(ctx.project_id, ctx.run_id)
-                latest_id = latest.id if latest else None
-                latest_version = latest.version if latest else 0
-                latest_body = _outline_body(latest.content) if latest else None
+            by_section: dict[UUID | None, list] = {}
+            for item in evidence:
+                by_section.setdefault(item.outline_section_id, []).append(item)
 
-            version = (latest_version + 1) if latest_id else 1
-            framing = _research_map_framing(
-                dict(state.get("research_map") or {}),
-                plan,
-            )
-            candidate, outliner = _outline_candidate(
-                ctx,
-                brief,
-                plan,
-                matrix,
-                gaps,
-                version=version,
-                evidence_by_question=by_question,
-                feedback=feedback,
-                section_framing=framing,
-            )
-            outline_payload = candidate.model_dump(mode="json")
-            if latest_id is not None and _outline_body(outline_payload) == latest_body:
-                # The same sections as the stored version: keep that row instead
-                # of writing a duplicate outline.
-                outline_id = latest_id
-                outline_payload["version"] = latest_version
-            else:
-                with ctx.database.session_scope() as session:
-                    outline = OutlineRepository(session).create_version(
-                        ctx.project_id,
-                        ctx.run_id,
-                        _outline_create(candidate, feedback),
-                    )
-                    outline_id = outline.id
-                    outline_payload["version"] = outline.version
-
-            result: ResearchState = {
-                "outline": outline_payload,
-                "outline_id": str(outline_id),
-                "feedback": {},
-                "current_node": "generate_outline",
-            }
-            if outliner == "template" and _llm_outliner(ctx) is not None:
-                result["limitations"] = _with_limitations(
-                    state,
-                    _text(
-                        brief,
-                        "报告提纲模型输出未通过校验，提纲改用确定性模板生成。",
-                        "The model outline failed validation, so the report outline "
-                        "came from the deterministic template.",
-                    ),
+            sections: list[OutlineSection] = []
+            coverage_updates: dict[UUID, SectionCoverageStatus] = {}
+            for section in outline.sections:
+                items = by_section.get(section.section_id, [])
+                support = [
+                    item
+                    for item in items
+                    if item.evidence_type is not EvidenceType.REFUTATION
+                ]
+                refute = [
+                    item
+                    for item in items
+                    if item.evidence_type is EvidenceType.REFUTATION
+                ]
+                status = coverage.get(
+                    section.section_id,
+                    section.coverage_status,
                 )
+                sections.append(
+                    section.model_copy(
+                        update={
+                            "key_claims": [
+                                item.claim_summary[:300]
+                                for item in support[:3]
+                            ],
+                            "evidence_ids": [item.id for item in items],
+                            "support_evidence_ids": [
+                                item.id for item in support
+                            ],
+                            "refute_evidence_ids": [item.id for item in refute],
+                            "coverage_status": status,
+                        }
+                    )
+                )
+                coverage_updates[section.section_id] = status
+            with ctx.database.session_scope() as session:
+                repository = OutlineSectionRepository(session)
+                for section_id, status in coverage_updates.items():
+                    repository.update_coverage(
+                        section_id,
+                        status,
+                        project_id=ctx.project_id,
+                    )
+            attached = Outline(
+                version=outline.version,
+                title=outline.title,
+                sections=sections,
+                summary=outline.summary,
+            )
             ctx.emit(
-                RunEventType.PHASE_COMPLETED,
-                message="Report outline generated",
+                RunEventType.PROGRESS,
+                message="Evidence attached to outline sections",
                 payload={
-                    "outline_id": str(outline_id),
-                    "version": outline_payload["version"],
-                    "sections": len(outline_payload.get("sections", [])),
-                    "outliner": outliner,
+                    "sections": len(sections),
+                    "evidence": len(evidence),
+                    "covered": sum(
+                        1
+                        for status in coverage_updates.values()
+                        if status is SectionCoverageStatus.COVERED
+                    ),
                 },
-                dedupe_key=f"outline:generated:{outline_payload['version']}",
+                dedupe_key="outline:evidence-attached",
                 stage=RunStatus.BUILDING_EVIDENCE,
             )
-            return result
+            return {
+                "outline": attached.model_dump(mode="json"),
+                "current_node": "attach_evidence",
+            }
 
     return node
 
@@ -1764,10 +1779,25 @@ def await_outline_approval(ctx: ResearchContext):
     def node(state: ResearchState) -> ResearchState:
         with node_timeout(ctx.settings.research_node_timeout_seconds):
             ctx.guard()
-            outline = Outline.model_validate(state.get("outline") or {})
+            brief = _brief(state)
+            outline = _outline(state)
             if not ctx.settings.research_outline_approval_required:
-                _approve_outline(ctx, state.get("outline_id"))
-                return {"feedback": {}, "current_node": "await_outline_approval"}
+                outline = _finalize_approved_outline(
+                    ctx,
+                    outline,
+                    state.get("outline_id"),
+                )
+                ctx.ensure_status(
+                    RunStatus.SEARCHING,
+                    event_type=RunEventType.PHASE_STARTED,
+                    message="Outline approved; evidence collection started",
+                    dedupe_key=f"phase:searching:started:{outline.version}",
+                )
+                return {
+                    "outline": outline.model_dump(mode="json"),
+                    "feedback": {},
+                    "current_node": "await_outline_approval",
+                }
 
             approval_id = _request_approval(
                 ctx,
@@ -1777,7 +1807,7 @@ def await_outline_approval(ctx: ResearchContext):
                     "outline_id": state.get("outline_id"),
                     "outline": outline.model_dump(mode="json"),
                 },
-                "Report outline ready for approval",
+                "Article outline ready for approval",
             )
             value = interrupt(
                 {
@@ -1789,7 +1819,7 @@ def await_outline_approval(ctx: ResearchContext):
             decision = _approval_decision(value)
             if decision.decision is ApprovalStatus.REJECTED:
                 ctx.ensure_status(
-                    RunStatus.BUILDING_EVIDENCE,
+                    RunStatus.PLANNING,
                     event_type=RunEventType.PHASE_STARTED,
                     message="Outline revision requested by approver",
                     dedupe_key=f"outline:revision:{outline.version}",
@@ -1807,13 +1837,27 @@ def await_outline_approval(ctx: ResearchContext):
                     raise PermanentRunError(
                         "Modified outline approval is missing updated outline content"
                     )
-                outline = Outline.model_validate(decision.content)
-                _approve_outline(ctx, state.get("outline_id"))
+                content = decision.content
+                if "sections" not in content and isinstance(
+                    content.get("outline"), dict
+                ):
+                    content = content["outline"]
+                try:
+                    outline = Outline.model_validate(content)
+                except Exception as exc:
+                    raise PermanentRunError(
+                        f"Modified outline content is invalid: {exc}"
+                    ) from exc
+            outline = _finalize_approved_outline(
+                ctx,
+                outline,
+                state.get("outline_id"),
+            )
             ctx.ensure_status(
-                RunStatus.WRITING,
+                RunStatus.SEARCHING,
                 event_type=RunEventType.PHASE_STARTED,
-                message="Outline approved; writing started",
-                dedupe_key=f"phase:writing:started:{outline.version}",
+                message="Outline approved; evidence collection started",
+                dedupe_key=f"phase:searching:started:{outline.version}",
             )
             return {
                 "outline": outline.model_dump(mode="json"),
@@ -1838,7 +1882,6 @@ def write_sections(ctx: ResearchContext):
             outline = Outline.model_validate(state.get("outline") or {})
             outline_id = _outline_id(state)
             _approve_outline(ctx, outline_id)
-            plan = _plan(state)
             with ctx.database.session_scope() as session:
                 evidence = EvidenceRepository(session).list_for_run(
                     ctx.project_id,
@@ -1909,7 +1952,11 @@ def write_sections(ctx: ResearchContext):
                             new_evidence_ids.update(
                                 str(item.id) for item in outcome.evidence
                             )
-                            matrix = _refresh_evidence_matrix(ctx, plan, brief)
+                            matrix = _refresh_evidence_matrix(
+                                ctx,
+                                outline.sections,
+                                brief,
+                            )
                         return outcome
 
                 section_llm = _progress_llm(
@@ -2255,6 +2302,15 @@ def verify_citations(ctx: ResearchContext):
                     ctx.run_id,
                 )
                 sources = source_views(session, ctx.project_id)
+                roles_by_index = {
+                    index: row.role
+                    for index, row in enumerate(
+                        OutlineSectionRepository(session).list_for_run(
+                            ctx.project_id,
+                            ctx.run_id,
+                        )
+                    )
+                }
                 for section in sections:
                     ctx.guard()
                     existing = CitationAuditRepository(session).list_for_section(
@@ -2287,7 +2343,11 @@ def verify_citations(ctx: ResearchContext):
                                 )
                         continue
 
-                    audit_value = audit_section(section, sources)
+                    audit_value = audit_section(
+                        section,
+                        sources,
+                        role=roles_by_index.get(section.section_index),
+                    )
                     CitationAuditRepository(session).create(
                         ctx.project_id,
                         ctx.run_id,
@@ -2586,53 +2646,45 @@ def finalize_report(ctx: ResearchContext):
     return node
 
 
-def route_after_brief(ctx: ResearchContext):
+def route_after_outline_approval(ctx: ResearchContext):
     def route(state: ResearchState) -> str:
-        return (
-            "research_agent"
-            if _llm_research_agent(ctx) is not None
-            else "research_recon"
-        )
+        feedback = state.get("feedback") or {}
+        if feedback.get("decision") == "rejected":
+            return "research_agent"
+        if _llm_evidence_agent(ctx) is not None:
+            return "evidence_agent"
+        return "generate_queries"
 
     return route
 
 
-def route_after_plan_approval(state: ResearchState) -> str:
-    feedback = state.get("feedback") or {}
-    if feedback.get("decision") == "rejected":
-        return "plan_research"
-    return "generate_queries"
+def route_after_gaps(ctx: ResearchContext):
+    def route(state: ResearchState) -> str:
+        gaps = state.get("gaps") or []
+        if not gaps or state.get("budget_stopped"):
+            return "attach_evidence"
+        if _llm_evidence_agent(ctx) is not None:
+            return "evidence_agent"
+        return "revise_search_plan"
 
-
-def route_after_gaps(state: ResearchState) -> str:
-    gaps = state.get("gaps") or []
-    if not gaps or state.get("budget_stopped"):
-        return "generate_outline"
-    return "revise_search_plan"
-
-
-def route_after_outline_approval(state: ResearchState) -> str:
-    feedback = state.get("feedback") or {}
-    if feedback.get("decision") == "rejected":
-        return "generate_outline"
-    return "write_sections"
+    return route
 
 
 def _brief(state: ResearchState) -> ResearchBrief:
     return ResearchBrief.model_validate(state["brief"])
 
 
-def _plan_or_none(state: ResearchState) -> ResearchPlan | None:
-    if not state.get("plan"):
+def _outline_or_none(state: ResearchState) -> Outline | None:
+    if not state.get("outline"):
         return None
-    return ResearchPlan.model_validate(state["plan"])
+    return Outline.model_validate(state["outline"])
 
 
-def _plan(state: ResearchState) -> ResearchPlan:
-    plan = _plan_or_none(state)
-    if plan is None:
-        raise PermanentRunError("Research plan is missing from workflow state")
-    return plan
+def _outline(state: ResearchState) -> Outline:
+    outline = _outline_or_none(state)
+    if outline is None:
+        raise PermanentRunError("Article outline is missing from workflow state")
+    return outline
 
 
 def _matrix(state: ResearchState) -> EvidenceMatrix:
@@ -2641,7 +2693,7 @@ def _matrix(state: ResearchState) -> EvidenceMatrix:
 
 def _refresh_evidence_matrix(
     ctx: ResearchContext,
-    plan: ResearchPlan,
+    sections: list[OutlineSection],
     brief: ResearchBrief,
 ) -> EvidenceMatrix:
     with ctx.database.session_scope() as session:
@@ -2651,26 +2703,34 @@ def _refresh_evidence_matrix(
         )
         sources = source_views(session, ctx.project_id)
         matrix = build_evidence_matrix(
-            plan.questions,
+            sections,
             evidence,
             sources,
             language=brief.language,
         )
-        question_repo = ResearchQuestionRepository(session)
+        repository = OutlineSectionRepository(session)
         for row in matrix.rows:
-            if row.question_id is not None:
-                question_repo.update_coverage(
-                    row.question_id,
+            if row.section_id is not None:
+                repository.update_coverage(
+                    row.section_id,
                     row.coverage_status,
                     project_id=ctx.project_id,
                 )
     return matrix
 
 
-def _question_queries(question: ResearchQuestion) -> list[str]:
+def _searchable_sections(outline: Outline) -> list[OutlineSection]:
+    return [
+        section
+        for section in outline.sections
+        if section.role is not SectionRole.LIMITATIONS
+    ]
+
+
+def _section_queries(section: OutlineSection) -> list[str]:
     queries: list[str] = []
     seen: set[str] = set()
-    for value in [question.question, *question.search_terms]:
+    for value in [*section.search_terms, section.title]:
         text = " ".join(str(value or "").split())
         key = text.casefold()
         if not text or key in seen:
@@ -2687,31 +2747,125 @@ def _source_records(state: ResearchState) -> list[SourceRecord]:
     ]
 
 
-def _sync_plan_questions(
+def _normalize_outline(outline: Outline) -> Outline:
+    sections: list[OutlineSection] = []
+    seen_ids: set[UUID] = set()
+    seen_intro = False
+    seen_conclusion = False
+    for index, section in enumerate(outline.sections):
+        section_id = section.section_id
+        if section_id in seen_ids:
+            section_id = uuid4()
+        seen_ids.add(section_id)
+        role = section.role
+        if role is SectionRole.INTRODUCTION:
+            if seen_intro:
+                role = SectionRole.BODY
+            seen_intro = True
+        elif role is SectionRole.CONCLUSION:
+            if seen_conclusion:
+                role = SectionRole.BODY
+            seen_conclusion = True
+        sections.append(
+            section.model_copy(
+                update={
+                    "section_id": section_id,
+                    "index": index,
+                    "role": role,
+                }
+            )
+        )
+    return Outline(
+        version=outline.version,
+        title=outline.title,
+        sections=sections,
+        summary=outline.summary,
+    )
+
+
+def _outline_section_create(section: OutlineSection) -> OutlineSectionCreate:
+    return OutlineSectionCreate(
+        id=section.section_id,
+        title=section.title,
+        role=section.role,
+        purpose=section.purpose,
+        search_terms=list(section.search_terms),
+        target_words=section.target_words,
+        priority=max(0, 1000 - section.index),
+    )
+
+
+def _sync_outline_sections(
     ctx: ResearchContext,
-    plan: ResearchPlan,
-) -> ResearchPlan:
-    updated = []
+    outline: Outline,
+) -> Outline:
     with ctx.database.session_scope() as session:
-        repo = ResearchQuestionRepository(session)
-        for question in plan.questions:
-            record = repo.create(
+        rows = OutlineSectionRepository(session).sync(
+            ctx.project_id,
+            ctx.run_id,
+            [_outline_section_create(section) for section in outline.sections],
+        )
+        sections = [
+            section.model_copy(update={"section_id": row.id})
+            for section, row in zip(outline.sections, rows)
+        ]
+        return outline.model_copy(update={"sections": sections})
+
+
+def _persist_outline(
+    ctx: ResearchContext,
+    outline: Outline,
+    *,
+    feedback: str | None,
+) -> tuple[Outline, UUID]:
+    outline = _normalize_outline(outline)
+    outline = _sync_outline_sections(ctx, outline)
+    with ctx.database.session_scope() as session:
+        row = OutlineRepository(session).create_version(
+            ctx.project_id,
+            ctx.run_id,
+            OutlineCreate(
+                content=outline.model_dump(mode="json"),
+                version_note=(
+                    f"Regenerated from approval feedback: {feedback[:2000]}"
+                    if feedback
+                    else "Initial outline"
+                ),
+            ),
+        )
+        outline = outline.model_copy(update={"version": row.version})
+        return outline, row.id
+
+
+def _finalize_approved_outline(
+    ctx: ResearchContext,
+    outline: Outline,
+    outline_id: str | None,
+) -> Outline:
+    outline = _normalize_outline(outline)
+    outline = _sync_outline_sections(ctx, outline)
+    with ctx.database.session_scope() as session:
+        repository = OutlineRepository(session)
+        if outline_id:
+            row = repository.get(
+                UUID(str(outline_id)),
+                project_id=ctx.project_id,
+            )
+            outline = outline.model_copy(update={"version": row.version})
+            row.content = outline.model_dump(mode="json")
+            session.flush()
+        else:
+            row = repository.create_version(
                 ctx.project_id,
                 ctx.run_id,
-                ResearchQuestionCreate(
-                    question=question.question,
-                    priority=question.priority,
+                OutlineCreate(
+                    content=outline.model_dump(mode="json"),
+                    version_note="Approved outline",
                 ),
             )
-            updated.append(
-                question.model_copy(
-                    update={
-                        "question_id": record.id,
-                        "coverage_status": record.coverage_status,
-                    }
-                )
-            )
-    return plan.model_copy(update={"questions": updated})
+            outline = outline.model_copy(update={"version": row.version})
+        repository.approve(row.id, project_id=ctx.project_id)
+        return outline
 
 
 def _request_approval(
@@ -2792,7 +2946,7 @@ def _prepare_query_row(ctx: ResearchContext, query: SearchQueryModel):
                 query_text=query.query_text,
                 provider=query.provider,
                 round_index=query.round_index,
-                research_question_id=query.research_question_id,
+                outline_section_id=query.outline_section_id,
             ),
         )
         if row.status is SearchQueryStatus.COMPLETED:
@@ -2891,112 +3045,6 @@ def _index_source(
         )
 
 
-def _outline_body(content: dict) -> dict:
-    """Compare outline content ignoring the version counter itself."""
-    return {key: value for key, value in content.items() if key != "version"}
-
-
-def _outline_candidate(
-    ctx: ResearchContext,
-    brief: ResearchBrief,
-    plan: ResearchPlan,
-    matrix: EvidenceMatrix,
-    gaps: list[ResearchGap],
-    *,
-    version: int,
-    evidence_by_question: dict,
-    feedback: str | None,
-    section_framing: dict[int, tuple[str, str]] | None = None,
-) -> tuple[Outline, str]:
-    outliner = _progress_llm(
-        ctx,
-        _llm_outliner(ctx),
-        stage=RunStatus.PLANNING,
-        label="Outlining article sections",
-        key_prefix=f"llm:outline:v{version}",
-        payload={"node": "generate_outline", "version": version},
-    )
-    if outliner is not None:
-        outline = build_outline_with_llm(
-            brief,
-            plan,
-            matrix,
-            gaps,
-            version=version,
-            evidence_by_question=evidence_by_question,
-            llm=outliner,
-            feedback=feedback,
-            section_framing=section_framing,
-        )
-        if outline is not None:
-            return outline, "llm"
-    return (
-        build_outline(
-            brief,
-            plan,
-            matrix,
-            gaps,
-            version=version,
-            evidence_by_question=evidence_by_question,
-            feedback=feedback,
-            section_framing=section_framing,
-        ),
-        "template",
-    )
-
-
-_FIXED_OUTLINE_TITLES = {
-    "introduction",
-    "引言",
-    "conclusion",
-    "结论",
-    "limitations and open questions",
-    "研究局限与未解决问题",
-    "contradictions and counter-evidence",
-    "矛盾与反方证据",
-}
-
-
-def _research_map_framing(
-    value: dict,
-    plan: ResearchPlan,
-) -> dict[int, tuple[str, str]]:
-    raw = value.get("outline")
-    if not isinstance(raw, list):
-        return {}
-    framing: dict[int, tuple[str, str]] = {}
-    seen: set[str] = set()
-    for entry in raw:
-        if not isinstance(entry, dict):
-            continue
-        index = entry.get("question_index")
-        if isinstance(index, bool) or not isinstance(index, int):
-            continue
-        if index < 0 or index >= len(plan.questions) or index in framing:
-            continue
-        title = " ".join(str(entry.get("title") or "").split())[:200]
-        key = title.casefold()
-        if not title or key in seen or key in _FIXED_OUTLINE_TITLES:
-            continue
-        seen.add(key)
-        purpose = " ".join(str(entry.get("purpose") or "").split())[:500]
-        framing[index] = (title, purpose)
-    return framing
-
-
-def _outline_create(outline: Outline, feedback: str | None) -> object:
-    from dr_core.schemas import OutlineCreate
-
-    return OutlineCreate(
-        content=outline.model_dump(mode="json"),
-        version_note=(
-            f"Regenerated from approval feedback: {feedback[:2000]}"
-            if feedback
-            else "Initial outline"
-        ),
-    )
-
-
 def _approve_outline(ctx: ResearchContext, outline_id: UUID | str | None) -> None:
     if not outline_id:
         return
@@ -3021,25 +3069,14 @@ def _section_evidence(section, evidence: list) -> list:
         for evidence_id in section.evidence_ids
         if evidence_id in by_id
     ]
-    if section.question_id is not None:
-        selected_ids = {item.id for item in selected}
-        selected.extend(
-            item
-            for item in evidence
-            if item.research_question_id == section.question_id
-            and item.id not in selected_ids
-        )
-    if selected:
-        return selected
-    if section.question_id is not None:
-        matching = [
-            item
-            for item in evidence
-            if item.research_question_id == section.question_id
-        ]
-        if matching:
-            return matching
-    return list(evidence)
+    selected_ids = {item.id for item in selected}
+    selected.extend(
+        item
+        for item in evidence
+        if item.outline_section_id == section.section_id
+        and item.id not in selected_ids
+    )
+    return selected
 
 
 def _llm_provider(ctx: ResearchContext, enabled: bool):
@@ -3072,10 +3109,6 @@ def _progress_llm(
     )
 
 
-def _llm_planner(ctx: ResearchContext):
-    return _llm_provider(ctx, ctx.settings.research_llm_planning_enabled)
-
-
 def _llm_outliner(ctx: ResearchContext):
     return _llm_provider(ctx, ctx.settings.research_llm_outline_enabled)
 
@@ -3100,36 +3133,6 @@ def _llm_node_timeout(ctx: ResearchContext, calls: int) -> int:
     return base + calls * ctx.settings.llm_call_budget_seconds
 
 
-def _planning_node_timeout(ctx: ResearchContext) -> int:
-    if _llm_planner(ctx) is None:
-        return ctx.settings.research_node_timeout_seconds
-    return _llm_node_timeout(ctx, 1)
-
-
-def _outline_node_timeout(ctx: ResearchContext) -> int:
-    if _llm_outliner(ctx) is None:
-        return ctx.settings.research_node_timeout_seconds
-    return _llm_node_timeout(ctx, 1)
-
-
-def _llm_recon(ctx: ResearchContext):
-    # Reconnaissance only exists to ground the model plan, and it needs a
-    # provider that can actually run a tool-calling turn.
-    if not (
-        ctx.settings.research_llm_recon_enabled
-        and ctx.settings.research_llm_planning_enabled
-    ):
-        return None
-    llm = ctx.registry.llm
-    if (
-        llm is None
-        or getattr(llm, "name", "") == "mock-llm"
-        or not callable(getattr(llm, "chat", None))
-    ):
-        return None
-    return UsageRecordingLLM(llm, ctx.record_usage)
-
-
 def _llm_research_agent(ctx: ResearchContext):
     if not ctx.settings.research_agent_enabled:
         return None
@@ -3145,22 +3148,39 @@ def _llm_research_agent(ctx: ResearchContext):
     return UsageRecordingLLM(llm, ctx.record_usage)
 
 
-def _recon_node_timeout(ctx: ResearchContext) -> int:
-    if _llm_recon(ctx) is None:
-        return ctx.settings.research_node_timeout_seconds
-    return _llm_node_timeout(
-        ctx,
-        ctx.settings.research_recon_max_rounds + 1,
-    )
+def _llm_evidence_agent(ctx: ResearchContext):
+    if not ctx.settings.research_agent_enabled:
+        return None
+    if not _write_search_available(ctx):
+        return None
+    llm = ctx.registry.llm
+    if (
+        llm is None
+        or getattr(llm, "name", "") == "mock-llm"
+        or not callable(getattr(llm, "chat", None))
+    ):
+        return None
+    return UsageRecordingLLM(llm, ctx.record_usage)
 
 
-def _research_agent_node_timeout(ctx: ResearchContext) -> int:
-    if _llm_research_agent(ctx) is None:
+def _evidence_agent_node_timeout(ctx: ResearchContext) -> int:
+    if _llm_evidence_agent(ctx) is None:
         return ctx.settings.research_node_timeout_seconds
     return _llm_node_timeout(
         ctx,
         ctx.settings.research_agent_max_rounds + 1,
     )
+
+
+def _research_agent_node_timeout(ctx: ResearchContext) -> int:
+    if _llm_research_agent(ctx) is not None:
+        return _llm_node_timeout(
+            ctx,
+            ctx.settings.research_agent_max_rounds + 1,
+        )
+    if _llm_outliner(ctx) is not None:
+        return _llm_node_timeout(ctx, 1)
+    return ctx.settings.research_node_timeout_seconds
 
 
 def _writing_node_timeout(ctx: ResearchContext, state: ResearchState) -> int:
@@ -3214,10 +3234,10 @@ def _verification_node_timeout(ctx: ResearchContext) -> int:
 
 def _gap_queries(
     brief: ResearchBrief,
-    question: str,
+    section_title: str,
     search_terms: list[str] | None = None,
 ) -> list[str]:
-    primary, latin = query_pair(question, search_terms or [])
+    primary, latin = query_pair(section_title, search_terms or [])
     if brief.language is ProjectLanguage.ZH:
         if latin != primary:
             return [
@@ -3236,10 +3256,10 @@ def _gap_queries(
 
 def _counter_queries(
     brief: ResearchBrief,
-    question: str,
+    section_title: str,
     search_terms: list[str] | None = None,
 ) -> list[str]:
-    primary, latin = query_pair(question, search_terms or [])
+    primary, latin = query_pair(section_title, search_terms or [])
     if brief.language is ProjectLanguage.ZH:
         if latin != primary:
             return [
@@ -3256,10 +3276,12 @@ def _counter_queries(
     ]
 
 
-def _plan_tokens(plan: ResearchPlan) -> set[str]:
+def _outline_tokens(outline: Outline) -> set[str]:
     tokens: set[str] = set()
-    for question in plan.questions:
-        tokens.update(_tokens(question.question))
+    for section in outline.sections:
+        tokens.update(_tokens(section.title))
+        for term in section.search_terms:
+            tokens.update(_tokens(term))
     return tokens
 
 

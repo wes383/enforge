@@ -3,13 +3,14 @@ from __future__ import annotations
 from datetime import date, datetime
 from decimal import Decimal
 from typing import Any, Literal
-from uuid import UUID
+from uuid import UUID, uuid4
 
 from pydantic import Field, field_validator, model_validator
 
 from dr_core.db.enums import (
     ApprovalKind,
     ApprovalStatus,
+    ArticleType,
     CitationAuditStatus,
     CitationIssueType,
     CitationStyle,
@@ -18,9 +19,10 @@ from dr_core.db.enums import (
     EvidenceType,
     EvidenceVerificationStatus,
     ProjectLanguage,
-    QuestionCoverageStatus,
     ResearchDepth,
     SearchProviderName,
+    SectionCoverageStatus,
+    SectionRole,
     SourceOrigin,
     SourceType,
 )
@@ -33,6 +35,7 @@ class ResearchBrief(SchemaModel):
     title: str = Field(min_length=1, max_length=300)
     topic: str = Field(min_length=1, max_length=20000)
     research_scope: str | None = Field(default=None, max_length=20000)
+    article_type: ArticleType = ArticleType.INVESTIGATIVE_RESEARCH
     language: ProjectLanguage = ProjectLanguage.ZH
     target_audience: str | None = Field(default=None, max_length=1000)
     research_depth: ResearchDepth = ResearchDepth.STANDARD
@@ -48,33 +51,6 @@ class ResearchBrief(SchemaModel):
     max_evidence: int = Field(default=40, ge=1, le=500)
     token_budget: int = Field(default=0, ge=0)
     cost_budget_usd: Decimal = Field(default=Decimal("0"), ge=0)
-
-
-class ResearchQuestion(SchemaModel):
-    question_id: UUID | None = None
-    question: str = Field(min_length=1, max_length=10000)
-    priority: int = Field(default=50, ge=0, le=1000)
-    parent_id: UUID | None = None
-    coverage_status: QuestionCoverageStatus = QuestionCoverageStatus.OPEN
-    # Short keyword queries derived from the question; empty means "search the
-    # question text itself". The validator keeps at most three.
-    search_terms: list[str] = Field(default_factory=list, max_length=20)
-
-    @field_validator("search_terms")
-    @classmethod
-    def _clean_search_terms(cls, terms: list[str]) -> list[str]:
-        cleaned: list[str] = []
-        seen: set[str] = set()
-        for value in terms:
-            text = " ".join(str(value).split()).strip()[:200]
-            key = text.casefold()
-            if not text or key in seen:
-                continue
-            seen.add(key)
-            cleaned.append(text)
-            if len(cleaned) >= 3:
-                break
-        return cleaned
 
 
 class ResearchRecon(SchemaModel):
@@ -99,37 +75,6 @@ class ResearchRecon(SchemaModel):
         return self
 
 
-class ResearchMapSection(SchemaModel):
-    title: str = Field(min_length=1, max_length=500)
-    purpose: str = Field(default="", max_length=1000)
-    question_index: int | None = Field(default=None, ge=0)
-
-
-class ResearchMap(ResearchRecon):
-    """What the research agent learned before committing to a plan.
-
-    The outline here is provisional: it records the framing suggested by the
-    material the agent actually read. The final outline is still assembled from
-    stored evidence by the deterministic pipeline.
-    """
-
-    outline: list[ResearchMapSection] = Field(default_factory=list, max_length=12)
-    gaps: list[str] = Field(default_factory=list, max_length=10)
-    next_steps: list[str] = Field(default_factory=list, max_length=10)
-    completed: bool = False
-
-    @model_validator(mode="after")
-    def _clean_map(self) -> "ResearchMap":
-        self.gaps = _clean_items(self.gaps, 10, 600)
-        self.next_steps = _clean_items(self.next_steps, 10, 600)
-        self.outline = [
-            section
-            for section in self.outline
-            if section.title.strip()
-        ][:12]
-        return self
-
-
 def _clean_items(values: list[str], limit: int, chars: int) -> list[str]:
     cleaned: list[str] = []
     seen: set[str] = set()
@@ -145,33 +90,12 @@ def _clean_items(values: list[str], limit: int, chars: int) -> list[str]:
     return cleaned
 
 
-class ResearchPlan(SchemaModel):
-    version: int = Field(default=1, ge=1)
-    summary: str = Field(min_length=1, max_length=20000)
-    questions: list[ResearchQuestion] = Field(min_length=1, max_length=20)
-    scope_notes: str | None = Field(default=None, max_length=20000)
-
-    @field_validator("questions")
-    @classmethod
-    def _unique_questions(
-        cls,
-        questions: list[ResearchQuestion],
-    ) -> list[ResearchQuestion]:
-        seen: set[str] = set()
-        for item in questions:
-            key = item.question.strip().casefold()
-            if key in seen:
-                raise ValueError("Research plan questions must be unique")
-            seen.add(key)
-        return questions
-
-
 class SearchQuery(SchemaModel):
     query_text: str = Field(min_length=1, max_length=2000)
     kind: Literal["web", "academic"]
     provider: SearchProviderName
     round_index: int = Field(default=1, ge=1, le=10)
-    research_question_id: UUID | None = None
+    outline_section_id: UUID | None = None
 
 
 class SourceRecord(SchemaModel):
@@ -191,7 +115,7 @@ class SourceRecord(SchemaModel):
     snippet: str | None = Field(default=None, max_length=100000)
     has_full_text: bool = False
     parser_status: str | None = None
-    question_ids: list[UUID] = Field(default_factory=list)
+    section_ids: list[UUID] = Field(default_factory=list)
     rank: int = Field(default=0, ge=0)
 
 
@@ -199,7 +123,7 @@ class EvidenceRecord(SchemaModel):
     evidence_id: UUID
     source_id: UUID
     source_version_id: UUID
-    research_question_id: UUID | None = None
+    outline_section_id: UUID | None = None
     evidence_type: EvidenceType = EvidenceType.DIRECT_SUPPORT
     claim_summary: str = Field(min_length=1, max_length=20000)
     quoted_text: str = Field(min_length=1, max_length=100000)
@@ -239,21 +163,21 @@ class EvidenceQuality(SchemaModel):
 
 
 class ResearchGap(SchemaModel):
-    question_id: UUID | None = None
-    question: str = Field(min_length=1, max_length=10000)
+    section_id: UUID | None = None
+    section_title: str = Field(min_length=1, max_length=1000)
     reason: str = Field(min_length=1, max_length=20000)
     severity: Literal["low", "medium", "high"] = "medium"
     suggested_queries: list[str] = Field(default_factory=list, max_length=10)
 
 
 class EvidenceRow(SchemaModel):
-    question_id: UUID | None = None
-    question: str = Field(min_length=1, max_length=10000)
+    section_id: UUID | None = None
+    section_title: str = Field(min_length=1, max_length=1000)
     support_count: int = Field(default=0, ge=0)
     refute_count: int = Field(default=0, ge=0)
     source_count: int = Field(default=0, ge=0)
     independent_source_count: int = Field(default=0, ge=0)
-    coverage_status: QuestionCoverageStatus = QuestionCoverageStatus.OPEN
+    coverage_status: SectionCoverageStatus = SectionCoverageStatus.OPEN
     conclusion: str = Field(default="", max_length=20000)
     support_evidence_ids: list[UUID] = Field(default_factory=list)
     refute_evidence_ids: list[UUID] = Field(default_factory=list)
@@ -275,22 +199,50 @@ class EvidenceMatrix(SchemaModel):
 
 
 class OutlineSection(SchemaModel):
+    section_id: UUID = Field(default_factory=uuid4)
     index: int = Field(ge=0)
+    role: SectionRole = SectionRole.BODY
     title: str = Field(min_length=1, max_length=1000)
     purpose: str = Field(min_length=1, max_length=5000)
-    question_id: UUID | None = None
+    search_terms: list[str] = Field(default_factory=list, max_length=20)
     key_claims: list[str] = Field(default_factory=list, max_length=10)
     evidence_ids: list[UUID] = Field(default_factory=list)
     support_evidence_ids: list[UUID] = Field(default_factory=list)
     refute_evidence_ids: list[UUID] = Field(default_factory=list)
     target_words: int = Field(default=400, ge=50, le=5000)
+    coverage_status: SectionCoverageStatus = SectionCoverageStatus.OPEN
     status: Literal["planned", "drafted", "verified"] = "planned"
+
+    @field_validator("search_terms")
+    @classmethod
+    def _clean_search_terms(cls, terms: list[str]) -> list[str]:
+        cleaned: list[str] = []
+        seen: set[str] = set()
+        for value in terms:
+            text = " ".join(str(value).split()).strip()[:200]
+            key = text.casefold()
+            if not text or key in seen:
+                continue
+            seen.add(key)
+            cleaned.append(text)
+            if len(cleaned) >= 5:
+                break
+        return cleaned
+
+    @field_validator("search_terms", mode="before")
+    @classmethod
+    def _terms_from_scalar(cls, value):
+        if value is None:
+            return []
+        if isinstance(value, str):
+            return [value]
+        return value
 
 
 class Outline(SchemaModel):
     version: int = Field(default=1, ge=1)
     title: str = Field(min_length=1, max_length=1000)
-    sections: list[OutlineSection] = Field(min_length=1, max_length=30)
+    sections: list[OutlineSection] = Field(min_length=1)
     summary: str = Field(min_length=1, max_length=20000)
 
     @field_validator("sections")

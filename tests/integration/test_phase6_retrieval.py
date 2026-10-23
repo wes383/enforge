@@ -16,7 +16,7 @@ from dr_core.db.models import DocumentChunk
 from dr_core.db.repositories import (
     DocumentChunkRepository,
     EvidenceRepository,
-    ResearchQuestionRepository,
+    OutlineSectionRepository,
     SourceRepository,
     SourceVersionRepository,
 )
@@ -24,7 +24,7 @@ from dr_core.research.retrieval import HybridRetriever, RetrievalFilters
 from dr_core.schemas import (
     DocumentChunkCreate,
     EvidenceCreate,
-    ResearchQuestionCreate,
+    OutlineSectionCreate,
     SourceCreate,
     SourceVersionCreate,
 )
@@ -320,10 +320,14 @@ def test_retrieval_returns_linked_evidence_ids(
     run,
     retrieval_corpus,
 ):
-    question = ResearchQuestionRepository(session).create(
+    section = OutlineSectionRepository(session).create(
         project.id,
         run.id,
-        ResearchQuestionCreate(question="Does enforcement improve compliance?"),
+        OutlineSectionCreate(
+            title="Enforcement and compliance",
+            purpose="Assess whether enforcement improves compliance.",
+            search_terms=["enforcement compliance"],
+        ),
     )
     chunk_b = retrieval_corpus["chunks"]["b"]
     evidence = EvidenceRepository(session).create(
@@ -332,7 +336,7 @@ def test_retrieval_returns_linked_evidence_ids(
         EvidenceCreate(
             source_id=retrieval_corpus["sources"]["b"].id,
             source_version_id=retrieval_corpus["versions"]["b"].id,
-            research_question_id=question.id,
+            outline_section_id=section.id,
             evidence_type=EvidenceType.DIRECT_SUPPORT,
             claim_summary="Audits show measurable gains.",
             quoted_text="Independent audit results show measurable gains after inspections.",

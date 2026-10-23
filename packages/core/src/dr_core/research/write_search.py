@@ -180,11 +180,12 @@ class WriteSearchSession:
                 self._ctx.run_id,
                 evidence_from_text(
                     record,
-                    question_id=section.question_id,
+                    section_id=section.section_id,
                     text=text,
                     sentence=sentence,
                     start=start,
                     end=end,
+                    kind="search_snippet",
                 ),
             )
         if item.id in self._evidence_ids:

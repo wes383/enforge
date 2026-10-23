@@ -76,12 +76,10 @@ _METHODOLOGICAL = (
     "上述判断",
     "独立来源",
     "证据覆盖率",
-    "研究问题",
     "this report",
     "this section",
     "independent source",
     "coverage",
-    "research question",
 )
 _LIMITATION_TITLES = (
     "局限",

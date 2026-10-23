@@ -12,8 +12,6 @@ from dr_core.research.models import (
     ReferenceAudit,
     ResearchBrief,
     ResearchGap,
-    ResearchPlan,
-    ResearchQuestion,
     SearchQuery,
     SourceRecord,
 )
@@ -33,8 +31,6 @@ __all__ = [
     "ReferenceAudit",
     "ResearchBrief",
     "ResearchGap",
-    "ResearchPlan",
-    "ResearchQuestion",
     "ResearchState",
     "SearchQuery",
     "SourceRecord",

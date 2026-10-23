@@ -14,7 +14,7 @@ from dr_core.normalization import (
     normalize_doi,
     normalize_url,
     query_fingerprint,
-    question_fingerprint,
+    section_fingerprint,
     url_fingerprint,
 )
 from dr_core.storage.keys import validate_metadata_storage_key
@@ -92,7 +92,9 @@ def test_url_fingerprint_is_stable_across_tracking_parameters():
 def test_text_fingerprints_normalize_whitespace_and_case():
     assert claim_fingerprint("  The\nclaim  ") == claim_fingerprint("the claim")
     assert query_fingerprint(" AI   Research ") == query_fingerprint("ai research")
-    assert question_fingerprint("What\nis it?") == question_fingerprint("what is it?")
+    assert section_fingerprint("Enforcement  outcomes") == section_fingerprint(
+        "enforcement outcomes"
+    )
     assert evidence_fingerprint("version-1", "Quoted\ntext") == evidence_fingerprint(
         "version-1",
         "quoted text",
@@ -100,8 +102,8 @@ def test_text_fingerprints_normalize_whitespace_and_case():
     assert evidence_fingerprint(
         "version-1",
         "quoted text",
-        "question-1",
-    ) != evidence_fingerprint("version-1", "quoted text", "question-2")
+        "section-1",
+    ) != evidence_fingerprint("version-1", "quoted text", "section-2")
 
 
 @pytest.mark.parametrize(

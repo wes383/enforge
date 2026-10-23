@@ -3,7 +3,7 @@ from decimal import Decimal
 
 from pydantic import Field, model_validator
 
-from dr_core.db.enums import CitationStyle, ProjectLanguage, ResearchDepth
+from dr_core.db.enums import ArticleType, CitationStyle, ProjectLanguage, ResearchDepth
 from dr_core.schemas.base import SchemaModel
 
 
@@ -11,6 +11,7 @@ class ProjectCreate(SchemaModel):
     title: str = Field(min_length=1, max_length=300)
     topic: str = Field(min_length=1, max_length=20000)
     research_scope: str | None = Field(default=None, max_length=20000)
+    article_type: ArticleType = ArticleType.INVESTIGATIVE_RESEARCH
     language: ProjectLanguage = ProjectLanguage.ZH
     target_audience: str | None = Field(default=None, max_length=1000)
     research_depth: ResearchDepth = ResearchDepth.STANDARD
@@ -36,6 +37,7 @@ class ProjectUpdate(SchemaModel):
     title: str | None = Field(default=None, min_length=1, max_length=300)
     topic: str | None = Field(default=None, min_length=1, max_length=20000)
     research_scope: str | None = Field(default=None, max_length=20000)
+    article_type: ArticleType | None = None
     language: ProjectLanguage | None = None
     target_audience: str | None = Field(default=None, max_length=1000)
     research_depth: ResearchDepth | None = None

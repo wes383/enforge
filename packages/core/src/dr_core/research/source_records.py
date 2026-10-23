@@ -17,7 +17,7 @@ def _versionless(value: str) -> str:
     return _VERSION_SUFFIX_RE.sub("", value)
 
 
-def web_source_record(ingested, result, question_id: UUID | None) -> SourceRecord:
+def web_source_record(ingested, result, section_id: UUID | None) -> SourceRecord:
     return SourceRecord(
         source_id=ingested.source_id,
         source_version_id=ingested.version_id,
@@ -35,7 +35,7 @@ def web_source_record(ingested, result, question_id: UUID | None) -> SourceRecor
         parser_status=(
             ingested.parser_status.value if ingested.parser_status else None
         ),
-        question_ids=[question_id] if question_id else [],
+        section_ids=[section_id] if section_id else [],
         rank=result.rank,
     )
 
@@ -43,7 +43,7 @@ def web_source_record(ingested, result, question_id: UUID | None) -> SourceRecor
 def academic_source_record(
     ingested,
     result,
-    question_id: UUID | None,
+    section_id: UUID | None,
 ) -> SourceRecord:
     return SourceRecord(
         source_id=ingested.source_id,
@@ -63,7 +63,7 @@ def academic_source_record(
         parser_status=(
             ingested.parser_status.value if ingested.parser_status else None
         ),
-        question_ids=[question_id] if question_id else [],
+        section_ids=[section_id] if section_id else [],
         rank=result.rank,
     )
 
@@ -91,11 +91,11 @@ def merge_source_record(
         updates["has_full_text"] = True
         updates["source_version_id"] = candidate.source_version_id
         updates["parser_status"] = candidate.parser_status
-    merged_questions = list(
-        dict.fromkeys([*existing.question_ids, *candidate.question_ids])
+    merged_sections = list(
+        dict.fromkeys([*existing.section_ids, *candidate.section_ids])
     )
-    if merged_questions != existing.question_ids:
-        updates["question_ids"] = merged_questions
+    if merged_sections != existing.section_ids:
+        updates["section_ids"] = merged_sections
     return existing.model_copy(update=updates) if updates else existing
 
 

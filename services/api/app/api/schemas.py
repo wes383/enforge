@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from dr_core.db.enums import (
     ApprovalKind,
     ApprovalStatus,
+    ArticleType,
     CitationStyle,
     ParserStatus,
     ProjectLanguage,
@@ -27,6 +28,7 @@ class ProjectResponse(OrmResponse):
     title: str
     topic: str
     research_scope: str | None
+    article_type: ArticleType
     language: ProjectLanguage
     target_audience: str | None
     research_depth: ResearchDepth
@@ -128,17 +130,16 @@ class RunListResponse(BaseModel):
     offset: int
 
 
-class ResearchQuestionResponse(OrmResponse):
+class OutlineSectionResponse(OrmResponse):
     id: UUID
-    question: str
+    title: str
+    role: str
+    purpose: str
+    search_terms: list[str]
+    target_words: int | None
     priority: int
-    parent_id: UUID | None
     coverage_status: str
     created_at: datetime
-
-
-class QuestionListResponse(BaseModel):
-    items: list[ResearchQuestionResponse]
 
 
 class SourceVersionResponse(BaseModel):
@@ -169,7 +170,7 @@ class SourceResponse(BaseModel):
     publisher: str | None
     metadata: dict[str, Any]
     versions: list[SourceVersionResponse]
-    question_ids: list[UUID]
+    section_ids: list[UUID]
     evidence_count: int
     fetch_status: str | None
 
@@ -182,7 +183,7 @@ class EvidenceResponse(BaseModel):
     id: UUID
     source_id: UUID
     source_version_id: UUID
-    research_question_id: UUID | None
+    outline_section_id: UUID | None
     evidence_type: str
     claim_summary: str
     quoted_text: str
@@ -286,7 +287,7 @@ class ExportResponse(BaseModel):
 class RunOverviewResponse(BaseModel):
     run: RunResponse
     project: ProjectResponse
-    questions: list[ResearchQuestionResponse]
+    outline_sections: list[OutlineSectionResponse]
     counts: dict[str, int]
     source_status: dict[str, int]
     search_status: dict[str, int]

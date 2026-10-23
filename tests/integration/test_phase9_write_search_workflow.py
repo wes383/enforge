@@ -95,19 +95,20 @@ def _settings(**overrides):
     values = {
         "research_provider_mode": "mock",
         "langfuse_enabled": False,
-        "research_plan_approval_required": False,
         "research_outline_approval_required": False,
         "research_llm_writing_enabled": True,
+        "research_llm_outline_enabled": False,
+        "research_agent_enabled": False,
         "research_claim_llm_review": False,
         "research_max_search_rounds": 1,
         "research_max_queries_per_round": 3,
-        "research_max_sources": 12,
+        "research_max_sources": 20,
         "research_max_fetches_per_round": 2,
-        "research_max_evidence": 20,
+        "research_max_evidence": 40,
         "research_write_search_max_requests_per_section": 2,
         "research_write_search_max_searches": 2,
-        "research_write_search_max_sources": 4,
-        "research_write_search_max_evidence": 4,
+        "research_write_search_max_sources": 8,
+        "research_write_search_max_evidence": 8,
     }
     values.update(overrides)
     return get_settings().model_copy(update=values)

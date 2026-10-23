@@ -6,7 +6,7 @@ from dr_core.schemas.evidence import (
 )
 from dr_core.schemas.projects import ProjectCreate, ProjectUpdate, RunCreate
 from dr_core.schemas.research import (
-    ResearchQuestionCreate,
+    OutlineSectionCreate,
     RunEventCreate,
     SearchQueryCreate,
 )
@@ -30,9 +30,9 @@ __all__ = [
     "DraftSectionCreate",
     "EvidenceCreate",
     "OutlineCreate",
+    "OutlineSectionCreate",
     "ProjectCreate",
     "ProjectUpdate",
-    "ResearchQuestionCreate",
     "RunCreate",
     "RunEventCreate",
     "SearchQueryCreate",

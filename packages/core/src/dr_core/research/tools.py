@@ -1,4 +1,4 @@
-"""Server-side research tools used by the bounded reconnaissance agent.
+"""Server-side research tools used by the bounded planning and evidence agents.
 
 Tools operate on the same ingestion pipeline as the deterministic workflow:
 search results are persisted before they are shown to the model, and the model
@@ -16,8 +16,12 @@ from datetime import date
 from typing import Any
 from uuid import UUID
 
-from dr_core.db.enums import ParserStatus, SourceVersionKind
-from dr_core.db.repositories import SourceRepository, SourceVersionRepository
+from dr_core.db.enums import ParserStatus, SearchProviderName, SourceVersionKind
+from dr_core.db.repositories import (
+    SearchQueryRepository,
+    SourceRepository,
+    SourceVersionRepository,
+)
 from dr_core.db.repositories.exceptions import EntityNotFound
 from dr_core.providers.models import AcademicReference, AcademicResult
 from dr_core.providers.orchestration import (
@@ -29,6 +33,7 @@ from dr_core.providers.orchestration import (
 )
 from dr_core.research.context import ResearchContext
 from dr_core.research.models import ResearchBrief, SourceRecord
+from dr_core.schemas import SearchQueryCreate
 from dr_core.research.source_records import (
     academic_source_record,
     merge_source_record,
@@ -79,6 +84,13 @@ _SEARCH_TOOL_SPECS: list[dict[str, Any]] = [
                         "type": "integer",
                         "minimum": 1,
                         "maximum": _SEARCH_LIMIT,
+                    },
+                    "section_id": {
+                        "type": "string",
+                        "description": (
+                            "Approved outline section id this search is meant to "
+                            "support. Required once an outline has been approved."
+                        ),
                     },
                 },
                 "required": ["query", "kind"],
@@ -158,6 +170,13 @@ _CITATION_TOOL_SPEC: dict[str, Any] = {
                     "minimum": 1,
                     "maximum": _SEARCH_LIMIT,
                 },
+                "section_id": {
+                    "type": "string",
+                    "description": (
+                        "Approved outline section id these works support. "
+                        "Required once an outline has been approved."
+                    ),
+                },
             },
             "required": ["source_id", "direction"],
             "additionalProperties": False,
@@ -165,7 +184,7 @@ _CITATION_TOOL_SPEC: dict[str, Any] = {
     },
 }
 
-# Reconnaissance only ever needs search/read; the research agent also gets
+# Planning only ever needs search/read; the evidence agent also gets
 # full-page reading and citation chasing.
 RESEARCH_TOOL_SPECS: list[dict[str, Any]] = list(_SEARCH_TOOL_SPECS)
 AGENT_TOOL_SPECS: list[dict[str, Any]] = [
@@ -187,22 +206,28 @@ class ResearchToolbox:
         max_citation_calls: int = 0,
         max_read_chars: int | None = None,
         existing: Iterable[SourceRecord] = (),
+        section_ids: Iterable[UUID] | None = None,
+        require_section: bool = False,
+        round_index: int = 1,
     ) -> None:
         self._ctx = ctx
         self._brief = brief
         self._records: dict[UUID, SourceRecord] = {
             record.source_id: record for record in existing
         }
+        self._section_ids = set(section_ids or ())
+        self._require_section = require_section
+        self._round_index = max(1, round_index)
         self._max_sources = max(0, min(max_sources, brief.max_sources))
         self._max_searches = (
-            ctx.settings.research_recon_max_searches
+            ctx.settings.research_agent_max_searches
             if max_searches is None
             else max(0, max_searches)
         )
         self._max_fetches = max(0, max_fetches)
         self._max_citation_calls = max(0, max_citation_calls)
         self._max_read_chars = (
-            ctx.settings.research_recon_read_chars
+            ctx.settings.research_agent_read_chars
             if max_read_chars is None
             else max(500, max_read_chars)
         )
@@ -247,6 +272,7 @@ class ResearchToolbox:
                 str(parsed.get("query") or ""),
                 str(parsed.get("kind") or ""),
                 parsed.get("limit"),
+                section_id=parsed.get("section_id"),
             )
         if name == "read_source":
             return self.read_source(str(parsed.get("source_id") or ""))
@@ -257,6 +283,7 @@ class ResearchToolbox:
                 str(parsed.get("source_id") or ""),
                 str(parsed.get("direction") or ""),
                 parsed.get("limit"),
+                section_id=parsed.get("section_id"),
             )
         return {"error": f"unknown tool: {name}"}
 
@@ -265,17 +292,22 @@ class ResearchToolbox:
         query: str,
         kind: str,
         limit: Any = None,
+        *,
+        section_id: Any = None,
     ) -> dict[str, Any]:
         query = " ".join(query.split())[:500]
         if len(query) < 2:
             return {"error": "query must contain at least two characters"}
         if kind not in {"web", "academic"}:
             return {"error": "kind must be 'web' or 'academic'"}
+        resolved_section, section_error = self._section(section_id)
+        if section_error:
+            return {"error": section_error}
         if self.searches >= self._max_searches:
             return {
                 "error": "search budget exhausted",
                 "search_calls_left": 0,
-                "next": "Return the final reconnaissance JSON now.",
+                "next": "Return the final JSON now.",
             }
         remaining = self._max_sources - len(self._records)
         if remaining <= 0:
@@ -291,24 +323,42 @@ class ResearchToolbox:
             if kind == "web"
             else self._ctx.registry.academic_search
         )
-        if _first_enabled(providers) is None:
+        provider = _first_enabled(providers)
+        if provider is None:
             return {"error": f"no enabled {kind} search provider"}
         self.searches += 1
+        query_id = self._begin_query(
+            query,
+            provider.name,
+            resolved_section,
+        )
 
-        if kind == "web":
-            bundle = collect_web_search(
-                providers,
-                query,
-                limit=min(requested, remaining),
-            )
-        else:
-            bundle = collect_academic_search(
-                providers,
-                query,
-                limit=min(requested, remaining),
-            )
+        try:
+            if kind == "web":
+                bundle = collect_web_search(
+                    providers,
+                    query,
+                    limit=min(requested, remaining),
+                )
+            else:
+                bundle = collect_academic_search(
+                    providers,
+                    query,
+                    limit=min(requested, remaining),
+                )
+        except Exception:
+            self._finish_query(query_id, 0, error="search provider failed")
+            raise
         results = bundle.results
         if not results and bundle.failures:
+            self._finish_query(
+                query_id,
+                0,
+                error="; ".join(
+                    f"{failure.provider}:{failure.code}"
+                    for failure in bundle.failures[:3]
+                ),
+            )
             return {
                 "error": "search failed: "
                 + "; ".join(
@@ -337,16 +387,18 @@ class ResearchToolbox:
                 )
             )
             record = (
-                web_source_record(ingested, result, None)
+                web_source_record(ingested, result, resolved_section)
                 if kind == "web"
-                else academic_source_record(ingested, result, None)
+                else academic_source_record(ingested, result, resolved_section)
             )
             stored = self._store_record(record)
             cards.append(self._card(stored))
 
+        self._finish_query(query_id, len(cards))
         response: dict[str, Any] = {
             "query": query,
             "kind": kind,
+            "section_id": str(resolved_section) if resolved_section else None,
             "results": cards,
             "remaining_sources": max(0, self._max_sources - len(self._records)),
             "search_calls_left": max(0, self._max_searches - self.searches),
@@ -503,6 +555,8 @@ class ResearchToolbox:
         source_id: str,
         direction: str,
         limit: Any = None,
+        *,
+        section_id: Any = None,
     ) -> dict[str, Any]:
         try:
             identifier = UUID(source_id)
@@ -513,6 +567,9 @@ class ResearchToolbox:
             return {"error": "source_id is unknown; call search_sources first"}
         if direction not in {"references", "citations"}:
             return {"error": "direction must be 'references' or 'citations'"}
+        resolved_section, section_error = self._section(section_id)
+        if section_error:
+            return {"error": section_error}
         if not record.doi:
             return {
                 "error": "source has no DOI; search for the cited work by title instead",
@@ -592,7 +649,7 @@ class ResearchToolbox:
                 result,
             )
             stored = self._store_record(
-                academic_source_record(ingested, result, None)
+                academic_source_record(ingested, result, resolved_section)
             )
             card = self._card(stored)
             card["via_source_id"] = str(identifier)
@@ -602,6 +659,7 @@ class ResearchToolbox:
             "from_source_id": str(identifier),
             "from_title": record.title[:400],
             "direction": direction,
+            "section_id": str(resolved_section) if resolved_section else None,
             "results": cards,
             "leads": leads[:5],
             "remaining_sources": max(0, self._max_sources - len(self._records)),
@@ -622,6 +680,75 @@ class ResearchToolbox:
         self._records[record.source_id] = record
         return record
 
+    def _section(self, section_id: Any) -> tuple[UUID | None, str | None]:
+        if section_id is None or section_id == "":
+            if self._require_section:
+                return (
+                    None,
+                    "section_id is required: name the approved outline section "
+                    "this material supports",
+                )
+            return None, None
+        try:
+            identifier = UUID(str(section_id))
+        except ValueError:
+            return None, "section_id must be a UUID from the approved outline"
+        if identifier not in self._section_ids:
+            return None, "section_id is not a section of the approved outline"
+        return identifier, None
+
+    def _begin_query(
+        self,
+        query: str,
+        provider: SearchProviderName,
+        section_id: UUID | None,
+    ) -> UUID | None:
+        try:
+            with self._ctx.database.session_scope() as session:
+                repository = SearchQueryRepository(session)
+                row = repository.create(
+                    self._ctx.project_id,
+                    self._ctx.run_id,
+                    SearchQueryCreate(
+                        query_text=query,
+                        provider=provider,
+                        round_index=self._round_index,
+                        outline_section_id=section_id,
+                    ),
+                )
+                repository.mark_running(row.id, project_id=self._ctx.project_id)
+                return row.id
+        except Exception as exc:
+            logger.warning("Unable to record agent search query: %s", exc)
+            return None
+
+    def _finish_query(
+        self,
+        query_id: UUID | None,
+        result_count: int,
+        *,
+        error: str | None = None,
+    ) -> None:
+        if query_id is None:
+            return
+        try:
+            with self._ctx.database.session_scope() as session:
+                repository = SearchQueryRepository(session)
+                if error:
+                    repository.mark_failed(
+                        query_id,
+                        project_id=self._ctx.project_id,
+                        error_summary=error[:1000],
+                    )
+                else:
+                    repository.mark_completed(
+                        query_id,
+                        project_id=self._ctx.project_id,
+                        result_count=result_count,
+                    )
+        except Exception as exc:
+            logger.warning("Unable to finish agent search query: %s", exc)
+
     @staticmethod
     def _card(record: SourceRecord) -> dict[str, Any]:
         return {
@@ -635,6 +762,7 @@ class ResearchToolbox:
                 else None
             ),
             "has_full_text": record.has_full_text,
+            "section_ids": [str(value) for value in record.section_ids],
             "excerpt": (record.snippet or "")[:_SNIPPET_CHARS],
         }
 

@@ -25,6 +25,7 @@ import { Card } from "@/components/ui/card";
 import { ApiError, apiFetch } from "@/lib/api";
 import { formatDateTime } from "@/lib/format";
 import {
+  articleTypeLabel,
   COVERAGE,
   coverageLabel,
   eventLabel,
@@ -32,45 +33,8 @@ import {
   TERMINAL_RUN_STATUSES,
 } from "@/lib/labels";
 import { pick, useLocale } from "@/lib/locale";
-import type {
-  Approval,
-  ApprovalListResponse,
-  ResearchPlan,
-  RunEvent,
-} from "@/lib/types";
+import type { ApprovalListResponse, RunEvent } from "@/lib/types";
 import { cn } from "@/lib/utils";
-
-function planFromApproval(approval: Approval): ResearchPlan | null {
-  const source =
-    approval.status === "modified" && approval.decision_payload
-      ? approval.decision_payload
-      : approval.payload;
-  if (
-    source &&
-    typeof source === "object" &&
-    Array.isArray((source as { questions?: unknown }).questions)
-  ) {
-    return source as unknown as ResearchPlan;
-  }
-  return null;
-}
-
-function latestPlan(approvals: Approval[]): {
-  plan: ResearchPlan;
-  approval: Approval;
-} | null {
-  const plans = approvals
-    .filter((approval) => approval.kind === "plan")
-    .sort((a, b) => {
-      if (a.version !== b.version) return b.version - a.version;
-      return Date.parse(b.created_at) - Date.parse(a.created_at);
-    });
-  for (const approval of plans) {
-    const plan = planFromApproval(approval);
-    if (plan) return { plan, approval };
-  }
-  return null;
-}
 
 const PHASE_EVENT_TYPES = new Set([
   "phase_started",
@@ -188,16 +152,12 @@ export default function RunOverviewPage() {
   const run = overview?.run;
   const active = Boolean(run && !TERMINAL_RUN_STATUSES.has(run.status));
 
-  const [approvals, setApprovals] = useState<Approval[]>([]);
   const [approvalError, setApprovalError] = useState<string | null>(null);
   const refreshTimer = useRef<number | null>(null);
 
   const loadApprovals = useCallback(async () => {
     try {
-      const response = await apiFetch<ApprovalListResponse>(
-        `/runs/${runId}/approvals`,
-      );
-      setApprovals(response.items);
+      await apiFetch<ApprovalListResponse>(`/runs/${runId}/approvals`);
       setApprovalError(null);
     } catch (caught) {
       setApprovalError(
@@ -262,12 +222,6 @@ export default function RunOverviewPage() {
     };
   }, []);
 
-  const planInfo = useMemo(() => latestPlan(approvals), [approvals]);
-  const coverageById = useMemo(
-    () =>
-      new Map((overview?.questions ?? []).map((item) => [item.id, item])),
-    [overview?.questions],
-  );
   const events = useMemo(
     () =>
       stream.events.length > 0
@@ -290,29 +244,7 @@ export default function RunOverviewPage() {
   const search = overview.search_status;
   const pending = overview.pending_approval;
   const gaps = overview.gaps;
-  // The latest approved plan version lists the questions this run actually
-  // researches; coverage comes from the database rows linked by question id.
-  const planQuestions = planInfo
-    ? planInfo.plan.questions.map((question) => {
-        const row = question.question_id
-          ? coverageById.get(question.question_id)
-          : undefined;
-        return {
-          id: row?.id ?? question.question_id ?? question.question,
-          evidenceId: row?.id ?? question.question_id ?? null,
-          question: question.question,
-          priority: row?.priority ?? question.priority,
-          coverage:
-            row?.coverage_status ?? question.coverage_status ?? "open",
-        };
-      })
-    : overview.questions.map((item) => ({
-        id: item.id,
-        evidenceId: item.id,
-        question: item.question,
-        priority: item.priority,
-        coverage: item.coverage_status,
-      }));
+  const outlineSections = overview.outline_sections;
 
   return (
     <div className="flex flex-col gap-4">
@@ -336,11 +268,7 @@ export default function RunOverviewPage() {
       {pending ? (
         <Notice
           variant="warning"
-          title={
-            pending.kind === "plan"
-              ? pick(locale, "研究计划待审批", "Research plan awaiting approval")
-              : pick(locale, "报告提纲待审批", "Outline awaiting approval")
-          }
+          title={pick(locale, "文章提纲待审批", "Article outline awaiting approval")}
           action={
             <Button asChild variant="outline" size="sm">
               <Link href={`/runs/${runId}/approvals`}>
@@ -541,96 +469,51 @@ export default function RunOverviewPage() {
           <Card className="p-5">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <h2 className="font-display text-sm font-semibold tracking-tight">
-                {pick(locale, "研究计划与问题覆盖", "Research plan & coverage")}
+                {pick(locale, "文章提纲与章节覆盖", "Article outline & coverage")}
               </h2>
-              {planInfo ? (
-                <div className="flex items-center gap-2">
-                  <Badge variant="secondary" size="xs">
-                    v{planInfo.plan.version}
-                  </Badge>
-                  <Badge
-                    variant={
-                      planInfo.approval.status === "modified"
-                        ? "info"
-                        : planInfo.approval.status === "approved"
-                          ? "success"
-                          : "warning"
-                    }
-                    size="xs"
-                  >
-                    {planInfo.approval.status === "modified"
-                      ? pick(locale, "已修订批准", "Modified & approved")
-                      : planInfo.approval.status === "approved"
-                        ? pick(locale, "已批准", "Approved")
-                        : pick(locale, "待审批", "Pending")}
-                  </Badge>
-                </div>
-              ) : planQuestions.length > 0 ? (
+              {outlineSections.length > 0 ? (
                 <span className="text-[11px] text-foreground-subtle">
-                  {planQuestions.length}{" "}
-                  {pick(locale, "个问题", "questions")}
+                  {outlineSections.length}{" "}
+                  {pick(locale, "个章节", "sections")}
                 </span>
               ) : null}
             </div>
-            {planInfo ? (
-              <>
-                <p className="mt-3 whitespace-pre-line text-sm leading-relaxed text-foreground-muted">
-                  {planInfo.plan.summary}
-                </p>
-                {planInfo.plan.scope_notes ? (
-                  <p className="mt-2 whitespace-pre-line border-l-2 border-border pl-3 text-xs leading-relaxed text-foreground-subtle">
-                    {planInfo.plan.scope_notes}
-                  </p>
-                ) : null}
-              </>
-            ) : null}
-            {planQuestions.length === 0 ? (
+            {outlineSections.length === 0 ? (
               approvalError ? (
                 <p className="mt-3 text-xs text-red-fg">{approvalError}</p>
               ) : (
                 <p className="mt-3 text-sm text-foreground-subtle">
                   {pick(
                     locale,
-                    "研究计划与问题尚未生成。",
-                    "The research plan and its questions have not been generated yet.",
+                    "文章提纲尚未生成。",
+                    "The article outline has not been generated yet.",
                   )}
                 </p>
               )
             ) : (
-              <ol
-                className={cn(
-                  "divide-y divide-border",
-                  planInfo ? "mt-4" : "mt-3",
-                )}
-              >
-                {planQuestions.map((item, index) => (
+              <ol className="mt-3 divide-y divide-border">
+                {outlineSections.map((item, index) => (
                   <li key={item.id} className="flex items-start gap-3 py-2.5">
                     <span className="mt-0.5 w-6 shrink-0 font-mono text-[11px] text-foreground-faint">
                       {String(index + 1).padStart(2, "0")}
                     </span>
-                    {item.evidenceId ? (
-                      <Link
-                        href={`/runs/${runId}/evidence?question=${item.evidenceId}`}
-                        className="min-w-0 flex-1 text-sm leading-relaxed transition-colors hover:text-foreground-muted"
-                      >
-                        {item.question}
-                      </Link>
-                    ) : (
-                      <span className="min-w-0 flex-1 text-sm leading-relaxed">
-                        {item.question}
-                      </span>
-                    )}
+                    <Link
+                      href={`/runs/${runId}/evidence?section=${item.id}`}
+                      className="min-w-0 flex-1 text-sm leading-relaxed transition-colors hover:text-foreground-muted"
+                    >
+                      {item.title}
+                    </Link>
                     <Badge
                       variant={
-                        COVERAGE[item.coverage]?.variant ?? "secondary"
+                        COVERAGE[item.coverage_status]?.variant ?? "secondary"
                       }
                       size="xs"
                       className="shrink-0"
                     >
-                      {coverageLabel(item.coverage, locale)}
+                      {coverageLabel(item.coverage_status, locale)}
                     </Badge>
                     <span className="mt-0.5 shrink-0 font-mono text-[10px] text-foreground-faint">
-                      P{item.priority}
+                      {item.target_words ?? "-"}w
                     </span>
                   </li>
                 ))}
@@ -659,19 +542,19 @@ export default function RunOverviewPage() {
                   ? pick(locale, "尚未构建证据。", "Evidence has not been built yet.")
                   : pick(
                       locale,
-                      "所有研究问题均已被证据覆盖。",
-                      "All research questions are covered by evidence.",
+                      "所有章节均已被证据覆盖。",
+                      "All outline sections are covered by evidence.",
                     )}
               </p>
             ) : (
               <ul className="mt-3 space-y-2.5">
                 {gaps.slice(0, 8).map((gap) => (
-                  <li key={gap.question_id} className="flex items-start gap-2">
+                  <li key={gap.section_id} className="flex items-start gap-2">
                     <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-orange-fg" />
                     <div className="min-w-0">
-                      <p className="text-xs leading-relaxed">{gap.question}</p>
+                      <p className="text-xs leading-relaxed">{gap.section_title}</p>
                       <Link
-                        href={`/runs/${runId}/evidence?question=${gap.question_id}`}
+                        href={`/runs/${runId}/evidence?section=${gap.section_id}`}
                         className="mt-0.5 inline-block text-[10px] text-foreground-subtle hover:text-foreground"
                       >
                         {pick(locale, "查看相关证据", "View evidence")}
@@ -694,6 +577,12 @@ export default function RunOverviewPage() {
                 <dd className="max-w-[220px] text-right text-foreground-muted">
                   {project.topic}
                 </dd>
+              </div>
+              <div className="flex justify-between gap-2">
+                <dt className="text-foreground-subtle">
+                  {pick(locale, "文章类型", "Article type")}
+                </dt>
+                <dd>{articleTypeLabel(project.article_type, locale)}</dd>
               </div>
               <div className="flex justify-between gap-2">
                 <dt className="text-foreground-subtle">

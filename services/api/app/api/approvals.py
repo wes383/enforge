@@ -17,7 +17,7 @@ from dr_core.db.repositories import (
     RunApprovalRepository,
     RunRepository,
 )
-from dr_core.research.models import Outline, ResearchPlan
+from dr_core.research.models import Outline
 from dr_core.services.approvals import (
     ApprovalConflict,
     decide_approval,
@@ -108,9 +108,7 @@ def _validate_modified_content(
             detail="Modified approvals require updated content",
         )
     try:
-        if kind is ApprovalKind.PLAN:
-            ResearchPlan.model_validate(content)
-        elif kind is ApprovalKind.OUTLINE:
+        if kind is ApprovalKind.OUTLINE:
             Outline.model_validate(content)
     except ValueError as exc:
         raise HTTPException(

@@ -9,8 +9,10 @@ import { Input } from "@/components/ui/input";
 import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { ApiError, apiFetch } from "@/lib/api";
+import { ARTICLE_TYPES } from "@/lib/labels";
 import { pick, useLocale } from "@/lib/locale";
 import type {
+  ArticleType,
   CitationStyle,
   Project,
   ProjectLanguage,
@@ -21,6 +23,7 @@ type Draft = {
   title: string;
   topic: string;
   research_scope: string;
+  article_type: ArticleType;
   target_audience: string;
   language: ProjectLanguage;
   research_depth: ResearchDepth;
@@ -36,6 +39,7 @@ function draftFrom(project?: Project): Draft {
     title: project?.title ?? "",
     topic: project?.topic ?? "",
     research_scope: project?.research_scope ?? "",
+    article_type: project?.article_type ?? "investigative_research",
     target_audience: project?.target_audience ?? "",
     language: project?.language ?? "zh",
     research_depth: project?.research_depth ?? "standard",
@@ -121,6 +125,7 @@ export function ProjectForm({
       title: draft.title.trim(),
       topic: draft.topic.trim(),
       research_scope: draft.research_scope.trim() || null,
+      article_type: draft.article_type,
       target_audience: draft.target_audience.trim() || null,
       language: draft.language,
       research_depth: draft.research_depth,
@@ -194,12 +199,39 @@ export function ProjectForm({
             onChange={(event) => update("topic", event.target.value)}
             placeholder={pick(
               locale,
-              "描述需要回答的核心问题与背景",
-              "Describe the core question and background",
+              "描述研究主题、范围与背景",
+              "Describe the research topic, scope, and background",
             )}
             rows={3}
             maxLength={20000}
           />
+        </Field>
+
+        <Field
+          label={pick(locale, "文章类型", "Article type")}
+          htmlFor="project-article-type"
+          hint={
+            ARTICLE_TYPES[draft.article_type]
+              ? locale === "zh"
+                ? ARTICLE_TYPES[draft.article_type].description.zh
+                : ARTICLE_TYPES[draft.article_type].description.en
+              : undefined
+          }
+          className="lg:col-span-2"
+        >
+          <Select
+            id="project-article-type"
+            value={draft.article_type}
+            onChange={(event) =>
+              update("article_type", event.target.value as ArticleType)
+            }
+          >
+            {Object.entries(ARTICLE_TYPES).map(([value, meta]) => (
+              <option key={value} value={value}>
+                {locale === "zh" ? meta.label.zh : meta.label.en}
+              </option>
+            ))}
+          </Select>
         </Field>
 
         <Field

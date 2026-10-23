@@ -7,7 +7,7 @@ from dataclasses import dataclass, field
 from typing import Any, Callable
 from uuid import UUID
 
-from dr_core.db.enums import EvidenceType, ProjectLanguage
+from dr_core.db.enums import EvidenceType, ProjectLanguage, SectionRole
 from dr_core.providers.base import LLMProvider
 from dr_core.security.prompt_injection import (
     scan_untrusted_text,
@@ -35,16 +35,6 @@ _NUMBER_RE = re.compile(r"(?:19|20)\d{2}|\d+(?:[.,]\d+)?%?")
 _CITATION_RE = re.compile(r"\[S\d+\]")
 _PRIOR_SUMMARY_CHARS = 240
 _PRIOR_CONTEXT_CHARS = 4000
-_LIMITATION_TITLES = {
-    "研究局限与未解决问题",
-    "limitations and open questions",
-}
-_CONTRADICTION_TITLES = {
-    "矛盾与反方证据",
-    "contradictions and counter-evidence",
-}
-_CONCLUSION_TITLES = {"结论", "conclusion"}
-_FEEDBACK_TITLES = {"审批反馈", "approval feedback"}
 _TRANSITION_PREFIXES = (
     "next",
     "the next section",
@@ -58,7 +48,7 @@ _PROCESS_LIMITATIONS = re.compile(
     r"最大来源数量|最大检索轮数|token 预算|费用预算|语义检索不可用"
     r"|检索已降级|停止补充检索|停止进一步研究|补充检索"
     r"|前置侦察未完成|仅依据项目简介|模型输出未通过校验|确定性模板"
-    r"|无独立来源支持该问题|未配置网页正文提供商|无法获取正文"
+    r"|未配置网页正文提供商|无法获取正文"
     r"|来源解析失败|未能建立完整文本索引|检索请求失败"
     r"|maximum source|maximum search|token budget|cost budget"
     r"|semantic retrieval|keyword search|stopped further research"
@@ -66,7 +56,8 @@ _PROCESS_LIMITATIONS = re.compile(
     r"|model (?:output|plan|outline|response)[^.]{0,40}"
     r"(?:failed validation|deterministic template)"
     r"|failed validation[^.]{0,40}deterministic template"
-    r"|no independent source supports this question"
+    r"|no independent source supports this section"
+    r"|无独立来源支持该章节"
     r"|no web content provider|full text was unavailable"
     r"|could not be parsed|could not be fully indexed|search requests failed"
     r"|参考文献元数据不完整|未在正文中引用|未通过引用核验"
@@ -191,8 +182,7 @@ def _deterministic_section(
     evidence: list[Any],
     numbering: dict[UUID, int],
 ) -> SectionDraft:
-    title_key = section.title.casefold()
-    if title_key in _LIMITATION_TITLES or "局限" in title_key:
+    if section.role is SectionRole.LIMITATIONS:
         return _limitations_section(
             section,
             brief,
@@ -200,7 +190,7 @@ def _deterministic_section(
             gaps,
             limitations,
         )
-    if title_key in _CONTRADICTION_TITLES or "矛盾" in title_key:
+    if section.role is SectionRole.CONTRADICTIONS:
         return _contradiction_section(
             section,
             brief,
@@ -208,7 +198,7 @@ def _deterministic_section(
             evidence,
             numbering,
         )
-    if title_key in _CONCLUSION_TITLES:
+    if section.role is SectionRole.CONCLUSION:
         return _conclusion_section(
             section,
             brief,
@@ -216,9 +206,7 @@ def _deterministic_section(
             evidence,
             numbering,
         )
-    if title_key in _FEEDBACK_TITLES:
-        return _feedback_section(section, brief)
-    if section.index == 0:
+    if section.role is SectionRole.INTRODUCTION:
         return _intro_section(
             section,
             brief,
@@ -226,7 +214,7 @@ def _deterministic_section(
             evidence,
             numbering,
         )
-    return _question_section(
+    return _body_section(
         section,
         brief,
         evidence,
@@ -285,13 +273,15 @@ def _intro_section(
             "足以展开判断。"
             if zh
             else (
-                f"“{brief.topic}” remains an open question, but the available "
+                f"“{brief.topic}” remains unresolved, but the available "
                 "material does not yet support a substantive judgment."
             )
         )
 
-    questions = [
-        _sentence_fragment(row.question) for row in matrix.rows if row.question
+    threads = [
+        _sentence_fragment(row.section_title)
+        for row in matrix.rows
+        if row.section_title
     ][:4]
     if zh:
         scope = _sentence_fragment(brief.research_scope) if brief.research_scope else ""
@@ -300,10 +290,10 @@ def _intro_section(
             if scope
             else "本文关注现有研究能够说明的部分。"
         )
-        if questions:
-            quoted = "、".join(f"“{question}”" for question in questions)
+        if threads:
+            quoted = "、".join(f"“{thread}”" for thread in threads)
             lines.append(
-                f"{opening}围绕{quoted}等问题，下文讨论已有证据"
+                f"{opening}围绕{quoted}等线索，下文讨论已有证据"
                 "支持什么、分歧在哪里，以及这些判断成立的条件。"
             )
         else:
@@ -315,9 +305,9 @@ def _intro_section(
             if scope
             else "This article focuses on what the available research can establish."
         )
-        if questions:
+        if threads:
             lines.append(
-                f"{opening} Across questions such as {', '.join(questions)}, it "
+                f"{opening} Across threads such as {', '.join(threads)}, it "
                 "examines what the evidence supports, where accounts diverge, and "
                 "under which conditions the emerging judgments hold."
             )
@@ -332,7 +322,7 @@ def _intro_section(
     )
 
 
-def _question_section(
+def _body_section(
     section: OutlineSection,
     brief: ResearchBrief,
     evidence: list[Any],
@@ -415,7 +405,7 @@ def _question_section(
             lead = (
                 "The judgment is not uncontested, however. "
                 if claims
-                else "The available research mainly exposes the complexity of the question. "
+                else "The available research mainly exposes the complexity of the issue. "
             )
             paragraphs.append(
                 f"{lead}{body}. These counterexamples suggest that the conclusion "
@@ -424,9 +414,9 @@ def _question_section(
 
     if not paragraphs:
         paragraphs.append(
-            "现有材料尚不足以对这一问题作出有根据的判断。"
+            "现有材料尚不足以对这一节作出有根据的判断。"
             if zh
-            else "The available material does not yet support a grounded judgment on this question."
+            else "The available material does not yet support a grounded judgment in this section."
         )
 
     lines.extend(paragraphs)
@@ -494,14 +484,14 @@ def _contradiction_section(
         if not sentences:
             continue
         if zh:
-            lines.append(f"围绕“{_sentence_fragment(row.question)}”，{''.join(sentences)}")
+            lines.append(f"围绕“{_sentence_fragment(row.section_title)}”，{''.join(sentences)}")
             lines.append("")
             lines.append(
                 "双方的分歧可能来自来源类型、发布时间或适用条件的差异，"
                 "不能简单以一方否定另一方。"
             )
         else:
-            lines.append(f"On “{_sentence_fragment(row.question)},” {''.join(sentences)}")
+            lines.append(f"On “{_sentence_fragment(row.section_title)},” {''.join(sentences)}")
             lines.append("")
             lines.append(
                 "The disagreement may reflect differences in source type, "
@@ -666,11 +656,11 @@ def _conclusion_section(
         )
     elif matrix.coverage_ratio < 1.0:
         notes.append(
-            "由于部分问题尚缺少充分证据，上述判断应视为阶段性结论。"
+            "由于部分议题尚缺少充分证据，上述判断应视为阶段性结论。"
             if zh
             else (
-                "Because some questions still lack sufficient evidence, these "
-                "judgments should be read as provisional."
+                "Because some parts of the argument still lack sufficient evidence, "
+                "these judgments should be read as provisional."
             )
         )
     lines.extend(notes)
@@ -713,10 +703,10 @@ def _llm_section(
     max_search_requests: int = 0,
     prior_sections: list[dict[str, Any]] | None = None,
 ) -> SectionDraft | None:
-    if section.title.casefold() in _LIMITATION_TITLES | _FEEDBACK_TITLES:
+    if section.role is SectionRole.LIMITATIONS:
         return None
     can_search = supplement is not None and max_search_requests > 0
-    if section.index == 0:
+    if section.role is SectionRole.INTRODUCTION:
         evidence = _representative_evidence(evidence)
     evidence_lines, allowed_markers, injection_categories = _evidence_prompt_lines(
         evidence,
@@ -886,20 +876,14 @@ def _writing_prompt(
     prior_sections: list[dict[str, Any]] | None = None,
 ) -> str:
     prior_sections = prior_sections or []
-    role = (
-        "introduction"
-        if section.index == 0
-        else "conclusion"
-        if section.title.casefold() in _CONCLUSION_TITLES
-        else "body"
-    )
+    role = section.role.value
     rules = [
         "Use only the supplied evidence; do not add external facts.",
         "Cite every factual sentence with one or more supplied markers such as [S3].",
         "Preserve numbers, years, and author names exactly as supplied.",
         "Do not output a reference list or invent new markers.",
         "Write a section of one continuous article, not a research report, "
-        "evidence log, or question-and-answer entry.",
+        "evidence log, or FAQ-style entry.",
         "Never call the output a report, and do not label paragraphs as "
         "supporting evidence, opposing evidence, or limitations.",
         "Do not write 'this section addresses', 'the purpose of this section', "
@@ -930,7 +914,7 @@ def _writing_prompt(
         rules.append(
             "Open with a substantive claim, develop it across 2-4 paragraphs, "
             "integrate counter-evidence, and connect back to the article's "
-            "main question."
+            "central issue."
         )
     if max_search_requests > 0:
         rules.append(
@@ -982,7 +966,6 @@ def _writing_prompt(
             "purpose": section.purpose,
             "key_claims": section.key_claims,
             "target_words": section.target_words,
-            "question": section.title if section.question_id else None,
         },
         "evidence": evidence_lines,
         "search": (

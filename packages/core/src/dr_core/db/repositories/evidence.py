@@ -12,7 +12,7 @@ from dr_core.db.models import (
     Claim,
     ClaimEvidence,
     EvidenceItem,
-    ResearchQuestion,
+    OutlineSectionRecord,
     SourceVersion,
 )
 from dr_core.db.repositories.base import Repository
@@ -37,23 +37,23 @@ class EvidenceRepository(Repository):
         ):
             raise EntityNotFound("Source version not found for the given source")
 
-        if data.research_question_id is not None:
-            question = self.session.get(
-                ResearchQuestion,
-                data.research_question_id,
+        if data.outline_section_id is not None:
+            section = self.session.get(
+                OutlineSectionRecord,
+                data.outline_section_id,
             )
             if (
-                question is None
-                or question.project_id != project_id
-                or question.run_id != run_id
+                section is None
+                or section.project_id != project_id
+                or section.run_id != run_id
             ):
-                raise EntityNotFound("Research question not found in the run")
+                raise EntityNotFound("Outline section not found in the run")
 
         fingerprint = evidence_fingerprint(
             str(data.source_version_id),
             data.quoted_text,
-            str(data.research_question_id)
-            if data.research_question_id is not None
+            str(data.outline_section_id)
+            if data.outline_section_id is not None
             else None,
         )
         existing = self.find_by_fingerprint(run_id, fingerprint)
@@ -63,7 +63,7 @@ class EvidenceRepository(Repository):
         evidence = EvidenceItem(
             project_id=project_id,
             run_id=run_id,
-            research_question_id=data.research_question_id,
+            outline_section_id=data.outline_section_id,
             source_id=data.source_id,
             source_version_id=data.source_version_id,
             evidence_type=data.evidence_type,
@@ -122,17 +122,17 @@ class EvidenceRepository(Repository):
             )
         )
 
-    def list_for_question(
+    def list_for_section(
         self,
         project_id: UUID,
-        question_id: UUID,
+        section_id: UUID,
     ) -> list[EvidenceItem]:
         return list(
             self.session.scalars(
                 select(EvidenceItem)
                 .where(
                     EvidenceItem.project_id == project_id,
-                    EvidenceItem.research_question_id == question_id,
+                    EvidenceItem.outline_section_id == section_id,
                 )
                 .order_by(EvidenceItem.created_at.asc(), EvidenceItem.id.asc())
             )

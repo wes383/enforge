@@ -18,18 +18,21 @@ from sqlalchemy import (
     UniqueConstraint,
     text,
 )
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from dr_core.db.base import Base, TimestampMixin, UUIDPrimaryKeyMixin
 from dr_core.db.enums import (
+    ArticleType,
     CitationStyle,
     ProjectLanguage,
     ProjectStatus,
-    QuestionCoverageStatus,
     ResearchDepth,
     RunStatus,
     SearchProviderName,
     SearchQueryStatus,
+    SectionCoverageStatus,
+    SectionRole,
 )
 from dr_core.db.types import str_enum
 
@@ -44,6 +47,12 @@ class ResearchProject(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     title: Mapped[str] = mapped_column(String(300), nullable=False)
     topic: Mapped[str] = mapped_column(Text, nullable=False)
     research_scope: Mapped[str | None] = mapped_column(Text)
+    article_type: Mapped[ArticleType] = mapped_column(
+        str_enum(ArticleType, "article_type", length=32),
+        default=ArticleType.INVESTIGATIVE_RESEARCH,
+        server_default=ArticleType.INVESTIGATIVE_RESEARCH.value,
+        nullable=False,
+    )
     language: Mapped[ProjectLanguage] = mapped_column(
         str_enum(ProjectLanguage, "project_language", length=8),
         default=ProjectLanguage.ZH,
@@ -80,7 +89,7 @@ class ResearchProject(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         cascade="all, delete-orphan",
         passive_deletes=True,
     )
-    questions: Mapped[list[ResearchQuestion]] = relationship(
+    outline_sections: Mapped[list[OutlineSectionRecord]] = relationship(
         back_populates="project",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -170,7 +179,7 @@ class ResearchRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     idempotency_key: Mapped[str | None] = mapped_column(String(128))
 
     project: Mapped[ResearchProject] = relationship(back_populates="runs")
-    questions: Mapped[list[ResearchQuestion]] = relationship(
+    outline_sections: Mapped[list[OutlineSectionRecord]] = relationship(
         back_populates="run",
         cascade="all, delete-orphan",
         passive_deletes=True,
@@ -189,8 +198,8 @@ class ResearchRun(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     )
 
 
-class ResearchQuestion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
-    __tablename__ = "research_questions"
+class OutlineSectionRecord(UUIDPrimaryKeyMixin, TimestampMixin, Base):
+    __tablename__ = "outline_sections"
 
     project_id: Mapped[UUID] = mapped_column(
         ForeignKey("research_projects.id", ondelete="CASCADE"),
@@ -200,43 +209,52 @@ class ResearchQuestion(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("research_runs.id", ondelete="CASCADE"),
         nullable=False,
     )
-    parent_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("research_questions.id", ondelete="CASCADE"),
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    section_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    role: Mapped[SectionRole] = mapped_column(
+        str_enum(SectionRole, "section_role", length=24),
+        default=SectionRole.BODY,
+        server_default=SectionRole.BODY.value,
+        nullable=False,
     )
-    question: Mapped[str] = mapped_column(Text, nullable=False)
-    question_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    purpose: Mapped[str] = mapped_column(
+        Text,
+        default="",
+        server_default=text("''"),
+        nullable=False,
+    )
+    search_terms: Mapped[list[str]] = mapped_column(
+        JSONB,
+        default=list,
+        server_default=text("'[]'::jsonb"),
+        nullable=False,
+    )
+    target_words: Mapped[int | None] = mapped_column(Integer)
     priority: Mapped[int] = mapped_column(
         Integer,
         default=0,
         server_default=text("0"),
         nullable=False,
     )
-    coverage_status: Mapped[QuestionCoverageStatus] = mapped_column(
-        str_enum(QuestionCoverageStatus, "question_coverage_status", length=16),
-        default=QuestionCoverageStatus.OPEN,
-        server_default=QuestionCoverageStatus.OPEN.value,
+    coverage_status: Mapped[SectionCoverageStatus] = mapped_column(
+        str_enum(SectionCoverageStatus, "section_coverage_status", length=16),
+        default=SectionCoverageStatus.OPEN,
+        server_default=SectionCoverageStatus.OPEN.value,
         nullable=False,
     )
 
-    project: Mapped[ResearchProject] = relationship(back_populates="questions")
-    run: Mapped[ResearchRun] = relationship(back_populates="questions")
-    parent: Mapped[ResearchQuestion | None] = relationship(
-        back_populates="children",
-        remote_side="ResearchQuestion.id",
-        foreign_keys=[parent_id],
-    )
-    children: Mapped[list[ResearchQuestion]] = relationship(
-        back_populates="parent",
-        cascade="all, delete-orphan",
-        passive_deletes=True,
-        foreign_keys=[parent_id],
-    )
+    project: Mapped[ResearchProject] = relationship(back_populates="outline_sections")
+    run: Mapped[ResearchRun] = relationship(back_populates="outline_sections")
 
     __table_args__ = (
-        UniqueConstraint("run_id", "question_hash"),
+        UniqueConstraint("run_id", "section_hash"),
         CheckConstraint("priority >= 0", name="priority_non_negative"),
-        Index("ix_research_questions_project_id_run_id", "project_id", "run_id"),
-        Index("ix_research_questions_run_id_coverage_status", "run_id", "coverage_status"),
+        CheckConstraint(
+            "target_words IS NULL OR (target_words >= 50 AND target_words <= 5000)",
+            name="target_words_range",
+        ),
+        Index("ix_outline_sections_project_id_run_id", "project_id", "run_id"),
+        Index("ix_outline_sections_run_id_coverage_status", "run_id", "coverage_status"),
     )
 
 
@@ -251,8 +269,8 @@ class SearchQuery(UUIDPrimaryKeyMixin, TimestampMixin, Base):
         ForeignKey("research_runs.id", ondelete="CASCADE"),
         nullable=False,
     )
-    research_question_id: Mapped[UUID | None] = mapped_column(
-        ForeignKey("research_questions.id", ondelete="SET NULL"),
+    outline_section_id: Mapped[UUID | None] = mapped_column(
+        ForeignKey("outline_sections.id", ondelete="SET NULL"),
     )
     query_text: Mapped[str] = mapped_column(Text, nullable=False)
     query_hash: Mapped[str] = mapped_column(String(64), nullable=False)
@@ -285,7 +303,13 @@ class SearchQuery(UUIDPrimaryKeyMixin, TimestampMixin, Base):
     run: Mapped[ResearchRun] = relationship(back_populates="search_queries")
 
     __table_args__ = (
-        UniqueConstraint("run_id", "round_index", "provider", "query_hash"),
+        UniqueConstraint(
+            "run_id",
+            "round_index",
+            "provider",
+            "outline_section_id",
+            "query_hash",
+        ),
         CheckConstraint("round_index >= 1", name="round_positive"),
         CheckConstraint("result_count >= 0", name="result_count_non_negative"),
         Index("ix_search_queries_project_id_run_id", "project_id", "run_id"),
