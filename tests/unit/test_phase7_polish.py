@@ -4,7 +4,11 @@ from uuid import uuid4
 
 from dr_core.db.enums import ProjectLanguage, ResearchDepth
 from dr_core.research.models import ResearchBrief
-from dr_core.research.polish import DraftArticleSection, polish_draft_sections
+from dr_core.research.polish import (
+    DraftArticleSection,
+    polish_draft_sections,
+    polish_reason_kind,
+)
 
 INTRO = "## Introduction\n\nRemote work changed how teams measure output [S1]."
 BODY = "## Productivity\n\nAudited firms kept output steady [S2]. Costs rose in 2019 [S2]."
@@ -193,7 +197,31 @@ def test_polish_skips_articles_over_the_input_cap():
 def test_polish_keeps_the_article_when_the_model_fails():
     _, reason, llm = _run([], raises=True)
     assert llm.prompts
-    assert reason == "model_error"
+    assert reason == "model_error:RuntimeError"
+    assert polish_reason_kind(reason) == "model_error"
+
+
+def test_polish_reports_unparseable_model_output_separately():
+    llm = _FakeLLM("this is not json")
+    changes, reason = polish_draft_sections(
+        brief=_brief(),
+        sections=_sections(),
+        llm=llm,
+        max_input_chars=24000,
+    )
+    assert llm.prompts
+    assert changes == []
+    assert reason.startswith("invalid_json:")
+    assert polish_reason_kind(reason) == "model_error"
+
+
+def test_polish_reason_kind_separates_skips_and_rejections():
+    assert polish_reason_kind("article_too_long:30000>24000") == "skipped"
+    assert polish_reason_kind("single_section") == "skipped"
+    assert (
+        polish_reason_kind("section 0: citation markers changed from [S1] to [S2]")
+        == "rejected"
+    )
 
 
 def test_polish_ignores_indexes_that_are_not_in_the_article():

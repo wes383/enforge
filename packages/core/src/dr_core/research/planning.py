@@ -98,6 +98,12 @@ def build_plan_with_llm(
         "Add 1-3 search_terms to every question: short keyword phrases "
         "(2-6 words) that web search and academic indexes can match, not "
         "full sentences.",
+        "Every search term must name the subject of the topic, not a generic "
+        "angle word on its own: \"accessibility\", \"effects\" or \"history\" "
+        "retrieves unrelated material. Combine the subject with the angle.",
+        "For a question about origins, history or chronology, include a term "
+        "that pairs the subject with words such as origin, history, timeline "
+        "or milestones, and name the field or era when the topic has one.",
         *(
             [
                 "For Chinese projects every question needs both a Chinese and "

@@ -35,6 +35,14 @@ _PAYWALL_MARKERS = (
 )
 
 
+def _remote_url_validator(url: str) -> str:
+    # Firecrawl resolves and fetches the URL from its own network. Checking the
+    # local resolver here rejected every public host when the machine's DNS
+    # returned a proxy fake-IP address, so only scheme, host and literal IP
+    # checks apply.
+    return validate_fetch_url(url, resolve_dns=False)
+
+
 class FirecrawlProvider:
     name = ContentProviderName.FIRECRAWL
 
@@ -51,7 +59,7 @@ class FirecrawlProvider:
         connect_timeout_seconds: float = 5,
         retry_policy: RetryPolicy | None = None,
         client: httpx.Client | None = None,
-        url_validator: Callable[[str], str] = validate_fetch_url,
+        url_validator: Callable[[str], str] = _remote_url_validator,
     ) -> None:
         self._api_key = (
             api_key.get_secret_value()

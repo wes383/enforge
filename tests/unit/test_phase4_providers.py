@@ -1,4 +1,5 @@
 import json
+import socket
 
 import httpx
 import pytest
@@ -361,6 +362,28 @@ def test_firecrawl_success_and_content_limits():
     ).fetch("https://example.com/article")
     assert abstract.status is FetchStatus.ABSTRACT_ONLY
     assert abstract.description == "Description"
+
+
+def test_firecrawl_default_validator_does_not_use_local_dns(monkeypatch):
+    def no_local_dns(*_args, **_kwargs):
+        raise AssertionError("Firecrawl must not resolve the URL locally")
+
+    monkeypatch.setattr(socket, "getaddrinfo", no_local_dns)
+    result = FirecrawlProvider(
+        "firecrawl-key",
+        min_content_chars=10,
+        client=_client(
+            lambda request: httpx.Response(
+                200,
+                json=_firecrawl_payload("Body text. " * 20),
+                request=request,
+            )
+        ),
+    ).fetch("https://example.com/article")
+    assert result.status is FetchStatus.SUCCESS
+
+    with pytest.raises(UnsafeUrlError):
+        FirecrawlProvider("firecrawl-key").fetch("http://127.0.0.1/secret")
 
 
 def test_firecrawl_paywall_and_unsafe_urls():

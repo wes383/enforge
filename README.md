@@ -33,12 +33,17 @@ A LangGraph workflow with 18 business nodes and 2 approval nodes, covering brief
 - When vectors are unavailable, retrieval degrades to keyword search instead of failing the research run.
 - Evidence stores its source, source version, quotation, surrounding context, and a `locator` (page / section / paragraph / character range); verification status only says whether the quotation can be located again, not whether its content is true.
 - The evidence matrix reports, per research question, the main conclusion, supporting and refuting evidence, independent source count, and itemized reasons for source quality (recency, methodological transparency, retraction status) and evidence quality (directness, context, independence, applicability). Counter-evidence is never filtered out.
+- Preprint revisions (`..._v1` / `..._v2`, arXiv `2101.00001v2`) collapse into one source during normalization, so version copies do not inflate the independent-source count or the reference list.
+- Full-text fetching and remote scraping validate scheme, host, port, and literal IPs locally, but leave domain resolution to the remote fetch provider: a local proxy fake-IP DNS answer can no longer reject every public URL. Hostname blocklists and private-IP literal checks still apply.
+- The planning prompt requires every `search_terms` entry to name the actual subject and to pair history/origin questions with terms such as history, timeline, or milestones, instead of searching bare words like “accessibility”.
 
 ### Writing and verification
 
 - Argumentative outline: every section has a purpose, an associated research question, key claims, supporting and opposing evidence, a target word count, and a status.
 - Continuous prose per section instead of a list of evidence; the introduction frames the tension and through-line, and the conclusion only synthesizes.
 - Optional model outlining, model writing, and article polishing. Every output passes strict structural validation (citation-marker set, numeric consistency, no reference section, and more) and falls back to deterministic writing if any check fails.
+- The article's limitations section keeps only evidence-relevant caveats: budget caps, retrieval degradation, model fallbacks, missing full text, and source-count audit notes stay in the run workspace instead of leaking into the finished article.
+- Polish outcomes are reported distinctly: `model_error:<type>`, `invalid_json:<type>`, a validation rejection with its reason, or a skip (single section / input over the cap). A failed call never blocks verification or finalization.
 - When the writing model finds a section lacks evidence, it can trigger a bounded, in-run search: results are ingested, indexed, evidence is extracted, and the section is rewritten once.
 - The `citation_audit` artifact combines citation verification, reference auditing, and per-claim results; the exported article contains only the title, sections, and references, while verification appendices stay in the workspace.
 
@@ -60,7 +65,7 @@ A Next.js 16 + React 19 single-page research workspace with Chinese/English UI a
 - Two Celery queues (`research` / `parse`), exponential backoff for transient failures, and immediate `failed` state for permanent failures.
 - A persistent event table plus SSE (`Last-Event-ID` reconnection); the database is the single source of truth.
 - Optional Langfuse observability: run traces, node spans, provider calls, LLM usage, and evaluation scores; metadata only by default.
-- Security controls: SSRF validation, upload type/magic-byte/size checks, server-generated storage keys, path-traversal protection, log secret redaction, prompt-injection scanning, and untrusted-content isolation.
+- Security controls: SSRF validation (host blocklist, port allowlist, literal-IP checks, plus DNS resolution for direct fetchers), upload type/magic-byte/size checks, server-generated storage keys, path-traversal protection, log secret redaction, prompt-injection scanning, and untrusted-content isolation.
 - A repeatable quality evaluation set with 10 scenarios, using deterministic rule-based metrics rather than LLM-as-judge.
 
 ## Architecture
@@ -228,7 +233,7 @@ Changing the public API address `NEXT_PUBLIC_API_BASE_URL` requires rebuilding `
 Tests are fully isolated from real keys: `docker-compose.test.yml` forces `RESEARCH_PROVIDER_MODE=mock` and clears every provider key and LLM switch, so even a `.env` with real keys never reaches the network or consumes quota.
 
 ```bash
-# Unit + integration + evaluation (currently 317 passed)
+# Unit + integration + evaluation (currently 324 passed)
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 

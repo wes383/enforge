@@ -1,10 +1,20 @@
 from __future__ import annotations
 
+import re
 from uuid import UUID
 
 from dr_core.db.enums import SourceOrigin, SourceType
 from dr_core.normalization import normalize_doi, normalize_url
 from dr_core.research.models import SourceRecord
+
+# Preprint servers mint a new DOI/URL per revision (``..._v2``, ``/v3``,
+# arXiv's ``2101.00001v2``). Those are the same work, so duplicate detection
+# compares the versionless form while the stored identifier stays untouched.
+_VERSION_SUFFIX_RE = re.compile(r"(?:[._/-]?v\d+)$", re.IGNORECASE)
+
+
+def _versionless(value: str) -> str:
+    return _VERSION_SUFFIX_RE.sub("", value)
 
 
 def web_source_record(ingested, result, question_id: UUID | None) -> SourceRecord:
@@ -93,15 +103,49 @@ def source_keys(record: SourceRecord) -> list[str]:
     keys = [f"id:{record.source_id}"]
     if record.doi:
         try:
-            keys.append(f"doi:{normalize_doi(record.doi)}")
+            doi = normalize_doi(record.doi)
         except ValueError:
             pass
+        else:
+            keys.append(f"doi:{doi}")
+            versionless = _versionless(doi)
+            if versionless != doi:
+                keys.append(f"doi-versionless:{versionless}")
     if record.url:
         try:
-            keys.append(f"url:{normalize_url(record.url)}")
+            url = normalize_url(record.url)
         except ValueError:
             pass
+        else:
+            keys.append(f"url:{url}")
+            versionless = _versionless(url)
+            if versionless != url:
+                keys.append(f"url-versionless:{versionless}")
     return keys
+
+
+def merge_duplicate_records(records: list[SourceRecord]) -> list[SourceRecord]:
+    groups: list[tuple[SourceRecord, set[str]]] = []
+    for record in records:
+        keys = set(source_keys(record))
+        matched = [
+            index
+            for index, (_, group_keys) in enumerate(groups)
+            if keys & group_keys
+        ]
+        if not matched:
+            groups.append((record, keys))
+            continue
+        merged, merged_keys = groups[matched[0]]
+        merged = merge_source_record(merged, record)
+        merged_keys = merged_keys | keys
+        for index in matched[1:]:
+            merged = merge_source_record(merged, groups[index][0])
+            merged_keys |= groups[index][1]
+        groups[matched[0]] = (merged, merged_keys)
+        for index in reversed(matched[1:]):
+            groups.pop(index)
+    return [record for record, _ in groups]
 
 
 def academic_source_type(work_type: str | None) -> SourceType:

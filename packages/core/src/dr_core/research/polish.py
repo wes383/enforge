@@ -135,11 +135,23 @@ def _request_polish(
             max_tokens=max_tokens,
             temperature=0.2,
         )
-        payload = parse_llm_json(response.text)
     except Exception as exc:
         logger.warning("Article polish call failed: %s", exc)
-        return None, "model_error"
+        return None, f"model_error:{type(exc).__name__}"
+    try:
+        payload = parse_llm_json(response.text)
+    except Exception as exc:
+        logger.warning("Article polish returned invalid JSON: %s", exc)
+        return None, f"invalid_json:{type(exc).__name__}"
     return payload, ""
+
+
+def polish_reason_kind(reason: str) -> str:
+    if reason.startswith(("model_error:", "invalid_json:")):
+        return "model_error"
+    if reason == "single_section" or reason.startswith("article_too_long"):
+        return "skipped"
+    return "rejected"
 
 
 def _polish_prompt(

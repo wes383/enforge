@@ -93,7 +93,16 @@ def validate_fetch_url(
     url: str,
     *,
     resolver: Resolver | None = None,
+    resolve_dns: bool = True,
 ) -> str:
+    """Reject URLs that must never reach a fetcher.
+
+    ``resolve_dns`` must stay enabled when the process itself opens the
+    connection: the resolved address is what decides whether the request is
+    private. A remote fetch provider resolves the host on its own network, so
+    local DNS (which on this deployment maps public hosts into a proxy fake-IP
+    range) would only produce false rejections.
+    """
     try:
         normalized = normalize_url(url)
     except InvalidURL as exc:
@@ -119,6 +128,8 @@ def validate_fetch_url(
         return normalized
     if "." not in host:
         raise UnsafeUrlError("url", "Single-label hostnames are not allowed")
+    if not resolve_dns:
+        return normalized
 
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:

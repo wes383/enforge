@@ -29,6 +29,7 @@ from dr_core.research.nodes import (
     route_after_outline_approval,
     route_after_plan_approval,
 )
+from dr_core.research.source_records import merge_duplicate_records
 from dr_core.research.text import format_reference, tokenize
 from dr_core.providers.mocks import validate_mock_url
 
@@ -153,6 +154,56 @@ def test_source_records_keep_provider_score_and_rank_score_separate():
             provider="mock",
             score=1.25,
         )
+
+
+def test_preprint_versions_merge_into_one_source():
+    first_question, second_question = uuid4(), uuid4()
+    first = SourceRecord(
+        source_id=uuid4(),
+        title="Accessibility barriers",
+        provider="crossref",
+        doi="10.31234/osf.io/abcde_v1",
+        url="https://osf.io/preprints/psyarxiv/abcde_v1",
+        question_ids=[first_question],
+    )
+    second = SourceRecord(
+        source_id=uuid4(),
+        title="Accessibility barriers",
+        provider="crossref",
+        doi="10.31234/osf.io/abcde_v2",
+        url="https://osf.io/preprints/psyarxiv/abcde_v2",
+        question_ids=[second_question],
+    )
+    arxiv_v2 = SourceRecord(
+        source_id=uuid4(),
+        title="Accessible interfaces",
+        provider="semantic_scholar",
+        url="https://arxiv.org/abs/2101.00001v2",
+    )
+    arxiv_v5 = SourceRecord(
+        source_id=uuid4(),
+        title="Accessible interfaces",
+        provider="semantic_scholar",
+        url="https://arxiv.org/abs/2101.00001v5",
+    )
+    unrelated = SourceRecord(
+        source_id=uuid4(),
+        title="Accessibility law",
+        provider="crossref",
+        doi="10.1000/accessibility-law",
+        url="https://example.com/accessibility-law",
+    )
+
+    merged = merge_duplicate_records(
+        [first, second, arxiv_v2, arxiv_v5, unrelated]
+    )
+
+    assert len(merged) == 3
+    assert merged[0].source_id == first.source_id
+    assert merged[0].doi == "10.31234/osf.io/abcde_v1"
+    assert merged[0].question_ids == [first_question, second_question]
+    assert merged[1].source_id == arxiv_v2.source_id
+    assert merged[2].source_id == unrelated.source_id
 
 
 def test_reference_formatting_uses_only_supplied_metadata():

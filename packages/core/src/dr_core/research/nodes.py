@@ -99,6 +99,7 @@ from dr_core.research.planning import build_plan_with_llm
 from dr_core.research.polish import (
     DraftArticleSection,
     polish_draft_sections,
+    polish_reason_kind,
 )
 from dr_core.research.quality import build_evidence_matrix
 from dr_core.research.recon import run_recon
@@ -112,8 +113,8 @@ from dr_core.research.reporting import (
 from dr_core.research.retrieval import HybridRetriever, RetrievalFilters
 from dr_core.research.source_records import (
     academic_source_record as _academic_source_record,
+    merge_duplicate_records as _merge_duplicate_records,
     merge_source_record as _merge_source_record,
-    source_keys as _source_keys,
     web_source_record as _web_source_record,
 )
 from dr_core.research.state import ResearchState
@@ -554,15 +555,7 @@ def normalize_sources(ctx: ResearchContext):
         with node_timeout(ctx.settings.research_node_timeout_seconds):
             ctx.guard()
             brief = _brief(state)
-            merged: dict[str, SourceRecord] = {}
-            for record in _source_records(state):
-                for key in _source_keys(record):
-                    existing = merged.get(key)
-                    if existing is None:
-                        merged[key] = record
-                    else:
-                        merged[key] = _merge_source_record(existing, record)
-            records = list({item.source_id: item for item in merged.values()}.values())
+            records = _merge_duplicate_records(_source_records(state))
 
             with ctx.database.session() as session:
                 uploads = [
@@ -1928,20 +1921,35 @@ def polish_article(ctx: ResearchContext):
                     ),
                     stage=RunStatus.WRITING,
                 )
+            if applied:
+                reason_kind = "applied"
+                summary = (
+                    f"Article rewritten for fluency in {len(applied)} sections"
+                )
+            elif changes:
+                reason_kind = "unchanged"
+                summary = "Article kept as written; the rewrite changed nothing"
+            else:
+                reason_kind = polish_reason_kind(reason)
+                if reason_kind == "model_error":
+                    summary = (
+                        "Article kept as written; the polish model call failed "
+                        f"({reason})"
+                    )
+                elif reason_kind == "rejected":
+                    summary = (
+                        "Article kept as written; polish rejected the rewrite "
+                        f"({reason})"
+                    )
+                else:
+                    summary = "Article kept as written; polish was skipped"
             ctx.emit(
                 RunEventType.PROGRESS,
-                message=(
-                    f"Article rewritten for fluency in {len(applied)} sections"
-                    if applied
-                    else (
-                        "Article kept as written; the rewrite changed nothing"
-                        if changes
-                        else "Article kept as written; polish rejected the rewrite"
-                    )
-                ),
+                message=summary,
                 payload={
                     "sections": len(applied),
                     "reason": reason or None,
+                    "reason_kind": reason_kind,
                 },
                 dedupe_key="article:polished",
                 stage=RunStatus.WRITING,

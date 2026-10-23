@@ -429,6 +429,58 @@ def test_limitations_section_drops_process_notes_and_deduplicates():
     assert "- " not in draft.content
 
 
+def test_limitations_section_drops_pipeline_and_model_fallback_notes():
+    question_id = uuid4()
+    matrix = EvidenceMatrix(
+        rows=[
+            EvidenceRow(
+                question_id=question_id,
+                question="Question?",
+                support_count=0,
+                independent_source_count=0,
+                conclusion="No direct evidence.",
+                limitations=[],
+            )
+        ],
+        total_evidence=0,
+        source_count=0,
+        independent_source_count=0,
+        coverage_ratio=0.0,
+    )
+    draft, _, _, _ = _section(
+        question_id,
+        title="Limitations and Open Questions",
+        evidence=[],
+        matrix=matrix,
+        limitations=[
+            "Background reconnaissance did not complete; research questions rely on the brief only.",
+            "The model outline failed validation, so the report outline came from the deterministic template.",
+            "No independent source supports this question.",
+            "No web content provider is configured; only search snippets are available.",
+            "Full text was unavailable for “Example” (failed).",
+            "前置侦察未完成，研究问题仅依据项目简介生成。",
+            "报告提纲模型输出未通过校验，提纲改用确定性模板生成。",
+            "无独立来源支持该问题。",
+            "未配置网页正文提供商，来源仅使用检索摘要。",
+            "Some sources lack a publication date, so temporal relevance cannot be judged.",
+        ],
+    )
+
+    assert "publication date" in draft.content
+    for process_note in (
+        "reconnaissance",
+        "failed validation",
+        "No independent source supports",
+        "web content provider",
+        "Full text was unavailable",
+        "前置侦察",
+        "未通过校验",
+        "无独立来源支持",
+        "网页正文提供商",
+    ):
+        assert process_note not in draft.content
+
+
 def test_metadata_sentences_are_filtered_from_evidence():
     text = (
         "关键词：生成式人工智能；学习效果；元分析；实验研究 "

@@ -151,6 +151,23 @@ def test_search_terms_are_parsed_cleaned_and_capped():
     assert plan.questions[1].search_terms == ["review length reliability"]
 
 
+def test_planning_prompt_requires_subject_specific_search_terms():
+    llm = _FakeLLM(
+        _text(
+            [
+                {"question": "Which peer review models change error rates?"},
+                {"question": "What evidence links review length to reliability?"},
+            ]
+        )
+    )
+    build_plan_with_llm(_brief(), llm)
+
+    rules = " ".join(json.loads(llm.prompts[0])["rules"]).casefold()
+    assert "name the subject" in rules
+    assert "generic" in rules
+    assert "timeline" in rules
+
+
 def test_chinese_planning_prompt_asks_for_english_terms():
     zh = _brief(
         language=ProjectLanguage.ZH,

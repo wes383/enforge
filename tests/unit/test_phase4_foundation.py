@@ -317,3 +317,28 @@ def test_ssrf_validator_rejects_dns_failures():
 
     with pytest.raises(UnsafeUrlError):
         validate_fetch_url("https://example.com/", resolver=failing_resolver)
+
+
+def test_ssrf_validator_can_skip_local_dns_for_remote_fetchers():
+    fake_ip_resolver = lambda _host, _port: ["198.18.0.7"]  # noqa: E731
+
+    with pytest.raises(UnsafeUrlError):
+        validate_fetch_url("https://example.com/", resolver=fake_ip_resolver)
+
+    assert (
+        validate_fetch_url(
+            "https://example.com/a",
+            resolver=fake_ip_resolver,
+            resolve_dns=False,
+        )
+        == "https://example.com/a"
+    )
+    for url in (
+        "http://127.0.0.1/",
+        "http://[::1]/",
+        "http://localhost/",
+        "http://intranet/",
+        "http://example.com:22/",
+    ):
+        with pytest.raises(UnsafeUrlError):
+            validate_fetch_url(url, resolve_dns=False)
