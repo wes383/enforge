@@ -735,14 +735,30 @@ def fetch_full_text(ctx: ResearchContext):
             ]
             # Only a fetched source can be quoted, so fetch the ones the
             # outline's search terms point at first.
-            eligible.sort(
-                key=lambda record: _fetch_priority(
-                    record,
-                    _searchable_sections(_outline(state)),
-                ),
-                reverse=True,
-            )
-            eligible = eligible[: brief.max_fetches_per_round]
+            sections = _searchable_sections(_outline(state))
+
+            def priority(record) -> int:
+                return _fetch_priority(record, sections)
+
+            scholarly = [
+                record
+                for record in eligible
+                if record.source_type in _ACADEMIC_SOURCE_TYPES
+            ]
+            other = [
+                record
+                for record in eligible
+                if record.source_type not in _ACADEMIC_SOURCE_TYPES
+            ]
+            scholarly.sort(key=priority, reverse=True)
+            other.sort(key=priority, reverse=True)
+            # The same lexical score that orders web pages puts every English
+            # scholarly title at zero against a Chinese outline, so a reserved
+            # share of the budget is the only way its open-access full text is
+            # ever fetched.
+            budget = brief.max_fetches_per_round
+            reserved = min(len(scholarly), max(1, budget // 3)) if scholarly else 0
+            eligible = scholarly[:reserved] + other[: budget - reserved]
             if not eligible:
                 return {
                     "sources": [item.model_dump(mode="json") for item in records],
@@ -1086,9 +1102,11 @@ class _SectionEvidenceState:
 
     support: int = 0
     identities: set[str] = field(default_factory=set)
-    used_sources: set[UUID] = field(default_factory=set)
+    source_counts: dict[UUID, int] = field(default_factory=dict)
+    quoted: set[str] = field(default_factory=set)
     target_evidence: int = 4
     target_identities: int = 3
+    per_source_limit: int = 3
 
     @property
     def covered(self) -> bool:
@@ -1108,6 +1126,22 @@ class _SectionEvidenceState:
             and len(self.identities) >= self.target_identities
         )
 
+    def can_quote(self, source_id: UUID) -> bool:
+        """A source may support one section more than once, but not forever.
+
+        A long article draws several details from the same study or article; a
+        single quote per source capped every section at its source count.
+        Independence is still counted through ``identities``, so a second quote
+        from the same source never counts as a second independent source.
+        """
+        return self.source_counts.get(source_id, 0) < self.per_source_limit
+
+    def already_quoted(self, sentence: str) -> bool:
+        return _quote_key(sentence) in self.quoted
+
+    def remember(self, sentence: str) -> None:
+        self.quoted.add(_quote_key(sentence))
+
     def track(
         self,
         source_id: UUID,
@@ -1115,11 +1149,15 @@ class _SectionEvidenceState:
         *,
         is_refutation: bool,
     ) -> None:
-        self.used_sources.add(source_id)
+        self.source_counts[source_id] = self.source_counts.get(source_id, 0) + 1
         if is_refutation:
             return
         self.support += 1
         self.identities.add(identity)
+
+
+def _quote_key(sentence: str) -> str:
+    return " ".join(sentence.split()).casefold()[:400]
 
 
 def _source_identity_for(
@@ -1162,6 +1200,9 @@ def extract_evidence(ctx: ResearchContext):
                 section_states[section.section_id] = _SectionEvidenceState(
                     target_evidence=target_evidence,
                     target_identities=target_identities,
+                    per_source_limit=(
+                        ctx.settings.research_section_evidence_per_source
+                    ),
                 )
             for item in existing:
                 if item.outline_section_id is None:
@@ -1241,7 +1282,7 @@ def extract_evidence(ctx: ResearchContext):
                                     break
                                 if section_state.target_reached:
                                     break
-                                if hit.source_id in section_state.used_sources:
+                                if not section_state.can_quote(hit.source_id):
                                     continue
                                 match, match_kind, similarity = _match_sentence(
                                     hit.text,
@@ -1251,6 +1292,8 @@ def extract_evidence(ctx: ResearchContext):
                                 if match is None:
                                     continue
                                 sentence, _, start, end = match
+                                if section_state.already_quoted(sentence):
+                                    continue
                                 if match_kind == "semantic":
                                     semantic_matches += 1
                                 with ctx.database.session_scope() as session:
@@ -1272,6 +1315,7 @@ def extract_evidence(ctx: ResearchContext):
                                     evidence_ids.add(str(item.id))
                                 total_evidence += 1
                                 created += 1
+                                section_state.remember(sentence)
                                 section_state.track(
                                     hit.source_id,
                                     _source_identity_for(sources, hit.source_id),
@@ -1324,7 +1368,7 @@ def extract_evidence(ctx: ResearchContext):
                         section_state = section_states[section.section_id]
                         if section_state.target_reached:
                             continue
-                        if record.source_id in section_state.used_sources:
+                        if not section_state.can_quote(record.source_id):
                             continue
                         queries = _section_queries(section)
                         match = None
@@ -1347,6 +1391,8 @@ def extract_evidence(ctx: ResearchContext):
                         if match_source == "semantic":
                             semantic_matches += 1
                         sentence, _, start, end = match
+                        if section_state.already_quoted(sentence):
+                            continue
                         with ctx.database.session_scope() as session:
                             item = EvidenceRepository(session).create(
                                 ctx.project_id,
@@ -1368,6 +1414,7 @@ def extract_evidence(ctx: ResearchContext):
                             evidence_ids.add(str(item.id))
                         total_evidence += 1
                         created += 1
+                        section_state.remember(sentence)
                         section_state.track(
                             record.source_id,
                             _source_identity_for(sources, record.source_id),

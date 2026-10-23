@@ -123,7 +123,7 @@ class Settings(BaseSettings):
     research_max_queries_per_round: int = Field(default=6, ge=1, le=30)
     research_max_sources: int = Field(default=20, ge=1, le=200)
     research_max_fetches_per_round: int = Field(default=8, ge=0, le=100)
-    research_max_evidence: int = Field(default=40, ge=1, le=500)
+    research_max_evidence: int = Field(default=120, ge=1, le=500)
     research_max_fetch_concurrency: int = Field(default=2, ge=1, le=8)
     research_node_timeout_seconds: int = Field(default=90, ge=1, le=1800)
     research_token_budget: int = Field(default=0, ge=0)
@@ -194,11 +194,18 @@ class Settings(BaseSettings):
     # How much evidence one section aims for. The target is derived from the
     # section's own word budget, so a short section stops earlier than a long
     # one instead of every section sharing one hard-coded floor.
-    research_section_target_words_per_evidence: int = Field(default=80, ge=20, le=400)
-    research_section_target_evidence_min: int = Field(default=4, ge=1, le=50)
-    research_section_target_evidence_max: int = Field(default=12, ge=1, le=50)
-    research_section_target_sources_min: int = Field(default=3, ge=1, le=50)
-    research_section_target_sources_max: int = Field(default=6, ge=1, le=50)
+    # One fact per 35 words of prose keeps a long section as dense as a
+    # researched article. The old 80-word spacing left a 750-word section with
+    # nine single-sentence quotes, which reads like a literature review.
+    research_section_target_words_per_evidence: int = Field(default=35, ge=20, le=400)
+    research_section_target_evidence_min: int = Field(default=6, ge=1, le=80)
+    research_section_target_evidence_max: int = Field(default=30, ge=1, le=80)
+    research_section_target_sources_min: int = Field(default=4, ge=1, le=50)
+    research_section_target_sources_max: int = Field(default=10, ge=1, le=50)
+    # Quotes one source may contribute to one section. Independence is counted
+    # separately through source identity, so a second quote from the same study
+    # never counts as a second independent source.
+    research_section_evidence_per_source: int = Field(default=3, ge=1, le=10)
     # Candidate chunks a single section query may pull from the index.
     research_retrieval_candidate_limit: int = Field(default=20, ge=1, le=100)
     # Caps paid model calls per run so verification time stays bounded.
