@@ -1,0 +1,61 @@
+{
+  "dataset": "phase9-v2",
+  "generated_at": "2026-10-26T04:33:48.539099+00:00",
+  "provider": "real",
+  "model": "qwen3.8-flash",
+  "articles_dir": "data/files/judge_articles",
+  "cases": [
+    {
+      "case_id": "real_remote_work",
+      "coherence": 3,
+      "specificity_discipline": 4,
+      "calibrated_tone": 5,
+      "notes": "The largest weakness is heavy repetition of the same examples and conclusions across sections, which makes the argument feel padded rather than progressively developed.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 2027,
+      "output_tokens": 489,
+      "error": null
+    },
+    {
+      "case_id": "real_microplastics",
+      "coherence": 2,
+      "specificity_discipline": 4,
+      "calibrated_tone": 5,
+      "notes": "The article repeatedly restates the same distinction between detection and proven harm without advancing a clear argument across sections. Its main weakness is redundancy, which makes the structure feel circular rather than progressively developed.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 2415,
+      "output_tokens": 448,
+      "error": null
+    },
+    {
+      "case_id": "general_knowledge",
+      "coherence": 3,
+      "specificity_discipline": 4,
+      "calibrated_tone": 5,
+      "notes": "The article is cautious and internally consistent, but it repeats the same evidence limitation across multiple sections without advancing the argument. Its largest weakness is circular, overextended prose that states the lack of detail instead of analyzing it.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 2263,
+      "output_tokens": 444,
+      "error": null
+    }
+  ],
+  "summary": {
+    "cases": 3,
+    "judged": 3,
+    "errors": 0,
+    "coherence": 2.6667,
+    "specificity_discipline": 4.0,
+    "calibrated_tone": 5.0,
+    "input_tokens": 6705,
+    "output_tokens": 1381
+  },
+  "generation": {
+    "cases": 3,
+    "completed": 3,
+    "evidence": 87,
+    "claims": 170,
+    "input_tokens": 38997,
+    "output_tokens": 172836
+  },
+  "note": "Writing-quality trend only. Coherence, specificity discipline and calibrated tone are scored by a model at temperature 0; citation validity and claim support stay in the deterministic audit and are not judged here."
+}
