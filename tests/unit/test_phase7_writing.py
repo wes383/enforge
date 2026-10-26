@@ -3,6 +3,8 @@ from datetime import date
 from types import SimpleNamespace
 from uuid import uuid4
 
+import pytest
+
 from dr_core.db.enums import (
     ClaimType,
     ClaimVerificationStatus,
@@ -34,6 +36,7 @@ from dr_core.research.writing import (
     summarize_section_content,
     trim_cross_section_repetition,
 )
+from dr_core.research.llm_json import parse_llm_json
 from dr_core.research.text import is_low_value_sentence, sentence_spans
 
 
@@ -1223,3 +1226,14 @@ def test_reference_audit_flags_unnormalized_identifiers():
     assert audit.invalid_metadata_source_ids == [source.id]
     assert any("DOI" in issue and "not normalized" in issue for issue in audit.issues)
     assert any("URL" in issue and "not normalized" in issue for issue in audit.issues)
+
+
+def test_llm_json_reads_an_object_followed_by_closing_prose():
+    payload = parse_llm_json('{"markdown": "Body [S1].", "summary": "s"}\nHere it is.')
+
+    assert payload == {"markdown": "Body [S1].", "summary": "s"}
+
+
+def test_llm_json_rejects_an_answer_without_any_object():
+    with pytest.raises(ValueError):
+        parse_llm_json("I could not produce a section for this brief.")

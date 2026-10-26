@@ -15,7 +15,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import re
 import sys
 import tempfile
 from dataclasses import asdict, dataclass
@@ -36,6 +35,8 @@ from dr_core.observability.tracing import build_tracer
 from dr_core.providers.base import LLMProvider
 from dr_core.providers.models import LLMResponse
 from dr_core.providers.registry import build_provider_registry
+from dr_core.research.llm_json import parse_llm_json
+from dr_core.research.usage import ReasoningBudgetLLM
 
 JUDGE_SYSTEM = """You evaluate the writing quality of one research article.
 Score only what the text itself shows. Do not verify citations, sources or
@@ -55,8 +56,9 @@ evidence; no overclaiming and no promotional language.
 """
 
 _EXCLUDED_CASES = frozenset({"worker_interrupt", "rate_limited", "budget_exhausted"})
-_JSON_OBJECT = re.compile(r"\{.*\}", re.DOTALL)
-_FENCE = re.compile(r"^```[a-zA-Z0-9]*\s*|\s*```$")
+# Reasoning models bill their thinking against the same budget as the answer,
+# so a small limit returns an empty answer with no JSON in it.
+_JUDGE_MAX_TOKENS = 6000
 
 
 @dataclass(frozen=True, slots=True)
@@ -151,7 +153,7 @@ def judge_article(
         response = llm.generate(
             f"Article id: {case_id}\n\n<article>\n{article}\n</article>",
             system=JUDGE_SYSTEM,
-            max_tokens=600,
+            max_tokens=_JUDGE_MAX_TOKENS,
             # Fixed so two runs over the same article are comparable.
             temperature=0.0,
         )
@@ -293,12 +295,17 @@ def resolve_llm(
 ) -> LLMProvider:
     if provider == "fake":
         return _FakeJudgeLLM()
-    registry = build_provider_registry(settings or get_settings())
+    resolved = settings or get_settings()
+    registry = build_provider_registry(resolved)
     if registry.llm is None:
         raise RuntimeError(
             "OPENAI_API_KEY is not configured; the real judge has no model"
         )
-    return registry.llm
+    return ReasoningBudgetLLM(
+        registry.llm,
+        factor=resolved.llm_reasoning_retry_factor,
+        ceiling=resolved.llm_reasoning_retry_ceiling,
+    )
 
 
 def _read_articles(
@@ -348,13 +355,7 @@ def _generation_summary(report: dict[str, Any]) -> dict[str, Any]:
 
 
 def _parse_judge_payload(text: str) -> dict[str, Any]:
-    cleaned = _FENCE.sub("", text.strip())
-    match = _JSON_OBJECT.search(cleaned)
-    if match is None:
-        raise ValueError("the answer contains no JSON object")
-    payload = json.loads(match.group())
-    if not isinstance(payload, dict):
-        raise ValueError("the answer is not a JSON object")
+    payload = parse_llm_json(text)
     return {
         "coherence": _clamp_score(payload.get("coherence")),
         "specificity_discipline": _clamp_score(

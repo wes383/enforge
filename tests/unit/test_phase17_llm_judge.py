@@ -84,6 +84,36 @@ def test_the_judge_parses_a_fenced_json_answer():
     assert score.error is None
 
 
+def test_the_judge_reads_a_json_object_surrounded_by_prose():
+    llm = _RecordingLLM("Scores follow.\n" + _answer(coherence=5) + "\nDone.")
+
+    score = judge_article(llm, "A finished article.", case_id="case-a")
+
+    assert score.coherence == 5
+    assert score.error is None
+
+
+def test_the_judge_budget_leaves_a_reasoning_model_room_to_answer():
+    llm = _RecordingLLM(_answer())
+
+    judge_article(llm, "A finished article.", case_id="case-a")
+
+    assert llm.calls[0]["max_tokens"] >= 4000
+
+
+def test_the_real_judge_repeats_a_call_spent_on_reasoning():
+    from dr_core.config import Settings
+    from dr_core.evaluation.judge import resolve_llm
+    from dr_core.research.usage import ReasoningBudgetLLM
+
+    settings = Settings(_env_file=None, openai_api_key="sk-judge-test")
+
+    assert isinstance(
+        resolve_llm("real", settings=settings),
+        ReasoningBudgetLLM,
+    )
+
+
 def test_scores_are_clamped_to_the_one_to_five_scale():
     llm = _RecordingLLM(
         _answer(coherence=9, specificity_discipline=0, calibrated_tone=3.6)

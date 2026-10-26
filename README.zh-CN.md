@@ -270,7 +270,7 @@ docker compose up -d --force-recreate api worker
 测试与真实密钥完全隔离：`docker-compose.test.yml` 强制 `RESEARCH_PROVIDER_MODE=mock` 并清空所有提供商密钥与 LLM 开关，即使 `.env` 里有真实 Key 也不会联网或消耗配额。
 
 ```bash
-# 单元 + 集成 + 评测（当前 449 passed）
+# 单元 + 集成 + 评测（当前 454 passed）
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -315,7 +315,7 @@ docker compose --profile judge run --rm --build judge \
   --export data/files/judge_articles --output data/files/judge.json
 ```
 
-它用评测 case 生成成稿，再以 `temperature=0` 打分：连贯性、细节克制（有没有凭空造出精确细节）、语气校准。记录模型名与 token 用量；开启 Langfuse 时写入 `judge_*` 分数。默认最多 9 篇（排除中断、限流、预算耗尽 case），每篇 token 预算 60k。裁判运行把单次模型请求放宽到 360 秒并允许一次重试，避免整篇润色超时后被静默跳过；生成摘要会记录润色成功、被拒或失败的文章数。分数只用于看趋势，不做发布门禁。只想对已有 `.md` 稿件做一次 dry run 时：
+它用评测 case 生成成稿，再以 `temperature=0` 打分：连贯性、细节克制（有没有凭空造出精确细节）、语气校准。记录模型名与 token 用量；开启 Langfuse 时写入 `judge_*` 分数。默认最多 9 篇（排除中断、限流、预算耗尽 case），每篇 token 预算 60k。裁判运行把单次模型请求放宽到 360 秒并允许一次重试，避免整篇润色超时后被静默跳过；生成摘要会记录润色成功、被拒或失败的文章数。每次裁判调用预留 6000 输出 token，推理模型把预算全花在思考上时以更大预算重跑一次——空答案等于没有分数。分数只用于看趋势，不做发布门禁。只想对已有 `.md` 稿件做一次 dry run 时：
 
 ```bash
 docker compose --profile judge run --rm judge \

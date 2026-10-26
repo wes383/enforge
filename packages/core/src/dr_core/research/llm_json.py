@@ -6,15 +6,41 @@ from typing import Any
 
 
 def parse_llm_json(text: str) -> dict[str, Any]:
-    """Parse a JSON object from a model response, tolerating a code fence."""
+    """Parse a JSON object from a model response, tolerating a code fence.
+
+    A model that thinks before it answers often appends a closing remark after
+    the object, so a strict parse falls back to the first decodable object. A
+    cut-off answer re-raises its original error so callers can still tell a
+    truncation worth retrying from a reply that never opened an object.
+    """
+    cleaned = _strip_fence(text)
+    try:
+        value = json.loads(cleaned)
+    except json.JSONDecodeError as exc:
+        value = _first_object(cleaned, exc)
+    if not isinstance(value, dict):
+        raise ValueError("LLM output must be a JSON object")
+    return value
+
+
+def _strip_fence(text: str) -> str:
     cleaned = text.strip()
     if cleaned.startswith("```"):
         cleaned = re.sub(r"^```[a-zA-Z]*\s*", "", cleaned)
         cleaned = re.sub(r"\s*```$", "", cleaned)
-    value = json.loads(cleaned)
-    if not isinstance(value, dict):
-        raise ValueError("LLM output must be a JSON object")
-    return value
+    return cleaned
+
+
+def _first_object(text: str, exc: json.JSONDecodeError) -> Any:
+    decoder = json.JSONDecoder()
+    for index, char in enumerate(text):
+        if char != "{":
+            continue
+        try:
+            return decoder.raw_decode(text, index)[0]
+        except ValueError:
+            continue
+    raise exc
 
 
 def looks_truncated(text: str, exc: json.JSONDecodeError) -> bool:
