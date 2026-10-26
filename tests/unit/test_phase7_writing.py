@@ -920,6 +920,31 @@ def test_claim_verification_treats_refutation_as_contradiction():
     assert assessment.relations[item.id] is EvidenceRelation.REFUTES
 
 
+def test_a_negative_claim_citing_a_refutation_is_supported():
+    section_id = uuid4()
+    source = _source()
+    refute = _evidence(
+        section_id,
+        source.id,
+        evidence_type=EvidenceType.REFUTATION,
+        claim_summary=(
+            "Enforcement does not improve compliance in audited firms."
+        ),
+        quoted_text=(
+            "Enforcement does not improve compliance in audited firms."
+        ),
+    )
+    assessment, item = _assessment(
+        "Enforcement does not improve compliance in audited firms.",
+        markers=("S1",),
+        evidence=refute,
+        section_title="Enforcement outcomes",
+    )
+
+    assert assessment.status is ClaimVerificationStatus.SUPPORTED
+    assert assessment.relations[item.id] is EvidenceRelation.SUPPORTS
+
+
 def test_uncited_claims_are_unsupported_or_unverifiable():
     factual = ClaimCandidate(
         section_index=1,

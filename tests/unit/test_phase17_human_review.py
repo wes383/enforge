@@ -85,6 +85,79 @@ def test_unsupported_agrees_with_contradicted_and_unverifiable():
     assert comparison["agreement_rate"] == 0.6667
 
 
+def test_labels_match_a_new_run_by_case_and_claim_text():
+    sample = [
+        {
+            "case_id": "case-a",
+            "claim_id": "new-uuid",
+            "claim_text": "Remote work raises individual throughput.",
+            "model_status": "SUPPORTED",
+        }
+    ]
+    reviewed = [
+        {
+            "case_id": "case-a",
+            "claim_id": "old-uuid",
+            "claim_text": "Remote work raises individual throughput.",
+            "reviewer_label": "supported",
+        }
+    ]
+
+    comparison = compare_human_review(sample, reviewed)
+
+    assert comparison["reviewed_claims"] == 1
+    assert comparison["agreements"] == 1
+
+
+def test_a_different_claim_text_does_not_match_across_runs():
+    sample = [
+        {
+            "case_id": "case-a",
+            "claim_id": "new-uuid",
+            "claim_text": "Remote work raises individual throughput.",
+            "model_status": "SUPPORTED",
+        }
+    ]
+    reviewed = [
+        {
+            "case_id": "case-a",
+            "claim_id": "old-uuid",
+            "claim_text": "Remote work lowers trust.",
+            "reviewer_label": "supported",
+        }
+    ]
+
+    comparison = compare_human_review(sample, reviewed)
+
+    assert comparison["reviewed_claims"] == 0
+
+
+def test_labels_fall_back_to_the_quote_when_the_claim_wording_changes():
+    sample = [
+        {
+            "case_id": "case-a",
+            "claim_id": "new-uuid",
+            "claim_text": "The material offers a connected claim.",
+            "quoted_span": "Remote work raises throughput.",
+            "model_status": "PARTIAL",
+        }
+    ]
+    reviewed = [
+        {
+            "case_id": "case-a",
+            "claim_id": "old-uuid",
+            "claim_text": "Taken together, the material supports this.",
+            "quoted_span": "Remote work raises throughput.",
+            "reviewer_label": "partial",
+        }
+    ]
+
+    comparison = compare_human_review(sample, reviewed)
+
+    assert comparison["reviewed_claims"] == 1
+    assert comparison["agreements"] == 1
+
+
 def test_the_gate_stays_open_below_thirty_labels():
     comparison = {
         "sampled_claims": 40,

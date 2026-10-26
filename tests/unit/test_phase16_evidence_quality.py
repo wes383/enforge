@@ -8,7 +8,7 @@ from dr_core.config import Settings
 from dr_core.db.enums import EvidenceType, SectionRole, SourceVersionKind
 from dr_core.db.models import SourceVersion
 from dr_core.evaluation.metrics import _QuotedVersions
-from dr_core.research.evidence_records import evidence_type
+from dr_core.research.evidence_records import evidence_type, negates_finding
 from dr_core.research.models import OutlineSection
 from dr_core.research.nodes import _SectionEvidenceState, _section_quotas
 from dr_core.research.quality import section_evidence_target
@@ -67,6 +67,32 @@ def test_a_negative_result_is_refutation_evidence(sentence):
 )
 def test_limitations_and_positive_results_are_not_refutations(sentence):
     assert evidence_type(sentence) is not EvidenceType.REFUTATION
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "Enforcement does not improve compliance in audited firms.",
+        "The effect does not differ significantly from zero.",
+        "Six found no association after adjustment.",
+        "No study demonstrated a consistent adverse effect.",
+        "在调整后未发现显著关联。",
+    ],
+)
+def test_a_negative_finding_is_detected_for_claim_polarity(sentence):
+    assert negates_finding(sentence) is True
+
+
+@pytest.mark.parametrize(
+    "sentence",
+    [
+        "However, enforcement improves compliance in audited firms.",
+        "The study contradicts the earlier view of enforcement.",
+        "Enforcement improves compliance in audited firms.",
+    ],
+)
+def test_a_contrast_word_alone_is_not_a_negative_finding(sentence):
+    assert negates_finding(sentence) is False
 
 
 def test_quotas_split_the_budget_evenly_when_every_section_needs_the_same():

@@ -366,25 +366,54 @@ def compare_human_review(
     sample: list[dict[str, Any]],
     reviewed: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    labels = {
-        str(item.get("claim_id")): str(item.get("reviewer_label") or "").upper()
-        for item in reviewed
-        if str(item.get("reviewer_label") or "").upper() in HUMAN_REVIEW_LABELS
-    }
-    comparable = [
-        item for item in sample if item["claim_id"] in labels
-    ]
-    agreements = sum(
-        1
-        for item in comparable
-        if labels[item["claim_id"]] == _model_review_label(item["model_status"])
-    )
+    labels: dict[str, str] = {}
+    for item in reviewed:
+        label = str(item.get("reviewer_label") or "").upper()
+        if label not in HUMAN_REVIEW_LABELS:
+            continue
+        for key in _review_keys(item):
+            labels[key] = label
+    comparable = 0
+    agreements = 0
+    seen: set[str] = set()
+    for item in sample:
+        key = next(
+            (key for key in _review_keys(item) if key in labels),
+            None,
+        )
+        if key is None or key in seen:
+            continue
+        seen.add(key)
+        comparable += 1
+        if labels[key] == _model_review_label(item["model_status"]):
+            agreements += 1
     return {
         "sampled_claims": len(sample),
-        "reviewed_claims": len(comparable),
-        "agreement_rate": _ratio(agreements, len(comparable)),
+        "reviewed_claims": comparable,
+        "agreement_rate": _ratio(agreements, comparable),
         "agreements": agreements,
     }
+
+
+def _review_keys(entry: dict[str, Any]) -> list[str]:
+    """Keys that survive a new evaluation run.
+
+    Claim ids are UUIDs generated per run, so a label file would never match
+    the next evaluation. The claim text is stable while the deterministic
+    extractor is in use; if the extractor groups the evidence differently, the
+    quoted span is the next best anchor. The id remains a fallback for callers
+    that only have ids.
+    """
+    case_id = str(entry.get("case_id") or "").strip()
+    claim_text = " ".join(str(entry.get("claim_text") or "").split()).casefold()
+    quote = " ".join(str(entry.get("quoted_span") or "").split()).casefold()
+    keys: list[str] = []
+    if case_id and claim_text:
+        keys.append(f"text\x00{case_id}\x00{claim_text}")
+    if case_id and quote:
+        keys.append(f"quote\x00{case_id}\x00{quote}")
+    keys.append(f"id\x00{entry.get('claim_id')}")
+    return keys
 
 
 def _model_review_label(status: str) -> str:

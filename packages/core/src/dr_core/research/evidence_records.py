@@ -16,7 +16,7 @@ from dr_core.schemas import EvidenceCreate
 # finds nothing: "no significant difference", "did not replicate", "found no
 # association". Limitation sentences such as "the design cannot establish
 # causality" stay out on purpose; they describe the study, not its result.
-_REFUTATION_PATTERNS = tuple(
+_CONTRAST_PATTERNS = tuple(
     re.compile(pattern)
     for pattern in (
         r"\bhowever\b",
@@ -29,20 +29,6 @@ _REFUTATION_PATTERNS = tuple(
         r"\bundermine",
         r"\binconsistent with\b",
         r"\bat odds with\b",
-        r"\bno\s+(?:significant|measurable|reliable|consistent|detectable|"
-        r"established|clear|evidence|association|effect|relationship|"
-        r"difference|dose[- ]response)\b",
-        r"\bno\s+(?:\w+\s+){0,2}stud(?:y|ies)\b",
-        r"\bnot\s+(?:significantly\s+)?(?:associated|correlated|related|"
-        r"support(?:ed|s)?|differ(?:s|ed)?|consistent|show(?:s|ed|n)?|"
-        r"find|found|reach(?:ed)?|establish(?:ed)?)\b",
-        r"\b(?:did|does|do)(?:n't| not)\s+(?:differ|support|show|agree|"
-        r"find|replicate|detect|observe|increase|reduce|affect|predict|"
-        r"reach|establish|constitute)\b",
-        r"\bfail(?:ed|s)?\s+to\s+(?:replicate|find|detect|show|confirm|"
-        r"reach)\b",
-        r"\bunsupported\b",
-        r"\bno\s+support(?:ing|ed)?\b",
         "相反",
         "然而",
         "但是",
@@ -50,6 +36,26 @@ _REFUTATION_PATTERNS = tuple(
         "质疑",
         "矛盾",
         "不一致",
+    )
+)
+_NEGATION_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"\bno\s+(?:significant|measurable|reliable|consistent|detectable|"
+        r"established|clear|evidence|association|effect|relationship|"
+        r"difference|dose[- ]response)\b",
+        r"\bno\s+(?:\w+\s+){0,2}stud(?:y|ies)\b",
+        r"\bnot\s+(?:significantly\s+)?(?:associated|correlated|related|"
+        r"support(?:ed|s)?|differ(?:s|ed)?|consistent|show(?:s|ed|n)?|"
+        r"find|found|reach(?:ed)?|establish(?:ed)?|improve(?:s|d)?|"
+        r"raise(?:s|d)?|lower(?:s|ed)?|cause(?:s|d)?|lead(?:s|ing)?)\b",
+        r"\b(?:did|does|do)(?:n't| not)\s+(?:differ|support|show|agree|"
+        r"find|replicate|detect|observe|increase|reduce|affect|predict|"
+        r"reach|establish|constitute|improve|raise|lower|cause|lead)\b",
+        r"\bfail(?:ed|s)?\s+to\s+(?:replicate|find|detect|show|confirm|"
+        r"reach|improve)\b",
+        r"\bunsupported\b",
+        r"\bno\s+support(?:ing|ed)?\b",
         "不显著",
         "无显著",
         "没有显著",
@@ -62,11 +68,27 @@ _REFUTATION_PATTERNS = tuple(
         "未观察到",
     )
 )
+_REFUTATION_PATTERNS = _CONTRAST_PATTERNS + _NEGATION_PATTERNS
+
+
+def has_refutation_cue(sentence: str) -> bool:
+    lowered = " ".join(sentence.casefold().split())
+    return any(pattern.search(lowered) for pattern in _REFUTATION_PATTERNS)
+
+
+def negates_finding(sentence: str) -> bool:
+    """Whether the sentence reports a negative result, not just a contrast.
+
+    A claim such as "enforcement does not improve compliance" states the
+    negative finding itself; a refutation quote supports it. A claim that
+    merely starts with "however" does not, so the contrast words are excluded.
+    """
+    lowered = " ".join(sentence.casefold().split())
+    return any(pattern.search(lowered) for pattern in _NEGATION_PATTERNS)
 
 
 def evidence_type(sentence: str) -> EvidenceType:
-    lowered = " ".join(sentence.casefold().split())
-    if any(pattern.search(lowered) for pattern in _REFUTATION_PATTERNS):
+    if has_refutation_cue(sentence):
         return EvidenceType.REFUTATION
     if any(character.isdigit() for character in sentence):
         return EvidenceType.STATISTIC

@@ -19,6 +19,7 @@ from dr_core.security.prompt_injection import (
     untrusted_rules,
     wrap_untrusted,
 )
+from dr_core.research.evidence_records import negates_finding
 from dr_core.research.models import ClaimVerification, ReferenceAudit
 from dr_core.research.text import citation_markers, tokenize
 from dr_core.research.writing import numeric_tokens
@@ -335,10 +336,12 @@ def verify_claim(
         if not getattr(source, "authors", None):
             metadata_notes.append("The source has no author metadata.")
 
+        claim_negates = negates_finding(candidate.text)
         if (
             item.evidence_type is EvidenceType.REFUTATION
             and not contradiction_section
             and not reporting
+            and not claim_negates
         ):
             relations[item.id] = EvidenceRelation.REFUTES
             if candidate.normative:
@@ -354,9 +357,9 @@ def verify_claim(
             continue
 
         relations[item.id] = (
-            EvidenceRelation.REFUTES
-            if item.evidence_type is EvidenceType.REFUTATION
-            else EvidenceRelation.SUPPORTS
+            EvidenceRelation.SUPPORTS
+            if item.evidence_type is not EvidenceType.REFUTATION or claim_negates
+            else EvidenceRelation.REFUTES
         )
         if item_issues:
             partial += 1
