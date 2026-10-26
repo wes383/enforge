@@ -27,9 +27,9 @@ _DEPTH_SCALE = {
     ResearchDepth.DEEP: 1.3,
 }
 _DEFAULT_SECTIONS = {
-    ResearchDepth.QUICK: 3,
-    ResearchDepth.STANDARD: 4,
-    ResearchDepth.DEEP: 5,
+    ResearchDepth.QUICK: 2,
+    ResearchDepth.STANDARD: 3,
+    ResearchDepth.DEEP: 4,
 }
 
 _TYPE_TITLES: dict[ArticleType, dict[ProjectLanguage, tuple[str, ...]]] = {
@@ -312,7 +312,7 @@ def target_section_range(brief: ResearchBrief) -> tuple[int, int]:
         high = max(low + 2, round(brief.target_words / 700))
     else:
         base = _DEFAULT_SECTIONS[brief.research_depth]
-        low, high = max(3, base - 1), base + 3
+        low, high = max(3, base), base + 2
     return low, high
 
 

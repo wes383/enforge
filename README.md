@@ -26,7 +26,7 @@ A LangGraph workflow with 19 business nodes and one outline-approval gate, cover
 - **Planning agent (before approval)**: it searches from several angles, reads and fetches sources, follows references, citing works, and names it discovers (`A → B → C`), and then commits to an outline grounded in what it actually found. Every source goes through normal ingestion, and the agent cannot supply citations.
 - **Evidence agent (after approval)**: it works inside the approved section IDs, chooses new search terms or fetches more material, and attaches evidence only to those sections. It cannot rename, reorder, add, or remove sections.
 - **Deterministic core**: with the agents disabled or unavailable, a one-shot model outline or the deterministic outline template is used, deterministic queries drive retrieval, and writing, citation mapping, references, and verification always run through the same traceable code path.
-- The outline has no fixed section count; the planning agent chooses the number of body sections from the target word budget. The introduction, optional contradictions, optional limitations, and conclusion roles are normalized by the system.
+- The outline has no fixed section count; quick, standard and deep runs default to 2, 3 and 4 body sections, and the planning agent chooses the final number from the target word budget. The introduction, optional contradictions, optional limitations, and conclusion roles are normalized by the system.
 - Nine article types are chosen at project creation. Each supplies bilingual intent, outline focus, research focus, and review focus to the prompts without hard-coding a fixed template.
 - Agent rounds, tool calls, searches, sources, page fetches, and citation lookups each have their own cap; every tool call is surfaced as a progress event with its query, result count, and source title.
 - Every model call (outline planning, each agent round, each writing section, polishing, and claim review) reports a started/completed/failed event with its section title, token usage, and duration.
@@ -241,10 +241,11 @@ See [`.env.example`](.env.example) for every variable and its default. The most 
 | `RESEARCH_CLAIM_LLM_REVIEW` | `false` | Conservative model review of failed claims; can only downgrade |
 | `RESEARCH_OUTLINE_APPROVAL_REQUIRED` | `true` | Single outline approval; disable for fully automatic runs |
 | `RESEARCH_MAX_SEARCH_ROUNDS` | `3` | Maximum search rounds |
-| `RESEARCH_MAX_SOURCES` / `RESEARCH_MAX_EVIDENCE` | `20` / `40` | Source and evidence limits |
-| `RESEARCH_SECTION_TARGET_WORDS_PER_EVIDENCE` | `80` | Evidence a section needs per 80 words of its own budget; the target is clamped by the min/max below |
-| `RESEARCH_SECTION_TARGET_EVIDENCE_MIN` / `_MAX` | `4` / `12` | Lower and upper bound of a section's evidence target |
-| `RESEARCH_SECTION_TARGET_SOURCES_MIN` / `_MAX` | `3` / `6` | Lower and upper bound of the independent sources a section needs |
+| `RESEARCH_MAX_SOURCES` / `RESEARCH_MAX_EVIDENCE` | `20` / `120` | Source and evidence limits |
+| `RESEARCH_SECTION_TARGET_WORDS_PER_EVIDENCE` | `35` | Evidence a section needs per 35 words of its own budget; the target is clamped by the min/max below |
+| `RESEARCH_SECTION_TARGET_EVIDENCE_MIN` / `_MAX` | `6` / `30` | Lower and upper bound of a section's evidence target |
+| `RESEARCH_SECTION_TARGET_SOURCES_MIN` / `_MAX` | `4` / `10` | Lower and upper bound of the independent sources a section needs |
+| `RESEARCH_SECTION_EVIDENCE_PER_SOURCE` | `4` | Quotations one source may contribute to one section |
 | `RESEARCH_RETRIEVAL_CANDIDATE_LIMIT` | `20` | Candidates pulled per section query before extraction |
 | `RESEARCH_WRITE_MAX_TOKENS_FLOOR` / `RESEARCH_WRITE_TOKENS_PER_WORD` | `3000` / `6` | Token budget for one model-written section; reasoning models bill their reasoning against the same budget |
 | `RESEARCH_OUTLINE_MAX_TOKENS_FLOOR` / `RESEARCH_OUTLINE_TOKENS_PER_SECTION` | `6000` / `400` | Token budget for one outline call; the floor leaves a reasoning model room to think before it writes the structure |
@@ -274,7 +275,7 @@ Changing the public API address `NEXT_PUBLIC_API_BASE_URL` requires rebuilding `
 Tests are fully isolated from real keys: `docker-compose.test.yml` forces `RESEARCH_PROVIDER_MODE=mock` and clears every provider key and LLM switch, so even a `.env` with real keys never reaches the network or consumes quota.
 
 ```bash
-# Unit + integration + evaluation (currently 447 passed)
+# Unit + integration + evaluation (currently 449 passed)
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 

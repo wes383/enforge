@@ -205,7 +205,7 @@ class Settings(BaseSettings):
     # Quotes one source may contribute to one section. Independence is counted
     # separately through source identity, so a second quote from the same study
     # never counts as a second independent source.
-    research_section_evidence_per_source: int = Field(default=3, ge=1, le=10)
+    research_section_evidence_per_source: int = Field(default=4, ge=1, le=10)
     # Candidate chunks a single section query may pull from the index.
     research_retrieval_candidate_limit: int = Field(default=20, ge=1, le=100)
     # Caps paid model calls per run so verification time stays bounded.

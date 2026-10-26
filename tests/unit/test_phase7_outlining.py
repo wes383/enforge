@@ -319,6 +319,29 @@ def test_target_section_range_expands_without_a_fixed_cap():
     assert extended[1] > 10
 
 
+def test_default_outlines_use_fewer_body_sections():
+    standard = build_outline_template(_brief())
+    body = [
+        section for section in standard.sections
+        if section.role is SectionRole.BODY
+    ]
+    assert len(body) == 3
+    assert target_section_range(_brief()) == (3, 5)
+
+    quick = build_outline_template(
+        _brief(research_depth=ResearchDepth.QUICK)
+    )
+    deep = build_outline_template(
+        _brief(research_depth=ResearchDepth.DEEP)
+    )
+    assert sum(
+        section.role is SectionRole.BODY for section in quick.sections
+    ) == 2
+    assert sum(
+        section.role is SectionRole.BODY for section in deep.sections
+    ) == 4
+
+
 def test_article_type_prompt_is_bilingual_and_covers_every_type():
     for article_type in ArticleType:
         guide = article_type_guide(article_type)

@@ -163,6 +163,15 @@ def test_judge_settings_give_a_slow_polish_a_longer_attempt_and_retry():
     assert settings.llm_max_retries == 1
 
 
+def test_judge_settings_fund_more_evidence_per_article():
+    settings = judge_settings()
+
+    assert settings.research_max_sources == 16
+    assert settings.research_max_evidence == 80
+    assert settings.research_token_budget == 90000
+    assert settings.research_section_evidence_per_source == 4
+
+
 def test_generation_summary_attributes_polish_outcomes():
     report = {
         "summary": {

@@ -26,7 +26,7 @@ Enforge 不是一个"输入主题、一次生成"的写作工具。它把研究�
 - **规划代理（审批前）**：它从多个角度检索、阅读与抓取来源，沿参考文献、被引文献和发现的人名/机构继续追踪（`A → B → C`），再基于实际找到的材料提出提纲。所有来源都走正常入库流程，代理本身不能提供引用。
 - **取证代理（审批后）**：它只在已批准的章节 ID 内工作，可以提出新检索词或抓取更多材料，并把证据只归属到这些章节；不能改名、重排、增加或删除章节。
 - **确定性核心**：代理关闭或不可用时，使用一次性模型提纲或确定性提纲模板，由确定性查询驱动检索；写作、引用映射、参考文献与核验始终走同一条可追溯代码路径。
-- 提纲不限制章节条数，规划代理根据目标字数决定正文节数；引言、可选的矛盾与反方证据、可选的研究局限以及结论角色由系统规范化。
+- 提纲不限制章节条数，快速/标准/深度默认 2/3/4 个正文节，规划代理再根据目标字数确定最终数量；引言、可选的矛盾与反方证据、可选的研究局限以及结论角色由系统规范化。
 - 创建项目时从 9 类文章类型中选择。每类提供中英文的写作意图、提纲侧重、检索侧重与审阅侧重，注入提示词但不写死固定模板。
 - 代理的模型轮次、工具调用、检索、来源、正文抓取与引文查询分别限额；每次工具调用都会写入进度事件，并带上检索词、结果数量和来源标题。
 - 每次模型调用（提纲规划、各代理轮次、各章节写作、润色、主张复核）都会给出开始/完成/失败的进度事件，包含章节标题、token 用量与耗时。
@@ -236,10 +236,11 @@ queued → planning → 提纲审批 → searching → processing_sources → bu
 | `RESEARCH_CLAIM_LLM_REVIEW` | `false` | 对未通过的主张做保守模型复核，只能降级 |
 | `RESEARCH_OUTLINE_APPROVAL_REQUIRED` | `true` | 唯一一次提纲审批；关闭则全自动 |
 | `RESEARCH_MAX_SEARCH_ROUNDS` | `3` | 最大检索轮次 |
-| `RESEARCH_MAX_SOURCES` / `RESEARCH_MAX_EVIDENCE` | `20` / `40` | 来源与证据上限 |
-| `RESEARCH_SECTION_TARGET_WORDS_PER_EVIDENCE` | `80` | 每 80 字篇幅所需的证据条数，再按下限/上限收敛 |
-| `RESEARCH_SECTION_TARGET_EVIDENCE_MIN` / `_MAX` | `4` / `12` | 章节证据目标的下限与上限 |
-| `RESEARCH_SECTION_TARGET_SOURCES_MIN` / `_MAX` | `3` / `6` | 章节所需独立来源数的下限与上限 |
+| `RESEARCH_MAX_SOURCES` / `RESEARCH_MAX_EVIDENCE` | `20` / `120` | 来源与证据上限 |
+| `RESEARCH_SECTION_TARGET_WORDS_PER_EVIDENCE` | `35` | 每 35 字篇幅所需的证据条数，再按下限/上限收敛 |
+| `RESEARCH_SECTION_TARGET_EVIDENCE_MIN` / `_MAX` | `6` / `30` | 章节证据目标的下限与上限 |
+| `RESEARCH_SECTION_TARGET_SOURCES_MIN` / `_MAX` | `4` / `10` | 章节所需独立来源数的下限与上限 |
+| `RESEARCH_SECTION_EVIDENCE_PER_SOURCE` | `4` | 单一来源在一个章节内最多贡献的引文条数 |
 | `RESEARCH_RETRIEVAL_CANDIDATE_LIMIT` | `20` | 每个章节查询在抽取前拉取的候选数量 |
 | `RESEARCH_WRITE_MAX_TOKENS_FLOOR` / `RESEARCH_WRITE_TOKENS_PER_WORD` | `3000` / `6` | 单章节模型写作的 token 预算；推理模型的思考 token 与正文共用同一预算 |
 | `RESEARCH_OUTLINE_MAX_TOKENS_FLOOR` / `RESEARCH_OUTLINE_TOKENS_PER_SECTION` | `6000` / `400` | 单次提纲生成的 token 预算；下限为推理模型留出先思考再写结构的余量 |
@@ -269,7 +270,7 @@ docker compose up -d --force-recreate api worker
 测试与真实密钥完全隔离：`docker-compose.test.yml` 强制 `RESEARCH_PROVIDER_MODE=mock` 并清空所有提供商密钥与 LLM 开关，即使 `.env` 里有真实 Key 也不会联网或消耗配额。
 
 ```bash
-# 单元 + 集成 + 评测（当前 447 passed）
+# 单元 + 集成 + 评测（当前 449 passed）
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
