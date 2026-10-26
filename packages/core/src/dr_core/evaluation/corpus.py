@@ -22,6 +22,7 @@ from typing import Any
 from dr_core.config import Settings
 from dr_core.db.enums import SearchProviderName
 from dr_core.evaluation.cases import EvaluationCase
+from dr_core.providers.base import LLMProvider
 from dr_core.providers.errors import ProviderResourceNotFound
 from dr_core.providers.mocks import (
     MockAcademicSearchProvider,
@@ -207,6 +208,8 @@ class CorpusContentProvider:
 def build_corpus_registry(
     case: EvaluationCase,
     settings: Settings,
+    *,
+    llm: LLMProvider | None = None,
 ) -> ProviderRegistry:
     bundle = load_corpus(case.id)
     academic = [
@@ -246,7 +249,7 @@ def build_corpus_registry(
             )
         ],
         embedding=MockEmbeddingProvider(dimension=settings.embedding_dimension),
-        llm=MockLLMProvider(),
+        llm=llm or MockLLMProvider(),
     )
 
 

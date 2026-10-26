@@ -6,6 +6,7 @@ from typing import Sequence
 from dr_core.config import Settings
 from dr_core.db.enums import SearchProviderName
 from dr_core.evaluation.cases import EvaluationCase
+from dr_core.providers.base import LLMProvider
 from dr_core.providers.errors import ProviderRateLimited
 from dr_core.providers.mocks import (
     MockAcademicSearchProvider,
@@ -151,6 +152,7 @@ def _registry(
     web_search: Sequence[object] | None = None,
     academic_search: Sequence[object] | None = None,
     web_content: Sequence[object] | None = None,
+    llm: LLMProvider | None = None,
 ) -> ProviderRegistry:
     return ProviderRegistry(
         web_search=list(
@@ -168,15 +170,23 @@ def _registry(
         ),
         parsers=[MockDocumentParser()],
         embedding=MockEmbeddingProvider(dimension=settings.embedding_dimension),
-        llm=MockLLMProvider(),
+        llm=llm or MockLLMProvider(),
     )
 
 
-def build_case_registry(case: EvaluationCase, settings: Settings) -> ProviderRegistry:
+def build_case_registry(
+    case: EvaluationCase,
+    settings: Settings,
+    *,
+    llm: LLMProvider | None = None,
+) -> ProviderRegistry:
+    def registry(**kwargs: object) -> ProviderRegistry:
+        return _registry(case, settings, llm=llm, **kwargs)
+
     if case.scenario == "corpus":
         from dr_core.evaluation.corpus import build_corpus_registry
 
-        return build_corpus_registry(case, settings)
+        return build_corpus_registry(case, settings, llm=llm)
 
     if case.scenario == "academic_review":
         abstracts = [
@@ -191,9 +201,7 @@ def build_case_registry(case: EvaluationCase, settings: Settings) -> ProviderReg
                 "traceable source spans."
             ),
         ]
-        return _registry(
-            case,
-            settings,
+        return registry(
             academic_search=[
                 MockAcademicSearchProvider(
                     results=_academic_results(case, abstracts, count=4)
@@ -208,9 +216,7 @@ def build_case_registry(case: EvaluationCase, settings: Settings) -> ProviderReg
                 "indexes because coverage and document matching differ."
             )
         ]
-        return _registry(
-            case,
-            settings,
+        return registry(
             web_search=[],
             academic_search=[
                 MockAcademicSearchProvider(
@@ -243,9 +249,7 @@ def build_case_registry(case: EvaluationCase, settings: Settings) -> ProviderReg
         )
         abstracts = [support_sentence, refute_sentence]
         if case.scenario == "conflicting_literature":
-            return _registry(
-                case,
-                settings,
+            return registry(
                 web_search=[],
                 academic_search=[
                     MockAcademicSearchProvider(
@@ -267,9 +271,7 @@ def build_case_registry(case: EvaluationCase, settings: Settings) -> ProviderReg
             )
             for index, result in enumerate(results)
         }
-        return _registry(
-            case,
-            settings,
+        return registry(
             web_search=[MockSearchProvider(results=results)],
             academic_search=[MockAcademicSearchProvider(results=[])],
             web_content=[UrlTextContentProvider(texts, title=case.topic)],
@@ -280,9 +282,7 @@ def build_case_registry(case: EvaluationCase, settings: Settings) -> ProviderReg
             f"Short abstract about {case.topic}: green space is associated with "
             "lower stress in observational studies, but causal evidence is limited."
         )
-        return _registry(
-            case,
-            settings,
+        return registry(
             web_content=[
                 MockWebContentProvider(
                     status=FetchStatus.ABSTRACT_ONLY,
@@ -305,19 +305,15 @@ def build_case_registry(case: EvaluationCase, settings: Settings) -> ProviderReg
         )
         results = _web_results(case, snippets=[snippet], count=4)
         texts = {result.url: full_text for result in results}
-        return _registry(
-            case,
-            settings,
+        return registry(
             web_search=[MockSearchProvider(results=results)],
             academic_search=[MockAcademicSearchProvider(results=[])],
             web_content=[UrlTextContentProvider(texts, title=case.topic)],
         )
 
     if case.scenario == "rate_limited":
-        return _registry(
-            case,
-            settings,
+        return registry(
             web_search=[AlwaysRateLimitedSearchProvider()],
         )
 
-    return _registry(case, settings)
+    return registry()

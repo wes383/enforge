@@ -274,7 +274,7 @@ Changing the public API address `NEXT_PUBLIC_API_BASE_URL` requires rebuilding `
 Tests are fully isolated from real keys: `docker-compose.test.yml` forces `RESEARCH_PROVIDER_MODE=mock` and clears every provider key and LLM switch, so even a `.env` with real keys never reaches the network or consumes quota.
 
 ```bash
-# Unit + integration + evaluation (currently 407 passed)
+# Unit + integration + evaluation (currently 424 passed)
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -289,6 +289,44 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 ```
 
 The evaluation set has two halves. Ten cases use generated placeholder snippets and assert that the workflow itself holds together: interruption recovery, rate limiting, budget exhaustion, incomplete metadata. Two corpus cases replay frozen full-text documents from `tests/evaluation/corpus/` through the production parser, chunker and evidence extractor, and gate the quality metrics that the placeholder cases cannot move: evidence target achievement, the share of evidence taken from full text, citations that rest only on snippets, whether a quotation actually occurs in the source it cites, and whether contradicting results in real prose are recognised. The corpus documents are authored for this suite and marked `synthetic_content`; replacing the files with real documents is the intended way to evaluate a real corpus. Extraction splits the global evidence budget across sections by what each section still needs, so an early section cannot consume every later section's allowance; citation traceability checks every version of a source, so a quotation taken from a search snippet remains traceable once the full text has been fetched.
+
+### Human review (optional)
+
+Human labels are not a default gate. Generate the template first:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  --profile test run --rm test python -m dr_core.evaluation \
+  --review-template /app/data/files/reviews
+```
+
+Each row carries `case_id`, `claim_id`, `claim_text`, `quoted_span` and `source_title`, but not the model's own verdict, so the label is not anchored. Fill `reviewer_label` with `supported`, `partial` or `unsupported`, save the file as `tests/evaluation/reviews/<date>.json`, then run:
+
+```bash
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  --profile test run --rm test python -m dr_core.evaluation \
+  --human-review tests/evaluation/reviews/<date>.json
+```
+
+The report includes `human_review.agreement_rate`. Below thirty labels it is recorded only; at thirty or more the 0.80 threshold becomes a gate. Empty and unknown labels do not count.
+
+### Writing-quality judge (optional, spends API tokens)
+
+Citation validity, span traceability and claim support stay with the deterministic rules. Writing quality has a separate job that calls a real model only when `--provider real` is passed:
+
+```bash
+docker compose --profile judge run --rm --build judge \
+  python -m dr_core.evaluation.judge --provider real --limit 10 \
+  --output /app/data/files/judge.json
+```
+
+It generates articles from the evaluation cases, then scores coherence, specificity discipline (does it invent precise-sounding details) and calibrated tone at `temperature=0`. The model name and token usage are recorded; when Langfuse is enabled the job writes `judge_*` scores. It is capped at nine cases (interruption, rate-limit and budget-exhaustion cases are excluded) and a per-article token budget. Scores are a trend, never a release gate. To dry-run the scoring over existing `.md` files:
+
+```bash
+docker compose --profile judge run --rm judge \
+  python -m dr_core.evaluation.judge --provider fake \
+  --articles /app/data/files/judge_articles
+```
 
 Frontend static checks:
 

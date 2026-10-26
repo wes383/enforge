@@ -32,10 +32,12 @@ from dr_core.evaluation.metrics import (
     case_metrics_dict,
     collect_case_metrics,
     compare_human_review,
+    human_review_gate,
     human_review_sample,
 )
 from dr_core.evaluation.providers import build_case_registry
 from dr_core.observability.tracing import ResearchTracer
+from dr_core.providers.base import LLMProvider
 from dr_core.research.graph import run_research_workflow
 from dr_core.schemas import ProjectCreate, RunCreate
 from dr_core.storage import StorageError, StorageFileNotFound, get_file_storage
@@ -72,6 +74,11 @@ class EvaluationOptions:
     # <id>.claims.jsonl (each claim with the quotations it cites) here. The
     # files are written before any cleanup, so they survive without --keep.
     export_dir: str | None = None
+    # When set, writes review_template.json with one row per sampled claim.
+    # The rows carry the claim, its quotation and the source title, but not the
+    # model's own verdict: a reviewer who sees that verdict stops being an
+    # independent signal.
+    review_template_dir: str | None = None
 
 
 def evaluation_settings() -> Settings:
@@ -101,6 +108,7 @@ def run_evaluation(
     database: Database | None = None,
     settings: Settings | None = None,
     reviewed_claims: list[dict[str, Any]] | None = None,
+    llm: LLMProvider | None = None,
 ) -> dict[str, Any]:
     options = options or EvaluationOptions()
     database = database or get_database()
@@ -119,6 +127,7 @@ def run_evaluation(
                 database=database,
                 settings=settings,
                 options=options,
+                llm=llm,
             )
         )
     summary = aggregate_metrics(
@@ -149,10 +158,24 @@ def run_evaluation(
         len(results),
     )
     sample = [
-        entry
+        {**entry, "case_id": result.id}
         for result in results
         for entry in result.human_review_sample
     ]
+    review_template_path: str | None = None
+    if options.review_template_dir:
+        template_dir = Path(options.review_template_dir)
+        template_dir.mkdir(parents=True, exist_ok=True)
+        template_path = template_dir / "review_template.json"
+        template_path.write_text(
+            json.dumps(
+                build_review_template(sample),
+                ensure_ascii=False,
+                indent=2,
+            ),
+            encoding="utf-8",
+        )
+        review_template_path = str(template_path)
     report: dict[str, Any] = {
         "dataset": DATASET_VERSION,
         "generated_at": datetime.now(tz=UTC).isoformat(),
@@ -166,6 +189,7 @@ def run_evaluation(
         ],
         "summary": summary,
         "human_review_sample": sample,
+        "review_template": review_template_path,
         "methodology": {
             "citation_validity": (
                 "Passed section citation audits divided by all citation audits."
@@ -212,7 +236,11 @@ def run_evaluation(
         },
     }
     if reviewed_claims is not None:
-        report["human_review"] = compare_human_review(sample, reviewed_claims)
+        comparison = compare_human_review(sample, reviewed_claims)
+        report["human_review"] = {
+            **comparison,
+            "gate": human_review_gate(comparison),
+        }
     else:
         report["human_review"] = None
     return report
@@ -224,6 +252,7 @@ def _run_case(
     database: Database,
     settings: Settings,
     options: EvaluationOptions,
+    llm: LLMProvider | None = None,
 ) -> CaseResult:
     started = time.monotonic()
     project_id: UUID
@@ -258,6 +287,7 @@ def _run_case(
                 database,
                 settings,
                 interrupt_after=["rank_sources"],
+                llm=llm,
             )
             events.extend(first["events"])
             interrupted = first["outcome"].status.value != "completed"
@@ -267,6 +297,7 @@ def _run_case(
                 project_id,
                 database,
                 settings,
+                llm=llm,
             )
             events.extend(resumed["events"])
             recovered = (
@@ -280,6 +311,7 @@ def _run_case(
                 project_id,
                 database,
                 settings,
+                llm=llm,
             )
             events.extend(invocation["events"])
     except Exception as exc:
@@ -339,6 +371,7 @@ def _invoke(
     settings: Settings,
     *,
     interrupt_after: list[str] | None = None,
+    llm: LLMProvider | None = None,
 ) -> dict[str, Any]:
     tracer = ResearchTracer(
         run_id=run_id,
@@ -348,7 +381,7 @@ def _invoke(
         capture=True,
         include_content=False,
     )
-    registry = build_case_registry(case, settings)
+    registry = build_case_registry(case, settings, llm=llm)
     outcome = run_research_workflow(
         database,
         run_id,
@@ -665,6 +698,30 @@ def _cleanup_project(database: Database, project_id: UUID) -> None:
 def write_report(report: dict[str, Any], path: str) -> None:
     with open(path, "w", encoding="utf-8") as handle:
         json.dump(report, handle, ensure_ascii=False, indent=2)
+
+
+def build_review_template(
+    sample: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Rows a human reviewer fills in without seeing the model's verdict.
+
+    The label belongs to the reviewer, so the model status and relation are
+    deliberately absent: showing them would anchor the review and turn the
+    agreement rate into a measure of how often the reviewer agrees with a
+    label already on the page.
+    """
+    return [
+        {
+            "case_id": entry.get("case_id"),
+            "claim_id": entry["claim_id"],
+            "claim_text": entry.get("claim_text") or "",
+            "quoted_span": entry.get("quoted_span") or "",
+            "source_title": entry.get("source_title"),
+            "reviewer_label": "",
+            "reviewer_notes": "",
+        }
+        for entry in sample
+    ]
 
 
 def load_human_review(path: str) -> list[dict[str, Any]]:

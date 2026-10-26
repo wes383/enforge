@@ -303,6 +303,31 @@ services:
     networks:
       - app_net
 
+  # Opt-in writing-quality judge. It is not started by default and never runs
+  # in CI; the command must explicitly pass --provider real to spend tokens.
+  # The test override intentionally leaves it on the real .env keys.
+  judge:
+    profiles: ["judge"]
+    build:
+      context: .
+      dockerfile: docker/api.Dockerfile
+    environment:
+      <<: *app-environment
+      FILE_STORAGE_ROOT: "/app/data/files"
+    volumes:
+      - research_files:/app/data/files
+      - ./tests:/app/tests:ro
+      - ./migrations:/app/migrations:ro
+      - ./alembic.ini:/app/alembic.ini:ro
+    command: ["python", "-m", "dr_core.evaluation.judge", "--help"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+    networks:
+      - app_net
+
 volumes:
   research_files:
   postgres_data:

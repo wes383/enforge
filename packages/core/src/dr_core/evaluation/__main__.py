@@ -31,6 +31,13 @@ def main() -> int:
         ),
     )
     parser.add_argument(
+        "--review-template",
+        help=(
+            "Write review_template.json (claims with empty reviewer labels) "
+            "to this directory for independent human labelling"
+        ),
+    )
+    parser.add_argument(
         "--human-review",
         help="JSON list with claim_id and reviewer_label fields",
     )
@@ -54,6 +61,7 @@ def main() -> int:
             keep_data=args.keep,
             include_human_sample=not args.no_human_sample,
             export_dir=args.articles,
+            review_template_dir=args.review_template,
         ),
         reviewed_claims=reviewed,
     )
@@ -61,7 +69,13 @@ def main() -> int:
         write_report(report, args.output)
     print(json.dumps(report, ensure_ascii=False, indent=2))
     _send_to_langfuse(report)
-    return 0 if all(case["passed"] for case in report["cases"]) else 1
+    gate = (report.get("human_review") or {}).get("gate") or {}
+    return (
+        0
+        if all(case["passed"] for case in report["cases"])
+        and gate.get("passed", True)
+        else 1
+    )
 
 
 def _send_to_langfuse(report: dict) -> None:

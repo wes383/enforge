@@ -61,6 +61,8 @@ class CaseMetrics:
     cost_usd: float
     duration_seconds: float | None
     report_mentions_budget: bool
+    input_tokens: int = 0
+    output_tokens: int = 0
 
 
 def collect_case_metrics(
@@ -238,6 +240,8 @@ def collect_case_metrics(
         cost_usd=float(run.cost_usd or 0),
         duration_seconds=duration,
         report_mentions_budget="budget" in report_text.casefold(),
+        input_tokens=int(run.input_tokens or 0),
+        output_tokens=int(run.output_tokens or 0),
     )
 
 
@@ -288,7 +292,14 @@ def aggregate_metrics(metrics: Iterable[CaseMetrics]) -> dict[str, Any]:
         "total_evidence": sum(item.evidence_count for item in values),
         "total_claims": sum(item.claim_count for item in values),
         "total_refute_evidence": sum(item.refute_evidence_count for item in values),
+        "total_input_tokens": sum(item.input_tokens for item in values),
+        "total_output_tokens": sum(item.output_tokens for item in values),
     }
+
+
+HUMAN_REVIEW_MIN_LABELS = 30
+HUMAN_REVIEW_MIN_AGREEMENT = 0.8
+HUMAN_REVIEW_LABELS = frozenset({"SUPPORTED", "PARTIAL", "UNSUPPORTED"})
 
 
 def human_review_sample(
@@ -322,6 +333,32 @@ def human_review_sample(
         )
         if len(sample) >= limit:
             break
+    evidence = {
+        str(item.id): item
+        for item in session.scalars(
+            select(EvidenceItem).where(
+                EvidenceItem.id.in_(
+                    [
+                        UUID(entry["evidence_id"])
+                        for entry in sample
+                    ]
+                )
+            )
+        )
+    }
+    source_ids = {item.source_id for item in evidence.values()}
+    titles = {
+        str(source.id): source.title
+        for source in session.scalars(
+            select(Source).where(Source.id.in_(source_ids))
+        )
+    }
+    for entry in sample:
+        item = evidence.get(entry["evidence_id"])
+        entry["quoted_span"] = item.quoted_text if item is not None else ""
+        entry["source_title"] = (
+            titles.get(str(item.source_id)) if item is not None else None
+        )
     return sample
 
 
@@ -332,7 +369,7 @@ def compare_human_review(
     labels = {
         str(item.get("claim_id")): str(item.get("reviewer_label") or "").upper()
         for item in reviewed
-        if item.get("reviewer_label")
+        if str(item.get("reviewer_label") or "").upper() in HUMAN_REVIEW_LABELS
     }
     comparable = [
         item for item in sample if item["claim_id"] in labels
@@ -347,6 +384,34 @@ def compare_human_review(
         "reviewed_claims": len(comparable),
         "agreement_rate": _ratio(agreements, len(comparable)),
         "agreements": agreements,
+    }
+
+
+def human_review_gate(
+    comparison: dict[str, Any],
+    *,
+    min_labels: int = HUMAN_REVIEW_MIN_LABELS,
+    threshold: float = HUMAN_REVIEW_MIN_AGREEMENT,
+) -> dict[str, Any]:
+    """Enforce agreement only once enough human labels exist.
+
+    A handful of labels is a smoke test, not a signal. Below the floor the
+    rate is recorded and the gate stays open, so a partial review never fails
+    a release.
+    """
+    reviewed = int(comparison.get("reviewed_claims") or 0)
+    rate = comparison.get("agreement_rate")
+    enforced = reviewed >= min_labels
+    passed = (
+        True
+        if not enforced
+        else rate is not None and float(rate) >= threshold
+    )
+    return {
+        "threshold": threshold,
+        "minimum_reviews": min_labels,
+        "enforced": enforced,
+        "passed": passed,
     }
 
 
