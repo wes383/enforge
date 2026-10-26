@@ -297,7 +297,7 @@ Human labels are not a default gate. Generate the template first:
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm test python -m dr_core.evaluation \
-  --review-template /app/data/files/reviews
+  --review-template data/files/reviews
 ```
 
 Each row carries `case_id`, `claim_id`, `claim_text`, `quoted_span` and `source_title`, but not the model's own verdict, so the label is not anchored. Fill `reviewer_label` with `supported`, `partial` or `unsupported`, save the file as `tests/evaluation/reviews/<date>.json`, then run:
@@ -317,7 +317,7 @@ Citation validity, span traceability and claim support stay with the determinist
 ```bash
 docker compose --profile judge run --rm --build judge \
   python -m dr_core.evaluation.judge --provider real --limit 10 \
-  --output /app/data/files/judge.json
+  --export data/files/judge_articles --output data/files/judge.json
 ```
 
 It generates articles from the evaluation cases, then scores coherence, specificity discipline (does it invent precise-sounding details) and calibrated tone at `temperature=0`. The model name and token usage are recorded; when Langfuse is enabled the job writes `judge_*` scores. It is capped at nine cases (interruption, rate-limit and budget-exhaustion cases are excluded) and a per-article token budget. Scores are a trend, never a release gate. To dry-run the scoring over existing `.md` files:
@@ -325,7 +325,7 @@ It generates articles from the evaluation cases, then scores coherence, specific
 ```bash
 docker compose --profile judge run --rm judge \
   python -m dr_core.evaluation.judge --provider fake \
-  --articles /app/data/files/judge_articles
+  --articles data/files/judge_articles
 ```
 
 Frontend static checks:

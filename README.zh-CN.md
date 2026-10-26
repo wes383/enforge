@@ -292,7 +292,7 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm test python -m dr_core.evaluation \
-  --review-template /app/data/files/reviews
+  --review-template data/files/reviews
 ```
 
 模板只包含 `case_id`、`claim_id`、`claim_text`、`quoted_span`、`source_title`，不包含模型自己的判定，避免标注被锚定。把 `reviewer_label` 填成 `supported` / `partial` / `unsupported` 后，把文件放到 `tests/evaluation/reviews/<date>.json`，再回跑：
@@ -312,7 +312,7 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
 ```bash
 docker compose --profile judge run --rm --build judge \
   python -m dr_core.evaluation.judge --provider real --limit 10 \
-  --output /app/data/files/judge.json
+  --export data/files/judge_articles --output data/files/judge.json
 ```
 
 它用评测 case 生成成稿，再以 `temperature=0` 打分：连贯性、细节克制（有没有凭空造出精确细节）、语气校准。记录模型名与 token 用量；开启 Langfuse 时写入 `judge_*` 分数。默认最多 9 篇（排除中断、限流、预算耗尽 case），每篇 token 预算 60k。分数只用于看趋势，不做发布门禁。只想对已有 `.md` 稿件做一次 dry run 时：
@@ -320,7 +320,7 @@ docker compose --profile judge run --rm --build judge \
 ```bash
 docker compose --profile judge run --rm judge \
   python -m dr_core.evaluation.judge --provider fake \
-  --articles /app/data/files/judge_articles
+  --articles data/files/judge_articles
 ```
 
 前端静态检查：
