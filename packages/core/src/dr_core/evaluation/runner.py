@@ -10,6 +10,7 @@ from typing import Any
 from uuid import UUID
 
 from sqlalchemy import delete, select, text
+from sqlalchemy.orm import Session
 
 from dr_core.config import Settings, get_settings
 from dr_core.db import Database, get_database
@@ -21,6 +22,7 @@ from dr_core.db.models import (
     EvidenceItem,
     ResearchProject,
     ResearchRun,
+    RunEvent,
     Source,
     SourceVersion,
 )
@@ -57,6 +59,7 @@ class CaseResult:
     trace: dict[str, Any] | None = None
     error: str | None = None
     human_review_sample: list[dict[str, Any]] = field(default_factory=list)
+    polish: dict[str, Any] | None = None
 
     @property
     def passed(self) -> bool:
@@ -318,9 +321,11 @@ def _run_case(
         error = f"{type(exc).__name__}: {exc}"[:1000]
 
     duration = round(time.monotonic() - started, 3)
+    polish: dict[str, Any] | None = None
     with database.session() as session:
         run = session.get(ResearchRun, run_id)
         metrics = collect_case_metrics(session, get_file_storage(), run) if run else None
+        polish = _polish_status(session, run_id) if run else None
         sample = (
             human_review_sample(
                 session,
@@ -357,10 +362,29 @@ def _run_case(
         trace=_trace_summary(events),
         error=error,
         human_review_sample=sample,
+        polish=polish,
     )
     if not options.keep_data:
         _cleanup_project(database, project_id)
     return result
+
+
+def _polish_status(session: Session, run_id: UUID) -> dict[str, Any]:
+    event = session.scalar(
+        select(RunEvent).where(
+            RunEvent.run_id == run_id,
+            RunEvent.dedupe_key == "article:polished",
+        )
+    )
+    if event is None:
+        return {"status": "not_recorded"}
+    payload = event.payload if isinstance(event.payload, dict) else {}
+    reason = payload.get("reason")
+    return {
+        "status": payload.get("reason_kind") or "unknown",
+        "reason": str(reason)[:200] if reason is not None else None,
+        "sections": payload.get("sections"),
+    }
 
 
 def _invoke(

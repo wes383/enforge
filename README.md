@@ -274,7 +274,7 @@ Changing the public API address `NEXT_PUBLIC_API_BASE_URL` requires rebuilding `
 Tests are fully isolated from real keys: `docker-compose.test.yml` forces `RESEARCH_PROVIDER_MODE=mock` and clears every provider key and LLM switch, so even a `.env` with real keys never reaches the network or consumes quota.
 
 ```bash
-# Unit + integration + evaluation (currently 444 passed)
+# Unit + integration + evaluation (currently 446 passed)
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -320,7 +320,7 @@ docker compose --profile judge run --rm --build judge \
   --export data/files/judge_articles --output data/files/judge.json
 ```
 
-It generates articles from the evaluation cases, then scores coherence, specificity discipline (does it invent precise-sounding details) and calibrated tone at `temperature=0`. The model name and token usage are recorded; when Langfuse is enabled the job writes `judge_*` scores. It is capped at nine cases (interruption, rate-limit and budget-exhaustion cases are excluded) and a per-article token budget. Scores are a trend, never a release gate. To dry-run the scoring over existing `.md` files:
+It generates articles from the evaluation cases, then scores coherence, specificity discipline (does it invent precise-sounding details) and calibrated tone at `temperature=0`. The model name and token usage are recorded; when Langfuse is enabled the job writes `judge_*` scores. It is capped at nine cases (interruption, rate-limit and budget-exhaustion cases are excluded) and a per-article token budget. Judge runs allow a 360s model request with one retry, so a slow whole-article polish is not silently skipped; the generation summary records how many articles were polished, rejected, or failed. Scores are a trend, never a release gate. To dry-run the scoring over existing `.md` files:
 
 ```bash
 docker compose --profile judge run --rm judge \

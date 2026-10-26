@@ -108,6 +108,12 @@ def judge_settings() -> Settings:
             "research_token_budget": 60000,
             "research_polish_max_input_chars": 16000,
             "research_node_timeout_seconds": 180,
+            # A whole-article polish occasionally exceeds the default 240s
+            # request timeout. Give it one longer attempt plus a retry so a
+            # slow call does not silently ship an unpolished article to the
+            # judge; the node budget scales with this value.
+            "llm_request_timeout_seconds": 360,
+            "llm_max_retries": 1,
             "langfuse_enabled": False,
         }
     )
@@ -218,13 +224,14 @@ def run_judge(
     options = options or JudgeOptions()
     if options.provider not in {"real", "fake"}:
         raise ValueError(f"Unknown judge provider: {options.provider}")
+    settings = settings or judge_settings()
     selected = options.case_ids or default_case_ids()
     if len(selected) > options.limit:
         selected = selected[: options.limit]
     generation: dict[str, Any] | None = None
     articles_dir: Path | None = None
     if options.articles_dir:
-        llm = llm or resolve_llm(options.provider)
+        llm = llm or resolve_llm(options.provider, settings=settings)
         articles_dir = Path(options.articles_dir)
         articles = _read_articles(
             articles_dir,
@@ -237,8 +244,7 @@ def run_judge(
                 "The fake provider only scores existing articles; pass "
                 "--articles DIR or use --provider real"
             )
-        llm = llm or resolve_llm("real")
-        settings = settings or judge_settings()
+        llm = llm or resolve_llm("real", settings=settings)
         articles_dir = Path(
             options.export_dir or tempfile.mkdtemp(prefix="dr-judge-")
         )
@@ -280,10 +286,14 @@ def run_judge(
     return report
 
 
-def resolve_llm(provider: str) -> LLMProvider:
+def resolve_llm(
+    provider: str,
+    *,
+    settings: Settings | None = None,
+) -> LLMProvider:
     if provider == "fake":
         return _FakeJudgeLLM()
-    registry = build_provider_registry(get_settings())
+    registry = build_provider_registry(settings or get_settings())
     if registry.llm is None:
         raise RuntimeError(
             "OPENAI_API_KEY is not configured; the real judge has no model"
@@ -313,6 +323,15 @@ def _read_articles(
 
 def _generation_summary(report: dict[str, Any]) -> dict[str, Any]:
     summary = report.get("summary") or {}
+    polish = {"applied": 0, "failed": 0, "other": 0}
+    for case in report.get("cases") or []:
+        status = (case.get("polish") or {}).get("status")
+        if status == "applied":
+            polish["applied"] += 1
+        elif status in {"model_error", "rejected"}:
+            polish["failed"] += 1
+        else:
+            polish["other"] += 1
     return {
         "cases": summary.get("cases"),
         "completed": sum(
@@ -322,6 +341,7 @@ def _generation_summary(report: dict[str, Any]) -> dict[str, Any]:
         ),
         "evidence": summary.get("total_evidence"),
         "claims": summary.get("total_claims"),
+        "polish": polish,
         "input_tokens": summary.get("total_input_tokens"),
         "output_tokens": summary.get("total_output_tokens"),
     }

@@ -6,8 +6,10 @@ import pytest
 
 from dr_core.evaluation.judge import (
     JudgeOptions,
+    _generation_summary,
     aggregate_scores,
     judge_article,
+    judge_settings,
     run_judge,
 )
 from dr_core.providers.models import LLMResponse
@@ -152,3 +154,32 @@ def test_existing_articles_are_scored_without_a_database(tmp_path):
 def test_the_fake_provider_refuses_to_generate_articles():
     with pytest.raises(ValueError):
         run_judge(JudgeOptions(provider="fake"))
+
+
+def test_judge_settings_give_a_slow_polish_a_longer_attempt_and_retry():
+    settings = judge_settings()
+
+    assert settings.llm_request_timeout_seconds == 360
+    assert settings.llm_max_retries == 1
+
+
+def test_generation_summary_attributes_polish_outcomes():
+    report = {
+        "summary": {
+            "cases": 3,
+            "total_evidence": 10,
+            "total_claims": 20,
+            "total_input_tokens": 100,
+            "total_output_tokens": 200,
+        },
+        "cases": [
+            {"status": "completed", "polish": {"status": "applied"}},
+            {"status": "completed", "polish": {"status": "model_error"}},
+            {"status": "failed"},
+        ],
+    }
+
+    summary = _generation_summary(report)
+
+    assert summary["polish"] == {"applied": 1, "failed": 1, "other": 1}
+    assert summary["completed"] == 2
