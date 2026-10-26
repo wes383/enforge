@@ -1,0 +1,44 @@
+{
+  "dataset": "phase9-v2",
+  "generated_at": "2026-10-26T08:21:45.426450+00:00",
+  "provider": "real",
+  "model": "qwen3.8-flash",
+  "articles_dir": "data/files/judge_articles_single3",
+  "cases": [
+    {
+      "case_id": "conflicting_literature",
+      "coherence": 3,
+      "specificity_discipline": 4,
+      "calibrated_tone": 5,
+      "notes": "The article is coherent but repetitive, restating the same direct conflict across sections without adding much analytic depth. Its main weakness is abstract phrasing that names the disagreement more than it explains it.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 968,
+      "output_tokens": 532,
+      "error": null
+    }
+  ],
+  "summary": {
+    "cases": 1,
+    "judged": 1,
+    "errors": 0,
+    "coherence": 3.0,
+    "specificity_discipline": 4.0,
+    "calibrated_tone": 5.0,
+    "input_tokens": 968,
+    "output_tokens": 532
+  },
+  "generation": {
+    "cases": 1,
+    "completed": 1,
+    "evidence": 8,
+    "claims": 15,
+    "polish": {
+      "applied": 1,
+      "failed": 0,
+      "other": 0
+    },
+    "input_tokens": 8740,
+    "output_tokens": 26728
+  },
+  "note": "Writing-quality trend only. Coherence, specificity discipline and calibrated tone are scored by a model at temperature 0; citation validity and claim support stay in the deterministic audit and are not judged here."
+}
