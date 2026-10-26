@@ -269,7 +269,7 @@ docker compose up -d --force-recreate api worker
 测试与真实密钥完全隔离：`docker-compose.test.yml` 强制 `RESEARCH_PROVIDER_MODE=mock` 并清空所有提供商密钥与 LLM 开关，即使 `.env` 里有真实 Key 也不会联网或消耗配额。
 
 ```bash
-# 单元 + 集成 + 评测（当前 437 passed）
+# 单元 + 集成 + 评测（当前 439 passed）
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -295,14 +295,14 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --review-template data/files/reviews
 ```
 
-模板只包含 `case_id`、`claim_id`、`claim_text`、`quoted_span`、`source_title`，不包含模型自己的判定，避免标注被锚定。把 `reviewer_label` 填成 `supported` / `partial` / `unsupported` 后，把文件放到 `tests/evaluation/reviews/<date>.json`，再回跑：
+模板包含 `case_id`、`claim_id`、`claim_text`、`citations`（该主张捆绑的每一条引文及其来源标题）以及重复第一条引文的 `quoted_span`、`source_title`，不包含模型自己的判定，避免标注被锚定。把 `reviewer_label` 填成 `supported` / `partial` / `unsupported` 后，把文件放到 `tests/evaluation/reviews/<date>.json`，再回跑：
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm test python -m dr_core.evaluation \
   --human-review tests/evaluation/reviews/<date>.json
 ```
 
-`human_review` 会给出 `agreement_rate`。标注数少于 30 条时只记录；达到 30 条后才按 0.80 计算门禁。空值和未知标签不计入。`unsupported` 与模型的 `contradicted`、`unverifiable` 都算一致；`partial` 只与 `partial` 一致。
+`human_review` 会给出 `agreement_rate`。标注数少于 30 条时只记录；达到 30 条后才按 0.80 计算门禁。空值和未知标签不计入；两条主张共用同一引文时，一条标注也只计一次。`unsupported` 与模型的 `contradicted`、`unverifiable` 都算一致；`partial` 只与 `partial` 一致。
 
 ### 写作质量裁判（可选，消耗 API）
 

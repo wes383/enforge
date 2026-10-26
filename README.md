@@ -274,7 +274,7 @@ Changing the public API address `NEXT_PUBLIC_API_BASE_URL` requires rebuilding `
 Tests are fully isolated from real keys: `docker-compose.test.yml` forces `RESEARCH_PROVIDER_MODE=mock` and clears every provider key and LLM switch, so even a `.env` with real keys never reaches the network or consumes quota.
 
 ```bash
-# Unit + integration + evaluation (currently 437 passed)
+# Unit + integration + evaluation (currently 439 passed)
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -300,7 +300,7 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --review-template data/files/reviews
 ```
 
-Each row carries `case_id`, `claim_id`, `claim_text`, `quoted_span` and `source_title`, but not the model's own verdict, so the label is not anchored. Fill `reviewer_label` with `supported`, `partial` or `unsupported`, save the file as `tests/evaluation/reviews/<date>.json`, then run:
+Each row carries `case_id`, `claim_id`, `claim_text`, `citations` (every quoted span the claim bundles, with its source title) and the first citation repeated as `quoted_span`/`source_title`, but not the model's own verdict, so the label is not anchored. Fill `reviewer_label` with `supported`, `partial` or `unsupported`, save the file as `tests/evaluation/reviews/<date>.json`, then run:
 
 ```bash
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
@@ -308,7 +308,7 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --human-review tests/evaluation/reviews/<date>.json
 ```
 
-The report includes `human_review.agreement_rate`. Below thirty labels it is recorded only; at thirty or more the 0.80 threshold becomes a gate. Empty and unknown labels do not count. `unsupported` counts as agreement with either `contradicted` or `unverifiable`; `partial` matches only `partial`.
+The report includes `human_review.agreement_rate`. Below thirty labels it is recorded only; at thirty or more the 0.80 threshold becomes a gate. Empty and unknown labels do not count, and one label is counted once even when two claims share a quote. `unsupported` counts as agreement with either `contradicted` or `unverifiable`; `partial` matches only `partial`.
 
 ### Writing-quality judge (optional, spends API tokens)
 

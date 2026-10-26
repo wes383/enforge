@@ -62,4 +62,4 @@ AGENTS.md
 .zed/
 .kiro/
 # Generated review template; the labelled review file is tracked.
-tests/evaluation/reviews/review_template.json
+tests/evaluation/reviews/review_template*.json

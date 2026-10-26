@@ -81,11 +81,13 @@ def test_review_template_is_written_without_the_model_verdict(tmp_path):
         "claim_text",
         "quoted_span",
         "source_title",
+        "citations",
         "reviewer_label",
         "reviewer_notes",
     }
     assert all(row["reviewer_label"] == "" for row in rows)
     assert all("model_status" not in row for row in rows)
+    assert all(isinstance(row["citations"], list) for row in rows)
 
 
 class _RecordingLLM:

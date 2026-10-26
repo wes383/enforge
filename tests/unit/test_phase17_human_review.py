@@ -36,6 +36,14 @@ def test_the_review_template_hides_the_model_verdict():
                 "Audited firms improved compliance after enforcement."
             ),
             "source_title": "Journal of Tests",
+            "citations": [
+                {
+                    "quoted_span": (
+                        "Audited firms improved compliance after enforcement."
+                    ),
+                    "source_title": "Journal of Tests",
+                }
+            ],
             "reviewer_label": "",
             "reviewer_notes": "",
         }
@@ -51,6 +59,25 @@ def test_the_review_template_keeps_the_quote_a_reviewer_needs():
 
     assert rows[0]["quoted_span"] == "The only quoted sentence."
     assert rows[0]["source_title"] == "Journal of Tests"
+
+
+def test_the_review_template_shows_every_bundled_citation():
+    rows = build_review_template(
+        [
+            _sample(
+                citations=[
+                    {"quoted_span": "First.", "source_title": "Source A"},
+                    {"quoted_span": "Second.", "source_title": "Source B"},
+                ]
+            )
+        ]
+    )
+
+    assert rows[0]["quoted_span"] == "Audited firms improved compliance after enforcement."
+    assert rows[0]["citations"] == [
+        {"quoted_span": "First.", "source_title": "Source A"},
+        {"quoted_span": "Second.", "source_title": "Source B"},
+    ]
 
 
 def test_unknown_or_empty_labels_do_not_count_as_reviews():
@@ -156,6 +183,39 @@ def test_labels_fall_back_to_the_quote_when_the_claim_wording_changes():
 
     assert comparison["reviewed_claims"] == 1
     assert comparison["agreements"] == 1
+
+
+def test_one_human_label_is_counted_once_when_claims_share_a_quote():
+    sample = [
+        {
+            "case_id": "case-a",
+            "claim_id": "new-1",
+            "claim_text": "Taken together, the material supports this.",
+            "quoted_span": "Shared quote.",
+            "model_status": "SUPPORTED",
+        },
+        {
+            "case_id": "case-a",
+            "claim_id": "new-2",
+            "claim_text": "The material reports a different grouping.",
+            "quoted_span": "Shared quote.",
+            "model_status": "SUPPORTED",
+        },
+    ]
+    reviewed = [
+        {
+            "case_id": "case-a",
+            "claim_id": "old-1",
+            "claim_text": "Unrelated original wording.",
+            "quoted_span": "Shared quote.",
+            "reviewer_label": "partial",
+        }
+    ]
+
+    comparison = compare_human_review(sample, reviewed)
+
+    assert comparison["reviewed_claims"] == 1
+    assert comparison["agreements"] == 0
 
 
 def test_the_gate_stays_open_below_thirty_labels():

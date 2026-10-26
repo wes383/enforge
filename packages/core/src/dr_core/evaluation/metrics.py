@@ -312,35 +312,29 @@ def human_review_sample(
         select(Claim, ClaimEvidence)
         .join(ClaimEvidence, ClaimEvidence.claim_id == Claim.id)
         .where(Claim.run_id == run_id)
-        .order_by(Claim.created_at, Claim.id)
+        .order_by(Claim.created_at, Claim.id, ClaimEvidence.evidence_id)
     ).all()
-    sample: list[dict[str, Any]] = []
-    seen: set[UUID] = set()
+    order: list[UUID] = []
+    claims: dict[UUID, Claim] = {}
+    links: dict[UUID, list[ClaimEvidence]] = {}
     for claim, link in rows:
-        if claim.id in seen:
-            continue
-        seen.add(claim.id)
-        sample.append(
-            {
-                "claim_id": str(claim.id),
-                "claim_text": claim.claim_text,
-                "model_status": claim.verification_status.value,
-                "evidence_id": str(link.evidence_id),
-                "relation": link.relation.value,
-                "reviewer_label": None,
-                "reviewer_notes": None,
-            }
-        )
-        if len(sample) >= limit:
-            break
+        if claim.id not in links:
+            if len(order) >= limit:
+                continue
+            order.append(claim.id)
+            claims[claim.id] = claim
+            links[claim.id] = []
+        links[claim.id].append(link)
+
     evidence = {
         str(item.id): item
         for item in session.scalars(
             select(EvidenceItem).where(
                 EvidenceItem.id.in_(
                     [
-                        UUID(entry["evidence_id"])
-                        for entry in sample
+                        link.evidence_id
+                        for claim_id in order
+                        for link in links[claim_id]
                     ]
                 )
             )
@@ -353,11 +347,38 @@ def human_review_sample(
             select(Source).where(Source.id.in_(source_ids))
         )
     }
-    for entry in sample:
-        item = evidence.get(entry["evidence_id"])
-        entry["quoted_span"] = item.quoted_text if item is not None else ""
-        entry["source_title"] = (
-            titles.get(str(item.source_id)) if item is not None else None
+
+    sample: list[dict[str, Any]] = []
+    for claim_id in order:
+        claim = claims[claim_id]
+        citations: list[dict[str, Any]] = []
+        seen_quotes: set[tuple[str, str | None]] = set()
+        for link in links[claim_id]:
+            item = evidence.get(str(link.evidence_id))
+            if item is None:
+                continue
+            source_title = titles.get(str(item.source_id))
+            key = (item.quoted_text, source_title)
+            if key in seen_quotes:
+                continue
+            seen_quotes.add(key)
+            citations.append(
+                {"quoted_span": item.quoted_text, "source_title": source_title}
+            )
+        first = citations[0] if citations else {}
+        sample.append(
+            {
+                "claim_id": str(claim.id),
+                "claim_text": claim.claim_text,
+                "model_status": claim.verification_status.value,
+                "evidence_id": str(links[claim_id][0].evidence_id),
+                "relation": links[claim_id][0].relation.value,
+                "reviewer_label": None,
+                "reviewer_notes": None,
+                "quoted_span": first.get("quoted_span", ""),
+                "source_title": first.get("source_title"),
+                "citations": citations,
+            }
         )
     return sample
 
@@ -366,26 +387,32 @@ def compare_human_review(
     sample: list[dict[str, Any]],
     reviewed: list[dict[str, Any]],
 ) -> dict[str, Any]:
-    labels: dict[str, str] = {}
+    labels: dict[str, tuple[str, str]] = {}
     for item in reviewed:
         label = str(item.get("reviewer_label") or "").upper()
         if label not in HUMAN_REVIEW_LABELS:
             continue
+        identity = str(item.get("claim_id") or "") or f"anon:{id(item)}"
         for key in _review_keys(item):
-            labels[key] = label
+            labels[key] = (label, identity)
     comparable = 0
     agreements = 0
-    seen: set[str] = set()
+    reviewed_seen: set[str] = set()
     for item in sample:
-        key = next(
-            (key for key in _review_keys(item) if key in labels),
+        match = next(
+            (
+                labels[key]
+                for key in _review_keys(item)
+                if key in labels and labels[key][1] not in reviewed_seen
+            ),
             None,
         )
-        if key is None or key in seen:
+        if match is None:
             continue
-        seen.add(key)
+        label, identity = match
+        reviewed_seen.add(identity)
         comparable += 1
-        if labels[key] == _model_review_label(item["model_status"]):
+        if label == _model_review_label(item["model_status"]):
             agreements += 1
     return {
         "sampled_claims": len(sample),

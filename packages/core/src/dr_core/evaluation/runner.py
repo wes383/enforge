@@ -710,18 +710,33 @@ def build_review_template(
     agreement rate into a measure of how often the reviewer agrees with a
     label already on the page.
     """
-    return [
-        {
-            "case_id": entry.get("case_id"),
-            "claim_id": entry["claim_id"],
-            "claim_text": entry.get("claim_text") or "",
-            "quoted_span": entry.get("quoted_span") or "",
-            "source_title": entry.get("source_title"),
-            "reviewer_label": "",
-            "reviewer_notes": "",
-        }
-        for entry in sample
-    ]
+    rows = []
+    for entry in sample:
+        citations = entry.get("citations")
+        if not citations:
+            citations = (
+                [
+                    {
+                        "quoted_span": entry.get("quoted_span") or "",
+                        "source_title": entry.get("source_title"),
+                    }
+                ]
+                if entry.get("quoted_span")
+                else []
+            )
+        rows.append(
+            {
+                "case_id": entry.get("case_id"),
+                "claim_id": entry["claim_id"],
+                "claim_text": entry.get("claim_text") or "",
+                "quoted_span": entry.get("quoted_span") or "",
+                "source_title": entry.get("source_title"),
+                "citations": citations,
+                "reviewer_label": "",
+                "reviewer_notes": "",
+            }
+        )
+    return rows
 
 
 def load_human_review(path: str) -> list[dict[str, Any]]:
