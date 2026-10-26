@@ -274,7 +274,7 @@ Changing the public API address `NEXT_PUBLIC_API_BASE_URL` requires rebuilding `
 Tests are fully isolated from real keys: `docker-compose.test.yml` forces `RESEARCH_PROVIDER_MODE=mock` and clears every provider key and LLM switch, so even a `.env` with real keys never reaches the network or consumes quota.
 
 ```bash
-# Unit + integration + evaluation (currently 424 passed)
+# Unit + integration + evaluation (currently 425 passed)
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -308,7 +308,7 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --human-review tests/evaluation/reviews/<date>.json
 ```
 
-The report includes `human_review.agreement_rate`. Below thirty labels it is recorded only; at thirty or more the 0.80 threshold becomes a gate. Empty and unknown labels do not count.
+The report includes `human_review.agreement_rate`. Below thirty labels it is recorded only; at thirty or more the 0.80 threshold becomes a gate. Empty and unknown labels do not count. `unsupported` counts as agreement with either `contradicted` or `unverifiable`; `partial` matches only `partial`.
 
 ### Writing-quality judge (optional, spends API tokens)
 

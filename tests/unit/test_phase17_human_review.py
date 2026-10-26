@@ -66,6 +66,25 @@ def test_unknown_or_empty_labels_do_not_count_as_reviews():
     assert comparison["agreement_rate"] is None
 
 
+def test_unsupported_agrees_with_contradicted_and_unverifiable():
+    sample = [
+        {"claim_id": "a", "model_status": "CONTRADICTED"},
+        {"claim_id": "b", "model_status": "UNVERIFIABLE"},
+        {"claim_id": "c", "model_status": "SUPPORTED"},
+    ]
+    reviewed = [
+        {"claim_id": "a", "reviewer_label": "unsupported"},
+        {"claim_id": "b", "reviewer_label": "UNSUPPORTED"},
+        {"claim_id": "c", "reviewer_label": "unsupported"},
+    ]
+
+    comparison = compare_human_review(sample, reviewed)
+
+    assert comparison["reviewed_claims"] == 3
+    assert comparison["agreements"] == 2
+    assert comparison["agreement_rate"] == 0.6667
+
+
 def test_the_gate_stays_open_below_thirty_labels():
     comparison = {
         "sampled_claims": 40,

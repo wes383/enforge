@@ -377,7 +377,7 @@ def compare_human_review(
     agreements = sum(
         1
         for item in comparable
-        if labels[item["claim_id"]] == item["model_status"].upper()
+        if labels[item["claim_id"]] == _model_review_label(item["model_status"])
     )
     return {
         "sampled_claims": len(sample),
@@ -385,6 +385,21 @@ def compare_human_review(
         "agreement_rate": _ratio(agreements, len(comparable)),
         "agreements": agreements,
     }
+
+
+def _model_review_label(status: str) -> str:
+    """Collapse the verifier's four states into the reviewer's three labels.
+
+    A reviewer cannot distinguish "the source contradicts the claim" from
+    "there is no usable source"; both are unsupported from their side. Exact
+    string matching would score those two states as permanent disagreements.
+    """
+    normalized = str(status or "").upper()
+    return (
+        normalized
+        if normalized in {"SUPPORTED", "PARTIAL"}
+        else "UNSUPPORTED"
+    )
 
 
 def human_review_gate(
