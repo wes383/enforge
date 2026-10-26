@@ -1,0 +1,132 @@
+{
+  "dataset": "phase9-v2",
+  "generated_at": "2026-10-26T09:16:29.972871+00:00",
+  "provider": "real",
+  "model": "deepseek-v4.1-flash",
+  "articles_dir": "data/files/judge_articles_deepseek_v41",
+  "cases": [
+    {
+      "case_id": "general_knowledge",
+      "coherence": 4,
+      "specificity_discipline": 4,
+      "calibrated_tone": 5,
+      "notes": "The argument is coherent but circular: the missing magnitude/date/measurement point about [S4] is restated in the Scope, Contested Findings, and Established Ground sections, so the later sections largely recycle rather than advance the case. Specificity is limited almost entirely to negative claims about absent detail, leaving every substantive construct attributed to unnamed or mock sources.",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 1985,
+      "output_tokens": 536,
+      "error": null
+    },
+    {
+      "case_id": "academic_review",
+      "coherence": null,
+      "specificity_discipline": null,
+      "calibrated_tone": null,
+      "notes": "",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "error": "ProviderReasoningTruncated: chat completion returned an empty answer; the model used the token budget for reasoning (finish_reason=length)"
+    },
+    {
+      "case_id": "controversial_topic",
+      "coherence": null,
+      "specificity_discipline": null,
+      "calibrated_tone": null,
+      "notes": "",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "error": "ProviderReasoningTruncated: chat completion returned an empty answer; the model used the token budget for reasoning (finish_reason=length)"
+    },
+    {
+      "case_id": "abstract_only",
+      "coherence": null,
+      "specificity_discipline": null,
+      "calibrated_tone": null,
+      "notes": "",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "error": "ProviderReasoningTruncated: chat completion returned an empty answer; the model used the token budget for reasoning (finish_reason=length)"
+    },
+    {
+      "case_id": "incomplete_metadata",
+      "coherence": null,
+      "specificity_discipline": null,
+      "calibrated_tone": null,
+      "notes": "",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 1363,
+      "output_tokens": 600,
+      "error": "unusable judge output: the answer contains no JSON object"
+    },
+    {
+      "case_id": "snippet_fulltext_conflict",
+      "coherence": null,
+      "specificity_discipline": null,
+      "calibrated_tone": null,
+      "notes": "",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "error": "ProviderReasoningTruncated: chat completion returned an empty answer; the model used the token budget for reasoning (finish_reason=length)"
+    },
+    {
+      "case_id": "conflicting_literature",
+      "coherence": null,
+      "specificity_discipline": null,
+      "calibrated_tone": null,
+      "notes": "",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "error": "ProviderReasoningTruncated: chat completion returned an empty answer; the model used the token budget for reasoning (finish_reason=length)"
+    },
+    {
+      "case_id": "real_remote_work",
+      "coherence": null,
+      "specificity_discipline": null,
+      "calibrated_tone": null,
+      "notes": "",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "error": "ProviderReasoningTruncated: chat completion returned an empty answer; the model used the token budget for reasoning (finish_reason=length)"
+    },
+    {
+      "case_id": "real_microplastics",
+      "coherence": null,
+      "specificity_discipline": null,
+      "calibrated_tone": null,
+      "notes": "",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 0,
+      "output_tokens": 0,
+      "error": "ProviderReasoningTruncated: chat completion returned an empty answer; the model used the token budget for reasoning (finish_reason=length)"
+    }
+  ],
+  "summary": {
+    "cases": 9,
+    "judged": 1,
+    "errors": 8,
+    "coherence": 4.0,
+    "specificity_discipline": 4.0,
+    "calibrated_tone": 5.0,
+    "input_tokens": 3348,
+    "output_tokens": 1136
+  },
+  "generation": {
+    "cases": 9,
+    "completed": 9,
+    "evidence": 178,
+    "claims": 300,
+    "polish": {
+      "applied": 5,
+      "failed": 4,
+      "other": 0
+    },
+    "input_tokens": 155565,
+    "output_tokens": 288956
+  },
+  "note": "Writing-quality trend only. Coherence, specificity discipline and calibrated tone are scored by a model at temperature 0; citation validity and claim support stay in the deterministic audit and are not judged here."
+}

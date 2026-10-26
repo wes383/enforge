@@ -1,0 +1,120 @@
+{
+  "dataset": "phase9-v2",
+  "generated_at": "2026-10-26T09:31:54.642041+00:00",
+  "provider": "real",
+  "model": "deepseek-v4.1-flash",
+  "articles_dir": "data/files/judge_articles_deepseek_v41",
+  "cases": [
+    {
+      "case_id": "abstract_only",
+      "coherence": 3,
+      "specificity_discipline": 3,
+      "calibrated_tone": 5,
+      "notes": "The largest weakness is low specificity: beyond source tags and generic category labels, the article supplies no concrete findings, dates, or magnitudes, so many paragraphs restate the same caution. It is also repetitive and has a dangling scoping citation set [S12]–[S14] that never returns.",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 1970,
+      "output_tokens": 2714,
+      "error": null
+    },
+    {
+      "case_id": "academic_review",
+      "coherence": 3,
+      "specificity_discipline": 5,
+      "calibrated_tone": 5,
+      "notes": "The largest weakness is coherence: sections repeatedly restate that the sources are mock snippets with no metrics, so the argument advances little after the first section. The prose remains disciplined and cautious, but the repetition makes the review thinner than its length suggests.",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 1723,
+      "output_tokens": 1634,
+      "error": null
+    },
+    {
+      "case_id": "conflicting_literature",
+      "coherence": 3,
+      "specificity_discipline": 4,
+      "calibrated_tone": 5,
+      "notes": "The largest weakness is coherence: the article repeats the same distinction across sections and introduces S1 (2022) as part of the central contradiction, then drops it from the final verdict in favor of S2 (2020). It also labels a section 'Empirical Designs' without actually discussing any designs.",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 1511,
+      "output_tokens": 1518,
+      "error": null
+    },
+    {
+      "case_id": "controversial_topic",
+      "coherence": 3,
+      "specificity_discipline": 3,
+      "calibrated_tone": 5,
+      "notes": "The largest weakness is repetitive abstraction: the same two mechanism claims are restated across sections without concrete scope conditions or evidence, so specificity remains thin even though the tone is carefully calibrated.",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 2235,
+      "output_tokens": 1409,
+      "error": null
+    },
+    {
+      "case_id": "general_knowledge",
+      "coherence": 3,
+      "specificity_discipline": 5,
+      "calibrated_tone": 5,
+      "notes": "The largest weakness is repeated restatement of [S4]'s missing magnitude, date, and method across Scope, Contested Findings, and Established Ground, which makes the argument circular rather than cumulative. The analysis also leans too heavily on a single source for its central limitation.",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 1985,
+      "output_tokens": 2597,
+      "error": null
+    },
+    {
+      "case_id": "incomplete_metadata",
+      "coherence": 3,
+      "specificity_discipline": 4,
+      "calibrated_tone": 5,
+      "notes": "The article is highly repetitive, restating the same absence of methodological details across multiple sections with little progression. Its caution is appropriate, but the argument could be tightened to avoid circularity.",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 1363,
+      "output_tokens": 1003,
+      "error": null
+    },
+    {
+      "case_id": "real_microplastics",
+      "coherence": 4,
+      "specificity_discipline": 5,
+      "calibrated_tone": 5,
+      "notes": "The largest weakness is heavy repetition: the same sample counts, particle concentrations, and 'no established risk' conclusion recur across sections, so the argument advances less than its length suggests.",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 1615,
+      "output_tokens": 1696,
+      "error": null
+    },
+    {
+      "case_id": "real_remote_work",
+      "coherence": 3,
+      "specificity_discipline": 5,
+      "calibrated_tone": 5,
+      "notes": "The largest weakness is structural repetition: the same near-zero-average, task-interdependence, and call-centre findings are restated in nearly every section, which blunts the argument's cumulative force. Tone and attribution are otherwise disciplined.",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 1791,
+      "output_tokens": 2040,
+      "error": null
+    },
+    {
+      "case_id": "snippet_fulltext_conflict",
+      "coherence": 2,
+      "specificity_discipline": 4,
+      "calibrated_tone": 4,
+      "notes": "The largest weakness is heavy repetition: the same directional claim and its unspecified mechanism, magnitude, and sector are restated across nearly every section. Specificity is disciplined in avoiding invented detail, but the article remains abstract and thin.",
+      "model": "deepseek-v4.1-flash",
+      "input_tokens": 1166,
+      "output_tokens": 892,
+      "error": null
+    }
+  ],
+  "summary": {
+    "cases": 9,
+    "judged": 9,
+    "errors": 0,
+    "coherence": 3.0,
+    "specificity_discipline": 4.2222,
+    "calibrated_tone": 4.8889,
+    "input_tokens": 15359,
+    "output_tokens": 15503
+  },
+  "generation": null,
+  "note": "Writing-quality trend only. Coherence, specificity discipline and calibrated tone are scored by a model at temperature 0; citation validity and claim support stay in the deterministic audit and are not judged here."
+}
