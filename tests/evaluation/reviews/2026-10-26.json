@@ -1,0 +1,470 @@
+[
+  {
+    "case_id": "general_knowledge",
+    "claim_id": "b97a5d57-49b1-4715-b9e0-7ddee2d685f5",
+    "claim_text": "The available material offers several connected claims: “Deterministic mock snippet 3 about How does remote work affect team collaboration and trust” ; “Deterministic mock snippet 1 about How does remote work affect team collaboration and trust” .",
+    "quoted_span": "Deterministic mock snippet 1 about How does remote work affect team collaboration and trust?",
+    "source_title": "Mock web result 1 for How does remote work affect team collaboration and trust? background",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "general_knowledge",
+    "claim_id": "75991dec-b326-459a-b325-292d6f6b0a4f",
+    "claim_text": "The available material supports the following claims: “Deterministic mock snippet 3 about How does remote work affect team collaboration and trust” ; “Deterministic mock snippet 1 about How does remote work affect team collaboration and trust” ; “Deterministic mock snippet 2 about How does remote work affect team collaboration and trust” ; “Deterministic mock abstract for How does remote work affect team collaboration and trust” .",
+    "quoted_span": "Deterministic mock snippet 2 about How does remote work affect team collaboration and trust?",
+    "source_title": "Mock web result 2 for How does remote work affect team collaboration and trust? Background and boundar",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "general_knowledge",
+    "claim_id": "4d7e1c26-8319-4df1-9dca-a95165f6032a",
+    "claim_text": "The available material supports the following claims: “Deterministic mock snippet 3 about How does remote work affect team collaboration and trust” ; “Deterministic mock abstract for How does remote work affect team collaboration and trust” .",
+    "quoted_span": "Deterministic mock abstract for How does remote work affect team collaboration and trust?",
+    "source_title": "Mock academic paper 2: How does remote work affect team collaboration and trust? background counterargu",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "general_knowledge",
+    "claim_id": "330bf654-3686-4360-932b-b9883b49002c",
+    "claim_text": "Taken together, “Deterministic mock snippet 3 about How does remote work affect team collaboration and trust” .",
+    "quoted_span": "Deterministic mock snippet 3 about How does remote work affect team collaboration and trust?",
+    "source_title": "Mock web result 3 for How does remote work affect team collaboration and trust? background evidence da",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "academic_review",
+    "claim_id": "d514dc97-3bee-433a-bb5e-d48a80298c2c",
+    "claim_text": "The available material offers several connected claims: “Deterministic mock snippet 3 about What do empirical studies report about retrieval augmented generation quality” ; “Deterministic mock snippet 1 about What do empirical studies report about retrieval augmented generation quality” .",
+    "quoted_span": "Deterministic mock snippet 3 about What do empirical studies report about retrieval augmented generation quality?",
+    "source_title": "Mock web result 3 for What do empirical studies report about retrieval augmented generation quality? b",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "academic_review",
+    "claim_id": "5fd6709d-6aa1-46f2-a3b6-f758fd6d5f34",
+    "claim_text": "The available material supports the following claims: “Deterministic mock snippet 3 about What do empirical studies report about retrieval augmented generation quality” ; “Deterministic mock snippet 1 about What do empirical studies report about retrieval augmented generation quality” ; “Deterministic mock snippet 2 about What do empirical studies report about retrieval augmented generation quality” .",
+    "quoted_span": "Deterministic mock snippet 1 about What do empirical studies report about retrieval augmented generation quality?",
+    "source_title": "Mock web result 1 for What do empirical studies report about retrieval augmented generation quality? E",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "academic_review",
+    "claim_id": "f02aa576-7fb2-4d72-b150-30c80736f1cd",
+    "claim_text": "The available material supports the following claims: “Deterministic mock snippet 3 about What do empirical studies report about retrieval augmented generation quality” ; “A second review of What do empirical studies report about retrieval augmented generation quality” .",
+    "quoted_span": "Deterministic mock snippet 3 about What do empirical studies report about retrieval augmented generation quality?",
+    "source_title": "Mock web result 3 for What do empirical studies report about retrieval augmented generation quality? b",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "academic_review",
+    "claim_id": "d8e0b622-0da7-4179-8ed1-c23b4bd4c6fc",
+    "claim_text": "Taken together, “A second review of What do empirical studies report about retrieval augmented generation quality” .",
+    "quoted_span": "A second review of What do empirical studies report about retrieval augmented generation quality?",
+    "source_title": "Evaluation study 2: What do empirical studies report about retrieval augmented generation",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "controversial_topic",
+    "claim_id": "2397e248-d454-4ff8-89e6-c98dae5ffa69",
+    "claim_text": "The available material offers several connected claims: “enforcement does not improve compliance in regulated industries; firms adapt and violations persist” ; “Enforcement improves compliance in regulated industries because inspections increase detection and deterrence” .",
+    "quoted_span": "Enforcement improves compliance in regulated industries because inspections increase detection and deterrence.",
+    "source_title": "Evaluation source 3: Does regulatory enforcement improve compliance in regulated industries",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "controversial_topic",
+    "claim_id": "ae87b0b1-9407-42fd-8e88-e252077e3295",
+    "claim_text": "The available material supports the following claims: “Enforcement improves compliance in regulated industries because inspections increase detection and deterrence” ; “Deterministic mock abstract for Does regulatory enforcement improve compliance in regulated industries” .",
+    "quoted_span": "Enforcement improves compliance in regulated industries because inspections increase detection and deterrence.",
+    "source_title": "Evaluation source 3: Does regulatory enforcement improve compliance in regulated industries",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "controversial_topic",
+    "claim_id": "6caecbe8-10e3-4695-8748-cd320a60eb47",
+    "claim_text": "“enforcement does not improve compliance in regulated industries; firms adapt and violations persist” .",
+    "quoted_span": "However, enforcement does not improve compliance in regulated industries; firms adapt and violations persist.",
+    "source_title": "Evaluation source 2: Does regulatory enforcement improve compliance in regulated industries",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "controversial_topic",
+    "claim_id": "428ae1f2-79e5-499e-bec1-253d14b9c74d",
+    "claim_text": "Taken together, “Enforcement improves compliance in regulated industries because inspections increase detection and deterrence” .",
+    "quoted_span": "Enforcement improves compliance in regulated industries because inspections increase detection and deterrence.",
+    "source_title": "Mock academic paper 1: Does regulatory enforcement improve compliance in regulated industries? Backgrou",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "abstract_only",
+    "claim_id": "d3263d2d-ea23-44f8-8fe8-81f06dfaa9c9",
+    "claim_text": "The available material offers several connected claims: “Deterministic mock snippet 3 about What are the health effects of urban green space” ; “Deterministic mock snippet 2 about What are the health effects of urban green space” .",
+    "quoted_span": "Deterministic mock snippet 2 about What are the health effects of urban green space?",
+    "source_title": "Mock web result 2 for What are the health effects of urban green space? background",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "abstract_only",
+    "claim_id": "7caefc87-1d43-4e15-9ad2-c4fc60384d86",
+    "claim_text": "The available material supports the following claims: “Deterministic mock snippet 2 about What are the health effects of urban green space” ; “Deterministic mock snippet 3 about What are the health effects of urban green space” ; “Deterministic mock snippet 1 about What are the health effects of urban green space” ; “Short abstract about What are the health effects of urban green space” .",
+    "quoted_span": "Deterministic mock snippet 1 about What are the health effects of urban green space?",
+    "source_title": "Mock web result 1 for What are the health effects of urban green space? Background and boundaries",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "abstract_only",
+    "claim_id": "29536dd3-5156-4902-9be2-15531ffc62ab",
+    "claim_text": "The available material supports the following claims: “Deterministic mock snippet 3 about What are the health effects of urban green space” ; “Deterministic mock snippet 1 about What are the health effects of urban green space” ; “Deterministic mock snippet 2 about What are the health effects of urban green space” ; “Short abstract about What are the health effects of urban green space” .",
+    "quoted_span": "Deterministic mock snippet 2 about What are the health effects of urban green space?",
+    "source_title": "Mock web result 2 for What are the health effects of urban green space? Established facts",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "abstract_only",
+    "claim_id": "1876cdc4-b4ec-4089-82f1-3ec7fbeee1de",
+    "claim_text": "The available material supports the following claims: “Deterministic mock snippet 2 about What are the health effects of urban green space” ; “Deterministic mock snippet 3 about What are the health effects of urban green space” ; “Deterministic mock snippet 1 about What are the health effects of urban green space” .",
+    "quoted_span": "Deterministic mock snippet 3 about What are the health effects of urban green space?",
+    "source_title": "Mock web result 3 for What are the health effects of urban green space? background",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "abstract_only",
+    "claim_id": "0fec965a-4f40-4c3d-802b-a0a94f672736",
+    "claim_text": "Taken together, “Deterministic mock snippet 1 about What are the health effects of urban green space” .",
+    "quoted_span": "Deterministic mock snippet 1 about What are the health effects of urban green space?",
+    "source_title": "Mock web result 1 for What are the health effects of urban green space? Established facts",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "incomplete_metadata",
+    "claim_id": "9c340e6d-2cec-4c24-8902-09e9fee10f84",
+    "claim_text": "The available material offers several connected claims: “Citation counts for How reliable are open-access citation counts” ; “Citation counts for How reliable are open-access citation counts” .",
+    "quoted_span": "Citation counts for How reliable are open-access citation counts?",
+    "source_title": "Evaluation study 3: How reliable are open-access citation counts?",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "incomplete_metadata",
+    "claim_id": "bf4a040b-9d38-41e1-84ed-8f0b36bbd270",
+    "claim_text": "The available material supports the following claims: “Citation counts for How reliable are open-access citation counts” .",
+    "quoted_span": "Citation counts for How reliable are open-access citation counts?",
+    "source_title": "Evaluation study 1: How reliable are open-access citation counts?",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "incomplete_metadata",
+    "claim_id": "6ce7c359-b28e-4af3-8d24-fad63bd79be4",
+    "claim_text": "Taken together, “Citation counts for How reliable are open-access citation counts” .",
+    "quoted_span": "Citation counts for How reliable are open-access citation counts?",
+    "source_title": "Evaluation study 1: How reliable are open-access citation counts?",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "snippet_fulltext_conflict",
+    "claim_id": "6b29f2af-3e88-4218-b316-ad593913eb15",
+    "claim_text": "The available material offers several connected claims: “The verified full text shows that enforcement improves compliance in regulated industries” ; “Deterministic mock abstract for Does enforcement improve compliance in regulated industries” .",
+    "quoted_span": "The verified full text shows that enforcement improves compliance in regulated industries.",
+    "source_title": "Evaluation source 1: Does enforcement improve compliance in regulated industries?",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "snippet_fulltext_conflict",
+    "claim_id": "43e5ddc7-8496-42ae-ac60-91c15ac6899c",
+    "claim_text": "The available material supports the following claims: “The verified full text shows that enforcement improves compliance in regulated industries” ; “Deterministic mock abstract for Does enforcement improve compliance in regulated industries” .",
+    "quoted_span": "The verified full text shows that enforcement improves compliance in regulated industries.",
+    "source_title": "Evaluation source 1: Does enforcement improve compliance in regulated industries?",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "snippet_fulltext_conflict",
+    "claim_id": "68dcdd8d-4cfa-4676-ba2d-442ad6b9e691",
+    "claim_text": "Taken together, “Deterministic mock abstract for Does enforcement improve compliance in regulated industries” .",
+    "quoted_span": "Deterministic mock abstract for Does enforcement improve compliance in regulated industries?",
+    "source_title": "Mock academic paper 2: Does enforcement improve compliance in regulated industries? background countera",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "conflicting_literature",
+    "claim_id": "e5062beb-7f6d-4f3c-9c52-83032e4509e3",
+    "claim_text": "The available material offers several connected claims: “Contrary evidence shows that a higher minimum wage does not reduce employment; the study refutes the predicted job losses” ; “A higher minimum wage reduces employment because employers cut hours” .",
+    "quoted_span": "A higher minimum wage reduces employment because employers cut hours.",
+    "source_title": "Evaluation study 1: Does a higher minimum wage reduce employment?",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "conflicting_literature",
+    "claim_id": "bd2be149-55bd-444f-a0c2-0b01d418ffd0",
+    "claim_text": "The available material supports the following claims: “A higher minimum wage reduces employment because employers cut hours” .",
+    "quoted_span": "A higher minimum wage reduces employment because employers cut hours.",
+    "source_title": "Evaluation study 1: Does a higher minimum wage reduce employment?",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "conflicting_literature",
+    "claim_id": "13519291-25dd-49d7-95b2-b3d8b7a116b6",
+    "claim_text": "“Contrary evidence shows that a higher minimum wage does not reduce employment; the study refutes the predicted job losses” .",
+    "quoted_span": "Contrary evidence shows that a higher minimum wage does not reduce employment; the study refutes the predicted job losses.",
+    "source_title": "Evaluation study 4: Does a higher minimum wage reduce employment?",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "conflicting_literature",
+    "claim_id": "bfa76d83-1e8c-43a7-a0ae-ebb8a7c59879",
+    "claim_text": "Taken together, “A higher minimum wage reduces employment because employers cut hours” .",
+    "quoted_span": "A higher minimum wage reduces employment because employers cut hours.",
+    "source_title": "Evaluation study 1: Does a higher minimum wage reduce employment?",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "worker_interrupt",
+    "claim_id": "886fe30e-8094-4b7f-a37d-2cd1733b17c2",
+    "claim_text": "The available material offers several connected claims: “Deterministic mock snippet 3 about How does sleep duration affect cognitive performance” ; “Deterministic mock snippet 1 about How does sleep duration affect cognitive performance” .",
+    "quoted_span": "Deterministic mock snippet 3 about How does sleep duration affect cognitive performance?",
+    "source_title": "Mock web result 3 for How does sleep duration affect cognitive performance? background",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "worker_interrupt",
+    "claim_id": "841b00a5-8782-43e0-a746-bfded8ec70c5",
+    "claim_text": "The available material supports the following claims: “Deterministic mock snippet 3 about How does sleep duration affect cognitive performance” ; “Deterministic mock snippet 1 about How does sleep duration affect cognitive performance” ; “Deterministic mock snippet 2 about How does sleep duration affect cognitive performance” ; “Deterministic mock abstract for How does sleep duration affect cognitive performance” .",
+    "quoted_span": "Deterministic mock snippet 1 about How does sleep duration affect cognitive performance?",
+    "source_title": "Mock web result 1 for How does sleep duration affect cognitive performance? Background and boundaries",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "worker_interrupt",
+    "claim_id": "450b1cb8-a2a9-4c95-832b-370ffdde706e",
+    "claim_text": "The available material supports the following claims: “Deterministic mock snippet 3 about How does sleep duration affect cognitive performance” ; “Deterministic mock abstract for How does sleep duration affect cognitive performance” .",
+    "quoted_span": "Deterministic mock snippet 3 about How does sleep duration affect cognitive performance?",
+    "source_title": "Mock web result 3 for How does sleep duration affect cognitive performance? background",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "worker_interrupt",
+    "claim_id": "0c0a993c-ec5a-4f86-8c99-3fcfcfde5ad5",
+    "claim_text": "Taken together, “Deterministic mock snippet 3 about How does sleep duration affect cognitive performance” .",
+    "quoted_span": "Deterministic mock snippet 3 about How does sleep duration affect cognitive performance?",
+    "source_title": "Mock web result 3 for How does sleep duration affect cognitive performance? background",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "rate_limited",
+    "claim_id": "85ca1b76-06f9-4e7d-86c2-3e218dbe13b3",
+    "claim_text": "The available material offers several connected claims: “Deterministic mock abstract for What evidence supports the effectiveness of carbon pricing” ; “Deterministic mock abstract for What evidence supports the effectiveness of carbon pricing” .",
+    "quoted_span": "Deterministic mock abstract for What evidence supports the effectiveness of carbon pricing?",
+    "source_title": "Mock academic paper 1: What evidence supports the effectiveness of carbon pricing? background",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "rate_limited",
+    "claim_id": "69a947d7-bfdf-41b7-8b45-6d97fc4e9dd8",
+    "claim_text": "The available material supports the following claims: “Deterministic mock abstract for What evidence supports the effectiveness of carbon pricing” .",
+    "quoted_span": "Deterministic mock abstract for What evidence supports the effectiveness of carbon pricing?",
+    "source_title": "Mock academic paper 2: What evidence supports the effectiveness of carbon pricing? background",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "rate_limited",
+    "claim_id": "543299fe-6c8d-4c39-83f0-d527adf735e9",
+    "claim_text": "Taken together, “Deterministic mock abstract for What evidence supports the effectiveness of carbon pricing” .",
+    "quoted_span": "Deterministic mock abstract for What evidence supports the effectiveness of carbon pricing?",
+    "source_title": "Mock academic paper 2: What evidence supports the effectiveness of carbon pricing? Established facts",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "budget_exhausted",
+    "claim_id": "ff2a4026-dbf9-4aff-9ccd-7bbb9b4951e3",
+    "claim_text": "The available material offers several connected claims: “Deterministic mock snippet 3 about What are the limitations of remote work productivity research” ; “Deterministic mock snippet 1 about What are the limitations of remote work productivity research” .",
+    "quoted_span": "Deterministic mock snippet 1 about What are the limitations of remote work productivity research?",
+    "source_title": "Mock web result 1 for What are the limitations of remote work productivity research? background",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "budget_exhausted",
+    "claim_id": "ab774f72-485b-4484-80a9-988d2722d5da",
+    "claim_text": "The available material supports the following claims: “Deterministic mock snippet 3 about What are the limitations of remote work productivity research” ; “Deterministic mock snippet 1 about What are the limitations of remote work productivity research” ; “Deterministic mock snippet 2 about What are the limitations of remote work productivity research” ; “Deterministic mock abstract for What are the limitations of remote work productivity research” .",
+    "quoted_span": "Deterministic mock snippet 2 about What are the limitations of remote work productivity research?",
+    "source_title": "Mock web result 2 for What are the limitations of remote work productivity research? Background and bo",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "budget_exhausted",
+    "claim_id": "4b4218f5-b2fa-48a5-be0f-c99b5f10e9a2",
+    "claim_text": "The available material supports the following claims: “Deterministic mock snippet 3 about What are the limitations of remote work productivity research” ; “Deterministic mock abstract for What are the limitations of remote work productivity research” .",
+    "quoted_span": "Deterministic mock abstract for What are the limitations of remote work productivity research?",
+    "source_title": "Mock academic paper 1: What are the limitations of remote work productivity research? background counte",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "budget_exhausted",
+    "claim_id": "ee15e43e-e5f8-4db2-8111-81cb5b19da36",
+    "claim_text": "Taken together, “Deterministic mock snippet 3 about What are the limitations of remote work productivity research” .",
+    "quoted_span": "Deterministic mock snippet 3 about What are the limitations of remote work productivity research?",
+    "source_title": "Mock web result 3 for What are the limitations of remote work productivity research? background",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "real_remote_work",
+    "claim_id": "53f1be48-daea-4281-a486-cef5f176955a",
+    "claim_text": "The available material offers several connected claims: “Remote arrangements raise the throughput of work that can be done alone and reduce the throughput of work that depends on rapid coordination” ; “A randomised field experiment assigned 1,100 customer service agents to remote or office work for eight months” .",
+    "quoted_span": "Remote arrangements raise the throughput of work that can be done alone and reduce the throughput of work that depends on rapid coordination.",
+    "source_title": "Longitudinal Evidence on Remote Work and Team Output",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "real_remote_work",
+    "claim_id": "9829b2e9-ba75-42c1-baca-6e6835431ce6",
+    "claim_text": "The available material supports the following claims: “Remote arrangements raise the throughput of work that can be done alone and reduce the throughput of work that depends on rapid coordination” ; “Remote agents spend less time in unplanned interruptions, which helps independent work, and less time in synchronous problem solving, which hurts coordinated work” ; “Most claims about remote work productivity rest on measures that do not measure output” ; “A randomised field experiment assigned 1,100 customer service agents to remote or office work for eight months” .",
+    "quoted_span": "Remote arrangements raise the throughput of work that can be done alone and reduce the throughput of work that depends on rapid coordination.",
+    "source_title": "Longitudinal Evidence on Remote Work and Team Output",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "real_remote_work",
+    "claim_id": "2f032084-dcfe-4d5f-a783-b0d9b524f610",
+    "claim_text": "“The disagreement is a measurement artefact before it is a disagreement about remote work” ; “The effect does not differ significantly from zero” .",
+    "quoted_span": "The disagreement is a measurement artefact before it is a disagreement about remote work.",
+    "source_title": "Measurement Problems in Remote Work Research",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "real_remote_work",
+    "claim_id": "4eb932aa-b93d-48db-984b-a3e84df6fcfb",
+    "claim_text": "The available material supports the following claims: “Remote arrangements raise the throughput of work that can be done alone and reduce the throughput of work that depends on rapid coordination” ; “A randomised field experiment assigned 1,100 customer service agents to remote or office work for eight months” ; “Remote agents spend less time in unplanned interruptions, which helps independent work, and less time in synchronous problem solving, which hurts coordinated work” ; “Most claims about remote work productivity rest on measures that do not measure output” .",
+    "quoted_span": "Most claims about remote work productivity rest on measures that do not measure output.",
+    "source_title": "Measurement Problems in Remote Work Research",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "real_remote_work",
+    "claim_id": "8fc4d1ca-4f3b-4786-971b-63033c2027e4",
+    "claim_text": "“The disagreement is a measurement artefact before it is a disagreement about remote work” ; “The pooled evidence does not support the large gains reported by manager surveys” .",
+    "quoted_span": "The pooled evidence does not support the large gains reported by manager surveys.",
+    "source_title": "A Meta-Analysis of 27 Remote Work Studies Finds No Reliable Productivity Effect",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "real_remote_work",
+    "claim_id": "59412dd2-6fac-4a62-b4c7-7828480585f7",
+    "claim_text": "The available material supports the following claims: “Remote arrangements raise the throughput of work that can be done alone and reduce the throughput of work that depends on rapid coordination” ; “Remote agents spend less time in unplanned interruptions, which helps independent work, and less time in synchronous problem solving, which hurts coordinated work” ; “Most claims about remote work productivity rest on measures that do not measure output” ; “On current evidence the average effect of remote work on productivity is close to zero, with high variance between settings” .",
+    "quoted_span": "On current evidence the average effect of remote work on productivity is close to zero, with high variance between settings.",
+    "source_title": "A Meta-Analysis of 27 Remote Work Studies Finds No Reliable Productivity Effect",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "real_remote_work",
+    "claim_id": "066a4122-6e68-424c-a450-2b46cdb9cd91",
+    "claim_text": "Taken together, “Most claims about remote work productivity rest on measures that do not measure output” .",
+    "quoted_span": "Most claims about remote work productivity rest on measures that do not measure output.",
+    "source_title": "Measurement Problems in Remote Work Research",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  },
+  {
+    "case_id": "real_microplastics",
+    "claim_id": "37b392c3-de4e-4309-ac0b-7732b79e74bc",
+    "claim_text": "The available material offers several connected claims: “No epidemiological study has reported a health outcome associated with drinking-water microplastic exposure” ; “The presence of plastic particles in drinking water is widespread and is not confined to a single region or supplier” .",
+    "quoted_span": "No epidemiological study has reported a health outcome associated with drinking-water microplastic exposure.",
+    "source_title": "Risk Assessment of Microplastics in Drinking Water: Current Position",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "real_microplastics",
+    "claim_id": "9cb7f16b-d216-4cc2-921b-d964c2f436ef",
+    "claim_text": "The available material supports the following claims: “This assessment reviews exposure estimates and hazard data for microplastics in drinking water and asks whether current concentrations are associated with a demonstrated health risk” ; “We did not measure health outcomes and we did not estimate dose in milligrams” ; “The presence of plastic particles in drinking water is widespread and is not confined to a single region or supplier” ; “We collected 259 tap water samples from 14 municipal systems and analysed them by infrared spectroscopy with a 10 micrometre cutoff” .",
+    "quoted_span": "This assessment reviews exposure estimates and hazard data for microplastics in drinking water and asks whether current concentrations are associated with a demonstrated health risk.",
+    "source_title": "Risk Assessment of Microplastics in Drinking Water: Current Position",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "real_microplastics",
+    "claim_id": "c48f2d94-e3d4-446a-8fbc-dcd599f3fa2c",
+    "claim_text": "“No epidemiological study has reported a health outcome associated with drinking-water microplastic exposure” ; “On current evidence, microplastics in drinking water at measured concentrations do not constitute an established health risk” .",
+    "quoted_span": "On current evidence, microplastics in drinking water at measured concentrations do not constitute an established health risk.",
+    "source_title": "Risk Assessment of Microplastics in Drinking Water: Current Position",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "real_microplastics",
+    "claim_id": "22cd18b0-26b8-4456-827f-5a41c51a6064",
+    "claim_text": "The available material supports the following claims: “This assessment reviews exposure estimates and hazard data for microplastics in drinking water and asks whether current concentrations are associated with a demonstrated health risk” ; “The presence of plastic particles in drinking water is widespread and is not confined to a single region or supplier” ; “We did not measure health outcomes and we did not estimate dose in milligrams” ; “Bottled water from the same regions contained 22 particles per litre on average, compared with 9 particles per litre in tap water” .",
+    "quoted_span": "This assessment reviews exposure estimates and hazard data for microplastics in drinking water and asks whether current concentrations are associated with a demonstrated health risk.",
+    "source_title": "Risk Assessment of Microplastics in Drinking Water: Current Position",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "real_microplastics",
+    "claim_id": "c583d7a3-63fd-4e6f-81ed-6877b6984030",
+    "claim_text": "“On current evidence, microplastics in drinking water at measured concentrations do not constitute an established health risk” ; “No epidemiological study has reported a health outcome associated with drinking-water microplastic exposure” .",
+    "quoted_span": "On current evidence, microplastics in drinking water at measured concentrations do not constitute an established health risk.",
+    "source_title": "Risk Assessment of Microplastics in Drinking Water: Current Position",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "real_microplastics",
+    "claim_id": "bc3de60a-cb18-41ed-abee-8501e3865121",
+    "claim_text": "The available material supports the following claims: “This assessment reviews exposure estimates and hazard data for microplastics in drinking water and asks whether current concentrations are associated with a demonstrated health risk” ; “We cannot say from this work whether the concentrations we measured have any health consequence, and readers should not interpret detection as evidence of harm” ; “The presence of plastic particles in drinking water is widespread and is not confined to a single region or supplier” ; “We collected 259 tap water samples from 14 municipal systems and analysed them by infrared spectroscopy with a 10 micrometre cutoff” .",
+    "quoted_span": "This assessment reviews exposure estimates and hazard data for microplastics in drinking water and asks whether current concentrations are associated with a demonstrated health risk.",
+    "source_title": "Risk Assessment of Microplastics in Drinking Water: Current Position",
+    "reviewer_label": "partial",
+    "reviewer_notes": "Quote supports one of the distinct claims but does not cover the other claim(s) in the claim text."
+  },
+  {
+    "case_id": "real_microplastics",
+    "claim_id": "cdbb2231-048d-4481-a28a-13abc41fb412",
+    "claim_text": "Taken together, “This assessment reviews exposure estimates and hazard data for microplastics in drinking water and asks whether current concentrations are associated with a demonstrated health risk” .",
+    "quoted_span": "This assessment reviews exposure estimates and hazard data for microplastics in drinking water and asks whether current concentrations are associated with a demonstrated health risk.",
+    "source_title": "Risk Assessment of Microplastics in Drinking Water: Current Position",
+    "reviewer_label": "supported",
+    "reviewer_notes": "Quote directly supports the claim."
+  }
+]
