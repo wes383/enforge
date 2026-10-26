@@ -1,0 +1,127 @@
+{
+  "dataset": "phase9-v2",
+  "generated_at": "2026-10-26T05:57:41.917439+00:00",
+  "provider": "real",
+  "model": "qwen3.8-flash",
+  "articles_dir": "data/files/judge_articles",
+  "cases": [
+    {
+      "case_id": "general_knowledge",
+      "coherence": 3,
+      "specificity_discipline": 4,
+      "calibrated_tone": 5,
+      "notes": "The article is cautious and internally consistent, but it repeats the same evidence limitation across multiple sections without advancing the argument. Its largest weakness is circular, overextended prose that states the lack of detail instead of analyzing it.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 2263,
+      "output_tokens": 444,
+      "error": null
+    },
+    {
+      "case_id": "academic_review",
+      "coherence": 3,
+      "specificity_discipline": 4,
+      "calibrated_tone": 5,
+      "notes": "The article is coherent but highly repetitive, restating the retrieval-generation boundary and evidence gaps across sections. Its largest weakness is generic abstraction, with few concrete metric names, examples, or empirical details to distinguish sections.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 2620,
+      "output_tokens": 638,
+      "error": null
+    },
+    {
+      "case_id": "controversial_topic",
+      "coherence": 3,
+      "specificity_discipline": 2,
+      "calibrated_tone": 5,
+      "notes": "The article maintains a clear conditional argument but repeats the same deterrence-versus-adaptation logic across sections without adding new evidence or detail. Its largest weakness is excessive abstraction: it provides no concrete cases, dates, numbers, or named sources beyond generic citation tags.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 2306,
+      "output_tokens": 584,
+      "error": null
+    },
+    {
+      "case_id": "abstract_only",
+      "coherence": 2,
+      "specificity_discipline": 4,
+      "calibrated_tone": 4,
+      "notes": "The largest weakness is heavy repetition: the same cautions about missing dates, populations, exposure definitions, and outcome specificity are restated across sections rather than developed. This makes the argument feel circular and reduces its forward progression, even though the tone remains appropriately cautious.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 2273,
+      "output_tokens": 640,
+      "error": null
+    },
+    {
+      "case_id": "incomplete_metadata",
+      "coherence": 2,
+      "specificity_discipline": 3,
+      "calibrated_tone": 5,
+      "notes": "The largest weakness is severe repetition and circular phrasing across sections, which makes the article feel like restated caveats rather than developed argument. It remains coherent in focus but fails to advance the discussion or provide substantive detail.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 1733,
+      "output_tokens": 585,
+      "error": null
+    },
+    {
+      "case_id": "snippet_fulltext_conflict",
+      "coherence": 2,
+      "specificity_discipline": 4,
+      "calibrated_tone": 4,
+      "notes": "The article repeats the same broad caveat across every section, making the argument feel circular rather than developed. Its tone is cautious, but the lack of concrete examples or evidence leaves the analysis abstract.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 1634,
+      "output_tokens": 763,
+      "error": null
+    },
+    {
+      "case_id": "conflicting_literature",
+      "coherence": 2,
+      "specificity_discipline": 4,
+      "calibrated_tone": 5,
+      "notes": "The largest weakness is heavy repetition of the same unresolved contradiction across sections, which makes the argument feel circular. The meta note about “following sections” presenting quotations only is also confusing and disrupts coherence.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 2058,
+      "output_tokens": 1051,
+      "error": null
+    },
+    {
+      "case_id": "real_remote_work",
+      "coherence": 3,
+      "specificity_discipline": 4,
+      "calibrated_tone": 5,
+      "notes": "The largest weakness is heavy repetition of the same examples and conclusions across sections, which makes the argument feel padded rather than progressively developed.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 2027,
+      "output_tokens": 489,
+      "error": null
+    },
+    {
+      "case_id": "real_microplastics",
+      "coherence": 2,
+      "specificity_discipline": 4,
+      "calibrated_tone": 5,
+      "notes": "The article repeatedly restates the same distinction between detection and proven harm without advancing a clear argument across sections. Its main weakness is redundancy, which makes the structure feel circular rather than progressively developed.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 2415,
+      "output_tokens": 448,
+      "error": null
+    }
+  ],
+  "summary": {
+    "cases": 9,
+    "judged": 9,
+    "errors": 0,
+    "coherence": 2.4444,
+    "specificity_discipline": 3.6667,
+    "calibrated_tone": 4.7778,
+    "input_tokens": 19329,
+    "output_tokens": 5642
+  },
+  "generation": {
+    "cases": 9,
+    "completed": 9,
+    "evidence": 167,
+    "claims": 492,
+    "input_tokens": 100939,
+    "output_tokens": 503135
+  },
+  "note": "Writing-quality trend only. Coherence, specificity discipline and calibrated tone are scored by a model at temperature 0; citation validity and claim support stay in the deterministic audit and are not judged here."
+}
