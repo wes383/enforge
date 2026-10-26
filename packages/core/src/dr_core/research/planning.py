@@ -126,9 +126,19 @@ def build_outline_with_llm(
         "optional counter-evidence section and a conclusion.",
         f"The number of sections follows the word budget; about {low}-{high} "
         "sections for this article. Do not pad or repeat the same angle.",
+        "Every section has one distinct analytical job: for example framing the "
+        "dispute, establishing a mechanism, testing it against counter-evidence, "
+        "examining scope or context, or resolving the implication. No two "
+        "sections may share the same job or reach the same conclusion.",
+        "Order the sections as a progression, so each one adds a step the "
+        "previous sections did not cover.",
         "Every section title is a short topic phrase, never a question and never "
-        "a duplicate.",
-        "purpose states what the section settles and what it hands to the next one.",
+        "a duplicate. Titles must be concrete and must not be interchangeable.",
+        "purpose states the specific new step this section contributes and what "
+        "it hands to the next one. Avoid generic purposes such as reviewing the "
+        "evidence, discussing limitations, or summarizing the topic.",
+        "The conclusion decides the issue and names the remaining uncertainty; "
+        "it must not restate the body sections one by one.",
         "search_terms are 1-4 short keyword phrases a search engine can match. "
         "Every section needs them.",
         "target_words is an approximate share of the article's total budget.",

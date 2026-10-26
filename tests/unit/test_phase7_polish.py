@@ -97,6 +97,12 @@ def test_polish_prompt_fixes_the_fact_surface_and_marks_sections_untrusted():
     assert "unify terminology" in rules
     assert "Do not add, drop or change any fact" in rules
     assert "Never invent a marker" in rules
+    assert "Keep every citation marker of a section" in rules
+    assert "remove repeated sentences, restated caveats and restated conclusions" in rules
+    assert "let the other section do its own work" in rules
+    assert "Never use the word 'question'" in rules
+    assert "Keep the concrete supplied details" in rules
+    assert "Remove any meta commentary" in rules
     assert "UNTRUSTED_SOURCE_DATA" in rules
     assert prompt["language"] == "en"
     assert prompt["topic"] == "Does remote work reduce productivity?"

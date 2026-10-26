@@ -3582,7 +3582,7 @@ def _disclosure_target(
 
 
 def _template_disclosure(template_sections: list[str], brief: ResearchBrief) -> str:
-    """Tell the reader which sections carry no model-written prose.
+    """Tell the reader which sections carry source quotations only.
 
     A section that fell back to the deterministic template is still part of
     the article, so the article has to say so instead of presenting the
@@ -3592,12 +3592,12 @@ def _template_disclosure(template_sections: list[str], brief: ResearchBrief) -> 
     titles = "、".join(template_sections) if zh else ", ".join(template_sections)
     if zh:
         return (
-            f"以下章节未能取得模型正文，仅以可核验的引文呈现：{titles}。"
-            "这些章节的判断应结合原文审阅。"
+            f"仅含引文的章节：{titles}。"
+            "这些章节以可核验的原文引文呈现，判断应结合原始来源。"
         )
     return (
-        "The following sections carry no model-written prose and present "
-        f"verifiable quotations only: {titles}. Their claims should be read "
+        f"Source-only sections: {titles}. These sections present verifiable "
+        "quotations rather than authored prose; their claims should be read "
         "against the original sources."
     )
 

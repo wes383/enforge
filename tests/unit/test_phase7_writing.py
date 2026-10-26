@@ -703,7 +703,28 @@ def test_llm_section_receives_prior_section_context():
         '<UNTRUSTED_SOURCE_DATA label="prior_section_summary"'
     )
     assert any("not evidence" in rule for rule in prompt["rules"])
+    assert any("must add a step they do not contain" in rule for rule in prompt["rules"])
     assert any("Paraphrase the evidence" in rule for rule in prompt["rules"])
+    assert any("Every paragraph must add" in rule for rule in prompt["rules"])
+    assert any("do not restate the article's central issue" in rule for rule in prompt["rules"])
+    assert any("Never use the word 'question'" in rule for rule in prompt["rules"])
+    assert any("use that detail" in rule for rule in prompt["rules"])
+
+
+def test_template_disclosure_names_source_only_sections_without_process_meta():
+    from dr_core.research.nodes import _template_disclosure
+
+    english = _template_disclosure(["Issue Boundary", "Evidence Map"], _brief())
+    assert english.startswith("Source-only sections: Issue Boundary, Evidence Map.")
+    assert "following sections" not in english
+    assert "model-written" not in english
+
+    chinese = _template_disclosure(
+        ["范围与证据"],
+        _brief(language=ProjectLanguage.ZH),
+    )
+    assert chinese.startswith("仅含引文的章节：范围与证据。")
+    assert "研究问题" not in chinese
 
 
 def test_summarize_section_content_keeps_leading_sentences_without_markers():

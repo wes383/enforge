@@ -919,6 +919,18 @@ def _writing_prompt(
         "source counts, databases, or the research process.",
         "Synthesize the evidence into an argument; cite claims without "
         "enumerating sources one by one.",
+        "Every paragraph must add a new claim, mechanism, scope condition, "
+        "contrast, or implication. Do not spend a paragraph restating what an "
+        "earlier section already established.",
+        "Do not reuse the same caveat, limitation, or conclusion in more than "
+        "one section. State it once, in the section where it changes the "
+        "interpretation, and let other sections do their own work.",
+        "Never use the word 'question', pose a rhetorical question, or describe "
+        "the article as answering a question; name the issue, debate, or "
+        "dispute directly.",
+        "When the evidence supplies a date, place, population, method, sample "
+        "size, magnitude, or named case, use that detail instead of flattening "
+        "it into 'studies show' or 'the evidence suggests'.",
         "Paraphrase the evidence in your own words. Do not copy whole sentences "
         "or long phrases from quoted_text; short quotations are acceptable only "
         "when the exact wording matters.",
@@ -929,20 +941,21 @@ def _writing_prompt(
     if role == "introduction":
         rules.append(
             "Open with the topic's stakes and central tension, frame the scope "
-            "and line of argument, and preview what follows. Do not list evidence "
-            "or key findings as bullets."
+            "and line of argument, and preview the article as a sequence of "
+            "distinct steps. Do not list evidence or key findings as bullets."
         )
     elif role == "conclusion":
         rules.append(
-            "Synthesize the article's argument, state what can and cannot be "
-            "concluded, and do not repeat sentences from earlier sections or "
-            "introduce new facts."
+            "Synthesize the argument into a decision and the uncertainty that "
+            "remains. Do not summarize section by section, repeat earlier "
+            "sentences, or introduce new facts."
         )
     else:
         rules.append(
-            "Open with a substantive claim, develop it across 2-4 paragraphs, "
-            "integrate counter-evidence, and connect back to the article's "
-            "central issue."
+            "Open with this section's substantive new claim and develop it "
+            "across 2-4 paragraphs. End on the consequence of that claim only "
+            "when it changes the overall assessment; do not restate the "
+            "article's central issue in every section."
         )
     if max_search_requests > 0:
         rules.append(
@@ -981,7 +994,9 @@ def _writing_prompt(
         rules.append(
             "Use prior_sections only for continuity and to avoid repeating "
             "earlier material. They are not evidence: do not cite them or copy "
-            "facts, numbers, or citations from them."
+            "facts, numbers, or citations from them. Treat their summaries as "
+            "already established: your section must add a step they do not "
+            "contain, and must not reuse their sentences or conclusions."
         )
     rules.append(
         "When returning markdown, also return a 1-2 sentence `summary` for "

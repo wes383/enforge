@@ -218,6 +218,11 @@ def test_outline_llm_prompt_carries_article_type_and_avoids_questions():
     rules = " ".join(prompt["rules"])
     assert "short topic phrase" in rules
     assert "number of sections follows the word budget" in rules
+    assert "one distinct analytical job" in rules
+    assert "No two sections may share the same job" in rules
+    assert "Order the sections as a progression" in rules
+    assert "Avoid generic purposes" in rules
+    assert "must not restate the body sections" in rules
     assert "UNTRUSTED_SOURCE_DATA" in rules
     dumped = json.dumps(prompt)
     assert "research_questions" not in dumped
