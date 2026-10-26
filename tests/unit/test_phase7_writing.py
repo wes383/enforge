@@ -809,6 +809,41 @@ def test_summarize_section_content_keeps_leading_sentences_without_markers():
     assert "[S1]" not in summary
 
 
+def test_llm_section_repairs_a_draft_with_unsupported_numbers_once():
+    section_id = uuid4()
+    support = _evidence(section_id, uuid4())
+    llm = _SequenceLLM(
+        [
+            {
+                "markdown": (
+                    "## Enforcement outcomes\n\n"
+                    "Compliance rose 87% after enforcement [S1]."
+                )
+            },
+            {
+                "markdown": (
+                    "## Enforcement outcomes\n\n"
+                    "Enforcement improves compliance among audited firms [S1]."
+                )
+            },
+        ]
+    )
+
+    draft, _, _, _ = _section(
+        section_id,
+        title="Enforcement outcomes",
+        evidence=[support],
+        llm=llm,
+    )
+
+    assert draft.used_llm
+    assert "87" not in draft.content
+    assert len(llm.prompts) == 2
+    repair = json.loads(llm.prompts[1])["repair"]
+    assert "87" in repair["reason"]
+    assert "rejected_markdown" in repair
+
+
 def test_llm_section_falls_back_on_unsafe_output():
     section_id = uuid4()
     support = _evidence(section_id, uuid4())

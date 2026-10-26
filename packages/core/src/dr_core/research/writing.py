@@ -917,6 +917,7 @@ def _llm_section(
             return None
         markdown = str(payload.get("markdown") or "").strip()
 
+    raw_markdown = markdown
     markdown, reason = _validate_llm_markdown(
         markdown,
         section=section,
@@ -924,6 +925,22 @@ def _llm_section(
         evidence=evidence,
         sources=sources,
     )
+    if markdown is None and _repairable_section_reason(reason):
+        repaired_prompt = _repair_section_prompt(prompt, raw_markdown, reason)
+        repaired_payload = _generate_section_payload(
+            llm,
+            repaired_prompt,
+            section,
+            max_tokens=max_tokens,
+        )
+        if repaired_payload is not None:
+            markdown, reason = _validate_llm_markdown(
+                str(repaired_payload.get("markdown") or "").strip(),
+                section=section,
+                allowed_markers=allowed_markers,
+                evidence=evidence,
+                sources=sources,
+            )
     if markdown is None:
         logger.warning("Rejected LLM section for %s: %s", section.title, reason)
         return None
@@ -1290,6 +1307,38 @@ def _parse_search_requests(
         if len(requests) >= limit:
             break
     return requests
+
+
+def _repairable_section_reason(reason: str) -> bool:
+    return reason.startswith(
+        (
+            "no usable paragraph (paragraph with unsupported numbers:",
+            "no usable paragraph (paragraph without citation",
+        )
+    )
+
+
+def _repair_section_prompt(
+    prompt: str,
+    rejected_markdown: str,
+    reason: str,
+) -> str:
+    payload = json.loads(prompt)
+    payload["repair"] = {
+        "reason": reason,
+        "rejected_markdown": wrap_untrusted(
+            rejected_markdown[:12000],
+            label="rejected_section",
+        ),
+    }
+    payload["rules"] = [
+        "The previous draft was rejected: "
+        f"{reason}. Rewrite the whole section without those numbers, using "
+        "only numbers that appear in the supplied evidence. Keep every factual "
+        "paragraph cited with a supplied marker, and do not explain the repair.",
+        *payload["rules"],
+    ]
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _validate_llm_markdown(

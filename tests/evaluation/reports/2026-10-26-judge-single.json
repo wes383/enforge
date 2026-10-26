@@ -1,0 +1,44 @@
+{
+  "dataset": "phase9-v2",
+  "generated_at": "2026-10-26T07:34:40.464994+00:00",
+  "provider": "real",
+  "model": "qwen3.8-flash",
+  "articles_dir": "data/files/judge_articles_single",
+  "cases": [
+    {
+      "case_id": "conflicting_literature",
+      "coherence": 3,
+      "specificity_discipline": 4,
+      "calibrated_tone": 5,
+      "notes": "The article repeats the same conflict across sections without developing substantive synthesis or identifying concrete conditions. This redundancy weakens coherence despite the cautious tone and source attribution.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 875,
+      "output_tokens": 327,
+      "error": null
+    }
+  ],
+  "summary": {
+    "cases": 1,
+    "judged": 1,
+    "errors": 0,
+    "coherence": 3.0,
+    "specificity_discipline": 4.0,
+    "calibrated_tone": 5.0,
+    "input_tokens": 875,
+    "output_tokens": 327
+  },
+  "generation": {
+    "cases": 1,
+    "completed": 1,
+    "evidence": 8,
+    "claims": 12,
+    "polish": {
+      "applied": 1,
+      "failed": 0,
+      "other": 0
+    },
+    "input_tokens": 8605,
+    "output_tokens": 28988
+  },
+  "note": "Writing-quality trend only. Coherence, specificity discipline and calibrated tone are scored by a model at temperature 0; citation validity and claim support stay in the deterministic audit and are not judged here."
+}
