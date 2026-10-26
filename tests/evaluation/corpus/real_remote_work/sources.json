@@ -1,0 +1,66 @@
+{
+  "notes": "Authored corpus for the real_remote_work quality case. The documents are written for this evaluation, not copied from published sources: the writer's names, venues and DOIs are fictional. Their value is that they are full-length prose with concrete numbers, explicit contradictions and a measurement critique, so the production parser, chunker, evidence extractor and claim verifier run over realistic input instead of placeholder snippets. Replace docs/*.md and the metadata here to evaluate a real corpus; the schema is the contract.",
+  "synthetic_content": true,
+  "sources": [
+    {
+      "id": "web-01",
+      "kind": "web",
+      "url": "https://corpus.evaluation.invalid/remote-work/longitudinal-output",
+      "title": "Longitudinal Evidence on Remote Work and Team Output",
+      "snippet": "A four-year panel of 4,200 knowledge workers found individual output up 12 percent and cross-team collaboration down 18 percent.",
+      "authors": ["Mara Ellison", "Ivo Petrov"],
+      "published_at": "2023-06-14",
+      "venue": "Workplace Analytics Lab",
+      "doi": null,
+      "body": "docs/web-01.md"
+    },
+    {
+      "id": "web-02",
+      "kind": "web",
+      "url": "https://corpus.evaluation.invalid/remote-work/meta-analysis",
+      "title": "A Meta-Analysis of 27 Remote Work Studies Finds No Reliable Productivity Effect",
+      "snippet": "Pooling 27 studies and 41,000 workers gives a standardised mean difference of 0.04, with an interval that crosses zero.",
+      "authors": ["Hanna Brooks", "Kenji Ito"],
+      "published_at": "2022-11-03",
+      "venue": "Review of Work and Organisation",
+      "doi": null,
+      "body": "docs/web-02.md"
+    },
+    {
+      "id": "web-03",
+      "kind": "web",
+      "url": "https://corpus.evaluation.invalid/remote-work/call-centre-trial",
+      "title": "A Field Experiment in a Call Centre: Task Interdependence Decides the Effect",
+      "snippet": "Remote agents resolved 8 percent more independent cases per hour and 4 percent fewer coordination-heavy cases per hour.",
+      "authors": ["Sofia Almeida"],
+      "published_at": "2023-09-20",
+      "venue": "Journal of Applied Labour Studies",
+      "doi": null,
+      "body": "docs/web-03.md"
+    },
+    {
+      "id": "web-04",
+      "kind": "web",
+      "url": "https://corpus.evaluation.invalid/remote-work/industry-survey",
+      "title": "Industry Survey Report: Remote Work and Output",
+      "snippet": "Managers at 380 firms estimated a 20 percent increase in output and a 35 percent increase in satisfaction after moving to remote work.",
+      "authors": ["Network for Workplace Practice"],
+      "published_at": "2021-04-08",
+      "venue": "Industry Survey Series",
+      "doi": null,
+      "body": "docs/web-04.md"
+    },
+    {
+      "id": "web-05",
+      "kind": "web",
+      "url": "https://corpus.evaluation.invalid/remote-work/measurement-review",
+      "title": "Measurement Problems in Remote Work Research",
+      "snippet": "Nineteen of 27 studies relied on self-report and 41 percent used hours logged as the outcome, which is an input rather than output.",
+      "authors": ["Ruth Kaplan", "Daniel Osei"],
+      "published_at": "2024-02-27",
+      "venue": "Evidence and Policy Review",
+      "doi": null,
+      "body": "docs/web-05.md"
+    }
+  ]
+}

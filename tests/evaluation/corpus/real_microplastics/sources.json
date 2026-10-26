@@ -1,0 +1,56 @@
+{
+  "notes": "Authored corpus for the real_microplastics quality case: two peer-review-style documents and two web documents that disagree about what detection implies. Names, venues and DOIs are fictional; the documents are written for this evaluation. Replace docs/*.md to evaluate real sources.",
+  "synthetic_content": true,
+  "sources": [
+    {
+      "id": "academic-01",
+      "kind": "academic",
+      "url": "https://corpus.evaluation.invalid/microplastics/urinary-cohort",
+      "title": "Urinary Microplastic Concentrations and Inflammatory Markers in a Prospective Cohort",
+      "snippet": "A cohort of 1,240 adults found a small association between urinary particle concentration and C-reactive protein.",
+      "authors": ["Lena Fischer", "Arjun Mehta", "Clara Nowak"],
+      "published_at": "2023-03-11",
+      "venue": "Journal of Environmental Epidemiology",
+      "doi": "10.5555/corpus.microplastics.2023.011",
+      "abstract": "We measured microplastic particle concentrations in repeated urine samples from 1,240 adults and tested associations with three inflammatory markers. Higher concentrations were associated with elevated C-reactive protein, with a 0.12 milligram per litre increase per interquartile range. The design cannot establish causality.",
+      "body": "docs/academic-01.md"
+    },
+    {
+      "id": "academic-02",
+      "kind": "academic",
+      "url": "https://corpus.evaluation.invalid/microplastics/toxicology-review",
+      "title": "A Systematic Review of Microplastic Toxicology: What the Animal and Human Evidence Supports",
+      "snippet": "Of 40 experimental studies, none demonstrated a consistent adverse effect at concentrations reported in drinking water.",
+      "authors": ["Peter Lindqvist", "Amara Diallo"],
+      "published_at": "2024-01-19",
+      "venue": "Reviews in Environmental Health",
+      "doi": "10.5555/corpus.microplastics.2024.004",
+      "abstract": "We reviewed 40 experimental studies of microplastic exposure, of which 31 were rodent studies and 9 were human biomarker studies. No study demonstrated a consistent adverse effect at concentrations reported in drinking water, and the human evidence does not show a dose-response relationship.",
+      "body": "docs/academic-02.md"
+    },
+    {
+      "id": "web-01",
+      "kind": "web",
+      "url": "https://corpus.evaluation.invalid/microplastics/consumer-testing",
+      "title": "Consumer Testing Report: Microplastics in Municipal Drinking Water",
+      "snippet": "Ninety percent of 259 tap water samples contained at least one plastic particle; the maximum was 61 particles per litre.",
+      "authors": ["Consumer Water Testing Group"],
+      "published_at": "2022-07-05",
+      "venue": "Consumer Testing Report",
+      "doi": null,
+      "body": "docs/web-01.md"
+    },
+    {
+      "id": "web-02",
+      "kind": "web",
+      "url": "https://corpus.evaluation.invalid/microplastics/risk-assessment",
+      "title": "Risk Assessment of Microplastics in Drinking Water: Current Position",
+      "snippet": "No epidemiological study has reported a health outcome associated with drinking-water microplastic exposure; the margin to the lowest effect dose is about a thousandfold.",
+      "authors": ["Office of Water Risk Assessment"],
+      "published_at": "2023-10-30",
+      "venue": "Risk Assessment Series",
+      "doi": null,
+      "body": "docs/web-02.md"
+    }
+  ]
+}

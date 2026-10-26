@@ -11,6 +11,7 @@ from dr_core.db.enums import (
     ArtifactType,
     ClaimVerificationStatus,
     EvidenceType,
+    RunEventType,
     SectionCoverageStatus,
     SearchQueryStatus,
     SourceVersionKind,
@@ -23,6 +24,7 @@ from dr_core.db.models import (
     EvidenceItem,
     OutlineSectionRecord,
     ResearchRun,
+    RunEvent,
     SearchQuery,
     Source,
     SourceVersion,
@@ -39,6 +41,13 @@ class CaseMetrics:
     partial_coverage_rate: float | None
     unsupported_claim_ratio: float | None
     metadata_accuracy_rate: float | None
+    # Coverage answers "could this section be written at all"; the target ratio
+    # answers "did it reach the evidence it was budgeted for". It is taken from
+    # the run's own evidence analysis rather than recomputed here.
+    evidence_target_ratio: float | None
+    full_text_evidence_ratio: float | None
+    snippet_only_cited_ratio: float | None
+    citation_span_traceability: float | None
     source_count: int
     academic_source_count: int
     evidence_count: int
@@ -66,15 +75,15 @@ def collect_case_metrics(
     claims = list(
         session.scalars(select(Claim).where(Claim.run_id == run.id))
     )
-    citations = set(
-        session.scalars(
-            select(ClaimEvidence.claim_id).where(
+    claim_links: dict[UUID, list[UUID]] = {}
+    if claims:
+        for claim_id, evidence_id in session.execute(
+            select(ClaimEvidence.claim_id, ClaimEvidence.evidence_id).where(
                 ClaimEvidence.claim_id.in_([claim.id for claim in claims])
             )
-        )
-        if claims
-        else []
-    )
+        ).all():
+            claim_links.setdefault(claim_id, []).append(evidence_id)
+    citations = set(claim_links)
     sources = list(
         session.scalars(
             select(Source).where(Source.project_id == run.project_id)
@@ -143,6 +152,29 @@ def collect_case_metrics(
         is SourceVersionKind.FULL_TEXT
     )
     report_text = _latest_report_text(session, storage, run)
+    evidence_by_id = {item.id: item for item in evidence}
+    quoted_by_version = _QuotedVersions(storage, versions)
+    snippet_only_cited = 0
+    traceable_cited = 0
+    for evidence_ids in claim_links.values():
+        linked = [
+            evidence_by_id[evidence_id]
+            for evidence_id in evidence_ids
+            if evidence_id in evidence_by_id
+        ]
+        if not linked:
+            continue
+        if all(
+            _version_kind(versions.get(item.source_version_id))
+            is SourceVersionKind.SEARCH_SNIPPET
+            for item in linked
+        ):
+            snippet_only_cited += 1
+        if any(
+            quoted_by_version.contains(item.source_version_id, item.quoted_text)
+            for item in linked
+        ):
+            traceable_cited += 1
     duration = None
     if run.started_at is not None and run.finished_at is not None:
         duration = round(
@@ -174,6 +206,10 @@ def collect_case_metrics(
             complete_sources,
             len(bibliographic_sources),
         ),
+        evidence_target_ratio=_evidence_target_ratio(session, run.id),
+        full_text_evidence_ratio=_ratio(full_text_evidence, len(evidence)),
+        snippet_only_cited_ratio=_ratio(snippet_only_cited, len(cited_claims)),
+        citation_span_traceability=_ratio(traceable_cited, len(cited_claims)),
         source_count=len(sources),
         academic_source_count=sum(
             1 for source in sources if source.source_type.value != "web_page"
@@ -220,6 +256,18 @@ def aggregate_metrics(metrics: Iterable[CaseMetrics]) -> dict[str, Any]:
         "metadata_accuracy_rate": _mean(
             item.metadata_accuracy_rate for item in values
         ),
+        "evidence_target_ratio": _mean(
+            item.evidence_target_ratio for item in values
+        ),
+        "full_text_evidence_ratio": _mean(
+            item.full_text_evidence_ratio for item in values
+        ),
+        "snippet_only_cited_ratio": _mean(
+            item.snippet_only_cited_ratio for item in values
+        ),
+        "citation_span_traceability": _mean(
+            item.citation_span_traceability for item in values
+        ),
         "average_cost_usd": round(
             sum(item.cost_usd for item in values) / len(values),
             6,
@@ -229,6 +277,7 @@ def aggregate_metrics(metrics: Iterable[CaseMetrics]) -> dict[str, Any]:
         ),
         "total_evidence": sum(item.evidence_count for item in values),
         "total_claims": sum(item.claim_count for item in values),
+        "total_refute_evidence": sum(item.refute_evidence_count for item in values),
     }
 
 
@@ -297,6 +346,72 @@ def case_metrics_dict(metrics: CaseMetrics) -> dict[str, Any]:
 
 def _version_kind(version: SourceVersion | None) -> SourceVersionKind | None:
     return version.content_kind if version is not None else None
+
+
+class _QuotedVersions:
+    """Answers whether a quotation really occurs in the source it cites.
+
+    Every quotation is extracted from a document the pipeline fetched, so a
+    traceability rate below 1.0 means a claim is citing a span that is not in
+    the cited version. The text is read once per version because a full-text
+    source usually supports several quotations.
+    """
+
+    def __init__(
+        self,
+        storage: FileStorage,
+        versions: dict[UUID, SourceVersion],
+    ) -> None:
+        self._storage = storage
+        self._versions = versions
+        self._cache: dict[UUID, str] = {}
+
+    def contains(self, version_id: UUID, quote: str) -> bool:
+        needle = " ".join(quote.split())
+        if not needle:
+            return False
+        return needle in self._text(version_id)
+
+    def _text(self, version_id: UUID) -> str:
+        cached = self._cache.get(version_id)
+        if cached is not None:
+            return cached
+        version = self._versions.get(version_id)
+        text = ""
+        if version is not None:
+            if version.storage_key:
+                try:
+                    text = self._storage.read(version.storage_key).decode(
+                        "utf-8",
+                        "replace",
+                    )
+                except Exception:
+                    text = ""
+            if not text:
+                text = str((version.version_metadata or {}).get("snippet") or "")
+        normalized = " ".join(text.split())
+        self._cache[version_id] = normalized
+        return normalized
+
+
+def _evidence_target_ratio(session: Session, run_id: UUID) -> float | None:
+    """The run's own last evidence-analysis target ratio."""
+    event = session.scalar(
+        select(RunEvent)
+        .where(
+            RunEvent.run_id == run_id,
+            RunEvent.event_type == RunEventType.PROGRESS,
+            RunEvent.dedupe_key.like("evidence:analyzed:round:%"),
+        )
+        .order_by(RunEvent.created_at.desc())
+        .limit(1)
+    )
+    if event is None:
+        return None
+    try:
+        return round(float((event.payload or {}).get("target_ratio")), 4)
+    except (TypeError, ValueError):
+        return None
 
 
 def _metadata_complete(source: Source) -> bool:

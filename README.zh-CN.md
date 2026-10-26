@@ -84,7 +84,7 @@ Next.js 16 + React 19 单页研究工作台，中英文与明暗主题：
 - 持久化事件表 + SSE（`Last-Event-ID` 断线续传），数据库是唯一真相来源。
 - 可选 Langfuse 观测：运行 trace、节点 span、提供商调用、LLM 用量与评测分数，默认只发元数据。
 - 安全控制：SSRF 校验、上传类型/魔数/大小校验、服务端生成存储键、路径穿越防护、日志密钥脱敏、提示词注入扫描与不可信内容隔离。
-- 10 类场景的可重复质量评测集，全部使用确定性规则指标，不依赖 LLM-as-judge。
+- 12 类场景的可重复质量评测集，全部使用确定性规则指标，不依赖 LLM-as-judge。其中 10 个 case 用生成摘要验证工作流不变量，2 个 case 回放冻结全文文档，使证据目标达成率、全文证据占比、仅凭摘要引用、引文可追溯性等质量指标真正能变化。
 
 ## 架构
 
@@ -269,14 +269,21 @@ docker compose up -d --force-recreate api worker
 测试与真实密钥完全隔离：`docker-compose.test.yml` 强制 `RESEARCH_PROVIDER_MODE=mock` 并清空所有提供商密钥与 LLM 开关，即使 `.env` 里有真实 Key 也不会联网或消耗配额。
 
 ```bash
-# 单元 + 集成 + 评测（当前 324 passed）
+# 单元 + 集成 + 评测（当前 388 passed）
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
 # 只跑质量评测集
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm test python -m dr_core.evaluation
+
+# 同时导出每个 case 的成稿与"主张 → 引文"对照
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  --profile test run --rm test python -m dr_core.evaluation \
+  --articles /app/data/files/eval_articles
 ```
+
+评测集分两部分。10 个 case 使用生成的占位摘要，验证工作流自身的正确性：中断恢复、限流、预算耗尽、元数据缺失。另 2 个语料 case 把 `tests/evaluation/corpus/` 里冻结的全文文档送进生产解析器、切片器与证据抽取器，并守住占位数据无法撼动的质量指标：证据目标达成率、全文证据占比、仅凭摘要引用的主张比例、引文是否真的出现在所引来源里。语料文档为本评测集撰写并标注 `synthetic_content`；替换文件即可用真实语料评测。
 
 前端静态检查：
 
@@ -300,7 +307,7 @@ docker compose exec api python -m dr_core.maintenance   # 文件记录对账
 - 默认写作由确定性生成器完成，保证离线可测、引用可追溯，但不具备真实模型的推理与改写能力；模型开关默认关闭。
 - 尚未接入真实 Embedding 服务，离线使用确定性词项哈希向量，语义召回质量有限；`auto` 模式会自动降级为关键词检索。
 - 本地解析不包含 OCR，扫描版/加密 PDF 会明确失败；表格提取为尽力而为。
-- 质量评测集使用 Mock 提供商，指标反映离线行为；接入真实服务后需要重新评测。
+- 10 个 mock 评测 case 使用生成摘要，指标反映的是流水线而非写作质量；2 个语料 case 回放冻结全文文档，才是衡量证据质量的部分。两者都不评判文笔：跑的是确定性写作器，不是配置的模型。
 - 规划代理与取证代理需要兼容 OpenAI 的工具调用模型与真实检索提供商；离线与 Mock 运行使用一次性模型提纲（若启用）或确定性模板加确定性检索。代理输出始终经过校验，不构成引用依据。
 - 引文追踪依赖学术元数据：没有 DOI 或只有非结构化文本的参考文献会作为线索返回给代理，不会入库。代理的检索以运行事件呈现，不写入检索记录表。
 - 审批后的提纲是结构权威：代理不能增加库外来源或主张，取证代理也不能改动章节结构。

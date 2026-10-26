@@ -173,6 +173,11 @@ def _registry(
 
 
 def build_case_registry(case: EvaluationCase, settings: Settings) -> ProviderRegistry:
+    if case.scenario == "corpus":
+        from dr_core.evaluation.corpus import build_corpus_registry
+
+        return build_corpus_registry(case, settings)
+
     if case.scenario == "academic_review":
         abstracts = [
             (

@@ -18,7 +18,7 @@ class EvaluationCase:
     expected: dict[str, object] = field(default_factory=dict)
 
 
-DATASET_VERSION = "phase9-v1"
+DATASET_VERSION = "phase9-v2"
 
 CASES: tuple[EvaluationCase, ...] = (
     EvaluationCase(
@@ -91,6 +91,38 @@ CASES: tuple[EvaluationCase, ...] = (
         scenario="budget_exhausted",
         budget_usd=Decimal("0.01"),
         expected={"report_mentions_budget": True},
+    ),
+    # Corpus cases replay frozen full-text documents instead of placeholder
+    # snippets, so the parser, chunker and evidence extractor see real prose and
+    # real numbers. The documents live in tests/evaluation/corpus/<id>/. The
+    # thresholds are the measured baseline, not a quality target: they exist so
+    # a regression shows up as a red case.
+    EvaluationCase(
+        id="real_remote_work",
+        category="真实语料·网页正反证据",
+        topic="Does remote work reduce team productivity?",
+        scenario="corpus",
+        expected={
+            "min_full_text_evidence": 6,
+            "min_target_ratio": 0.35,
+            "min_full_text_ratio": 0.95,
+            "max_snippet_only_cited_ratio": 0.05,
+            "min_span_traceability": 0.99,
+        },
+    ),
+    EvaluationCase(
+        id="real_microplastics",
+        category="真实语料·学术全文与数字",
+        topic="Do microplastic exposures in drinking water affect human health?",
+        scenario="corpus",
+        expected={
+            "min_full_text_evidence": 6,
+            "min_academic_sources": 2,
+            "min_target_ratio": 0.30,
+            "min_full_text_ratio": 0.95,
+            "max_snippet_only_cited_ratio": 0.05,
+            "min_span_traceability": 0.99,
+        },
     ),
 )
 

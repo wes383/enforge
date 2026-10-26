@@ -89,7 +89,7 @@ A Next.js 16 + React 19 single-page research workspace with Chinese/English UI a
 - A persistent event table plus SSE (`Last-Event-ID` reconnection); the database is the single source of truth.
 - Optional Langfuse observability: run traces, node spans, provider calls, LLM usage, and evaluation scores; metadata only by default.
 - Security controls: SSRF validation (host blocklist, port allowlist, literal-IP checks, plus DNS resolution for direct fetchers), upload type/magic-byte/size checks, server-generated storage keys, path-traversal protection, log secret redaction, prompt-injection scanning, and untrusted-content isolation.
-- A repeatable quality evaluation set with 10 scenarios, using deterministic rule-based metrics rather than LLM-as-judge.
+- A repeatable quality evaluation set with 12 scenarios, using deterministic rule-based metrics rather than LLM-as-judge. Ten cases exercise workflow invariants on generated snippets; two replay frozen full-text documents so the quality metrics (evidence target achievement, full-text evidence share, snippet-only citations, quote traceability) can actually move.
 
 ## Architecture
 
@@ -274,14 +274,21 @@ Changing the public API address `NEXT_PUBLIC_API_BASE_URL` requires rebuilding `
 Tests are fully isolated from real keys: `docker-compose.test.yml` forces `RESEARCH_PROVIDER_MODE=mock` and clears every provider key and LLM switch, so even a `.env` with real keys never reaches the network or consumes quota.
 
 ```bash
-# Unit + integration + evaluation (currently 324 passed)
+# Unit + integration + evaluation (currently 388 passed)
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
 # Quality evaluation set only
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm test python -m dr_core.evaluation
+
+# Also write each case's finished article and claim/citation pairs
+docker compose -f docker-compose.yml -f docker-compose.test.yml \
+  --profile test run --rm test python -m dr_core.evaluation \
+  --articles /app/data/files/eval_articles
 ```
+
+The evaluation set has two halves. Ten cases use generated placeholder snippets and assert that the workflow itself holds together: interruption recovery, rate limiting, budget exhaustion, incomplete metadata. Two corpus cases replay frozen full-text documents from `tests/evaluation/corpus/` through the production parser, chunker and evidence extractor, and gate the quality metrics that the placeholder cases cannot move: evidence target achievement, the share of evidence taken from full text, citations that rest only on snippets, and whether a quotation actually occurs in the source it cites. The corpus documents are authored for this suite and marked `synthetic_content`; replacing the files with real documents is the intended way to evaluate a real corpus.
 
 Frontend static checks:
 
@@ -305,7 +312,7 @@ docker compose exec api python -m dr_core.maintenance   # file-record reconcilia
 - Writing is deterministic by default, which keeps it testable offline and citations traceable, but it does not have the reasoning or rewriting ability of a real model; model switches are off by default.
 - No real embedding service is wired in yet. Offline runs use deterministic term-hash vectors, so semantic recall is limited; `auto` mode falls back to keyword search.
 - Local parsing does not include OCR; scanned or encrypted PDFs fail explicitly, and table extraction is best-effort.
-- The quality evaluation set uses mock providers, so its metrics describe offline behavior; re-run it after connecting real services.
+- The ten mock evaluation cases use generated snippets, so their metrics describe the pipeline rather than writing quality; the two corpus cases replay frozen full-text documents and are the ones that measure evidence quality. Neither half judges prose: the deterministic writer is exercised, not the configured model.
 - The planning and evidence agents need an OpenAI-compatible tool-calling model and a real search provider. Offline and mock runs use the one-shot model outline (if enabled) or the deterministic template plus deterministic retrieval; agent output is always validated and never becomes citation authority.
 - Citation chasing depends on academic metadata: DOI-less or unstructured references are returned to the agent as leads, not ingested. Agent searches appear as run events rather than search-query rows.
 - The approved outline is authoritative: agents cannot add sources or claims outside stored evidence, and the evidence agent cannot alter section structure.

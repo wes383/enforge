@@ -5,6 +5,7 @@ import time
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import Any
 from uuid import UUID
 
@@ -12,10 +13,15 @@ from sqlalchemy import delete, select, text
 
 from dr_core.config import Settings, get_settings
 from dr_core.db import Database, get_database
+from dr_core.db.enums import ArtifactType
 from dr_core.db.models import (
     Artifact,
+    Claim,
+    ClaimEvidence,
+    EvidenceItem,
     ResearchProject,
     ResearchRun,
+    Source,
     SourceVersion,
 )
 from dr_core.db.repositories import ProjectRepository, RunRepository
@@ -62,6 +68,10 @@ class EvaluationOptions:
     keep_data: bool = False
     include_human_sample: bool = True
     human_review_limit: int = 20
+    # When set, every case writes <id>.md (the finished article) and
+    # <id>.claims.jsonl (each claim with the quotations it cites) here. The
+    # files are written before any cleanup, so they survive without --keep.
+    export_dir: str | None = None
 
 
 def evaluation_settings() -> Settings:
@@ -164,6 +174,26 @@ def run_evaluation(
             "section_coverage": (
                 "Outline sections marked covered divided by all sections."
             ),
+            "evidence_target": (
+                "Share of the per-section evidence targets the run reached, as "
+                "reported by the run's own evidence analysis. Coverage says a "
+                "section could be written; this says it was supported as well "
+                "as its word budget asked for."
+            ),
+            "full_text_ratio": (
+                "Evidence extracted from fetched full text divided by all "
+                "evidence, including evidence taken from search snippets."
+            ),
+            "snippet_only_citations": (
+                "Claims whose every citation points at a search snippet rather "
+                "than fetched full text, divided by claims with citations."
+            ),
+            "span_traceability": (
+                "Claims with at least one quotation that occurs verbatim in the "
+                "cited source version, divided by claims with citations. This "
+                "reads the source text; the citation audit only checks that a "
+                "marker maps to a stored source."
+            ),
             "unsupported_claim_ratio": (
                 "Claims not verified as SUPPORTED divided by all claims."
             ),
@@ -264,6 +294,14 @@ def _run_case(
             if run and options.include_human_sample
             else []
         )
+        if options.export_dir and run is not None:
+            _export_case(
+                session,
+                project_id,
+                run_id,
+                case.id,
+                options.export_dir,
+            )
     checks = _checks(
         case,
         metrics,
@@ -384,6 +422,46 @@ def _checks(
                 accuracy,
             )
         )
+    if "min_target_ratio" in expected:
+        checks.append(
+            _check(
+                "evidence_target_reached",
+                metrics.evidence_target_ratio is not None
+                and metrics.evidence_target_ratio
+                >= float(expected["min_target_ratio"]),
+                metrics.evidence_target_ratio,
+            )
+        )
+    if "min_full_text_ratio" in expected:
+        checks.append(
+            _check(
+                "full_text_evidence_share",
+                metrics.full_text_evidence_ratio is not None
+                and metrics.full_text_evidence_ratio
+                >= float(expected["min_full_text_ratio"]),
+                metrics.full_text_evidence_ratio,
+            )
+        )
+    if "max_snippet_only_cited_ratio" in expected:
+        checks.append(
+            _check(
+                "snippet_only_citations_bounded",
+                metrics.snippet_only_cited_ratio is not None
+                and metrics.snippet_only_cited_ratio
+                <= float(expected["max_snippet_only_cited_ratio"]),
+                metrics.snippet_only_cited_ratio,
+            )
+        )
+    if "min_span_traceability" in expected:
+        checks.append(
+            _check(
+                "citation_span_traceable",
+                metrics.citation_span_traceability is not None
+                and metrics.citation_span_traceability
+                >= float(expected["min_span_traceability"]),
+                metrics.citation_span_traceability,
+            )
+        )
     if "min_failed_queries" in expected:
         checks.append(
             _check(
@@ -440,6 +518,96 @@ def _trace_summary(events: list[dict[str, Any]]) -> dict[str, Any]:
             and event["body"].get("level") == "ERROR"
         ),
     }
+
+
+def _export_case(
+    session,
+    project_id: UUID,
+    run_id: UUID,
+    case_id: str,
+    directory: str,
+) -> None:
+    """Write the finished article and its claims for human reading.
+
+    The metrics say whether the pipeline held together; these two files are
+    what a reviewer actually has to read, so they are written even when the
+    run data is deleted afterwards.
+    """
+    path = Path(directory)
+    path.mkdir(parents=True, exist_ok=True)
+    storage = get_file_storage()
+    artifact = session.scalar(
+        select(Artifact)
+        .where(
+            Artifact.run_id == run_id,
+            Artifact.artifact_type == ArtifactType.RESEARCH_REPORT,
+        )
+        .order_by(Artifact.version.desc())
+        .limit(1)
+    )
+    article = ""
+    if artifact is not None and artifact.storage_key:
+        try:
+            article = storage.read(artifact.storage_key).decode("utf-8")
+        except Exception:
+            article = ""
+    (path / f"{case_id}.md").write_text(article, encoding="utf-8")
+
+    claims = list(
+        session.scalars(
+            select(Claim)
+            .where(Claim.run_id == run_id)
+            .order_by(Claim.created_at, Claim.id)
+        )
+    )
+    links: dict[UUID, list[ClaimEvidence]] = {}
+    if claims:
+        for link in session.scalars(
+            select(ClaimEvidence).where(
+                ClaimEvidence.claim_id.in_([claim.id for claim in claims])
+            )
+        ):
+            links.setdefault(link.claim_id, []).append(link)
+    evidence = {
+        item.id: item
+        for item in session.scalars(
+            select(EvidenceItem).where(EvidenceItem.run_id == run_id)
+        )
+    }
+    titles = {
+        source.id: source.title
+        for source in session.scalars(
+            select(Source).where(Source.project_id == project_id)
+        )
+    }
+    with (path / f"{case_id}.claims.jsonl").open("w", encoding="utf-8") as handle:
+        for claim in claims:
+            citations = []
+            for link in links.get(claim.id, []):
+                item = evidence.get(link.evidence_id)
+                if item is None:
+                    continue
+                citations.append(
+                    {
+                        "relation": link.relation.value,
+                        "source_title": titles.get(item.source_id),
+                        "evidence_type": item.evidence_type.value,
+                        "claim_summary": item.claim_summary,
+                        "quoted_text": item.quoted_text,
+                    }
+                )
+            handle.write(
+                json.dumps(
+                    {
+                        "claim": claim.claim_text,
+                        "status": claim.verification_status.value,
+                        "claim_type": claim.claim_type.value,
+                        "citations": citations,
+                    },
+                    ensure_ascii=False,
+                )
+                + "\n"
+            )
 
 
 def _cleanup_project(database: Database, project_id: UUID) -> None:

@@ -25,6 +25,14 @@ def test_quality_evaluation_dataset_passes_thresholds():
     assert summary["citation_support_accuracy"] >= 0.3, summary
     assert summary["unsupported_claim_ratio"] <= 0.8, summary
     assert summary["metadata_accuracy_rate"] >= 0.8, summary
+    # The regression floor for the quality metrics. These are the measured
+    # values of this dataset, so a drop means a real change in behaviour; they
+    # are not quality targets.
+    assert summary["evidence_target_ratio"] >= 0.40, summary
+    assert summary["full_text_evidence_ratio"] >= 0.35, summary
+    assert summary["snippet_only_cited_ratio"] <= 0.60, summary
+    assert summary["citation_span_traceability"] >= 0.90, summary
+    assert summary["total_refute_evidence"] >= 20, summary
     assert len(report["human_review_sample"]) > 0
     for case in report["cases"]:
         assert case["passed"], case

@@ -24,6 +24,13 @@ def main() -> int:
     parser.add_argument("--output", help="Write the JSON report to this path")
     parser.add_argument("--keep", action="store_true", help="Keep evaluation data")
     parser.add_argument(
+        "--articles",
+        help=(
+            "Write each case's finished article and claim/citation pairs to "
+            "this directory"
+        ),
+    )
+    parser.add_argument(
         "--human-review",
         help="JSON list with claim_id and reviewer_label fields",
     )
@@ -46,6 +53,7 @@ def main() -> int:
         options=EvaluationOptions(
             keep_data=args.keep,
             include_human_sample=not args.no_human_sample,
+            export_dir=args.articles,
         ),
         reviewed_claims=reviewed,
     )
