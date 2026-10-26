@@ -1,0 +1,50 @@
+{
+  "dataset": "phase9-v2",
+  "generated_at": "2026-10-26T06:48:47.215406+00:00",
+  "provider": "real",
+  "model": "qwen3.8-flash",
+  "articles_dir": "data/files/judge_articles_retest",
+  "cases": [
+    {
+      "case_id": "controversial_topic",
+      "coherence": 3,
+      "specificity_discipline": 2,
+      "calibrated_tone": 5,
+      "notes": "The article is coherent but highly repetitive, restating the same deterrence-versus-adaptation conditional across sections without adding concrete evidence. Its lack of named cases, dates, or measurable examples makes the argument abstract and difficult to assess.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 2073,
+      "output_tokens": 795,
+      "error": null
+    },
+    {
+      "case_id": "conflicting_literature",
+      "coherence": 3,
+      "specificity_discipline": 4,
+      "calibrated_tone": 3,
+      "notes": "The largest weakness is repetitive restatement of the same two-source conflict without much added structure or evidence. The final decision also introduces S3 as reinforcing the reduction claim despite S2's refutation, leaving the conclusion dangling and somewhat overconfident.",
+      "model": "qwen3.8-flash",
+      "input_tokens": 2229,
+      "output_tokens": 1529,
+      "error": null
+    }
+  ],
+  "summary": {
+    "cases": 2,
+    "judged": 2,
+    "errors": 0,
+    "coherence": 3.0,
+    "specificity_discipline": 3.0,
+    "calibrated_tone": 4.0,
+    "input_tokens": 4302,
+    "output_tokens": 2324
+  },
+  "generation": {
+    "cases": 2,
+    "completed": 2,
+    "evidence": 24,
+    "claims": 117,
+    "input_tokens": 18433,
+    "output_tokens": 85136
+  },
+  "note": "Writing-quality trend only. Coherence, specificity discipline and calibrated tone are scored by a model at temperature 0; citation validity and claim support stay in the deterministic audit and are not judged here."
+}

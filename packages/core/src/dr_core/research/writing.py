@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+from collections import Counter
 from dataclasses import dataclass, field, replace
 from typing import Any, Callable
 from uuid import UUID
@@ -24,6 +25,7 @@ from dr_core.research.models import (
 from dr_core.research.text import (
     citation_markers,
     is_low_value_sentence,
+    sentence_spans,
     split_paragraphs,
     split_sentences,
     tokenize,
@@ -103,6 +105,17 @@ def summarize_section_content(content: str) -> str:
     sentences = split_sentences(text)
     summary = " ".join(sentences[:2]) if sentences else text
     return " ".join(summary.split())[:_PRIOR_SUMMARY_CHARS]
+
+
+def summarize_section_ending(content: str, max_chars: int = 500) -> str:
+    """Last sentences a later section must not restate."""
+    cleaned = _CITATION_RE.sub(" ", content)
+    paragraphs = split_paragraphs(cleaned)
+    if not paragraphs:
+        return ""
+    sentences = split_sentences(paragraphs[-1])
+    ending = " ".join(sentences[-2:]) if sentences else paragraphs[-1]
+    return " ".join(ending.split())[-max_chars:]
 
 
 def _normalize_summary(value: Any, content: str) -> str:
@@ -197,6 +210,114 @@ def compose_section(
 def numeric_tokens(text: str) -> set[str]:
     cleaned = re.sub(r"\[S\d+\]", " ", text)
     return {match.group() for match in _NUMBER_RE.finditer(cleaned)}
+
+
+_REPEAT_MIN_SHARED = 6
+_REPEAT_JACCARD = 0.6
+_REPEAT_CONTAINMENT = 0.8
+_REPEAT_LENGTH_SLACK = 1.15
+
+
+def trim_cross_section_repetition(
+    content: str,
+    prior_contents: list[str],
+) -> tuple[str, int]:
+    """Drop later sentences that mostly restate earlier sections.
+
+    The prompt asks each section to advance the argument, but thin evidence
+    still invites padded restatement. Removing a sentence is only safe when
+    every citation marker it carries survives elsewhere in the same section;
+    otherwise the citation audit would see a lost source. Headings and
+    reference lines are never considered.
+    """
+    prior_tokens = [
+        tokens
+        for text in prior_contents
+        for line in text.splitlines()
+        if _is_prose_line(line)
+        for sentence, _, _ in sentence_spans(line)
+        for tokens in (tokenize(sentence),)
+        if len(tokens) >= _REPEAT_MIN_SHARED
+    ]
+    if not prior_tokens:
+        return content, 0
+    marker_counts = Counter(
+        {
+            marker: content.count(f"[S{marker}]")
+            for marker in citation_markers(content)
+        }
+    )
+    output: list[str] = []
+    removed = 0
+    for line in content.splitlines():
+        if not _is_prose_line(line):
+            output.append(line)
+            continue
+        spans = sentence_spans(line)
+        if len(spans) < 2:
+            output.append(line)
+            continue
+        removals: list[tuple[int, int]] = []
+        for sentence, start, end in spans:
+            tokens = tokenize(sentence)
+            if len(tokens) < _REPEAT_MIN_SHARED:
+                continue
+            if not any(
+                _near_duplicate(tokens, prior) for prior in prior_tokens
+            ):
+                continue
+            occurrences = Counter(
+                marker
+                for marker in citation_markers(sentence)
+                for _ in range(sentence.count(f"[S{marker}]"))
+            )
+            if any(
+                marker_counts[marker] - count < 1
+                for marker, count in occurrences.items()
+            ):
+                continue
+            removals.append((start, end))
+            for marker, count in occurrences.items():
+                marker_counts[marker] -= count
+            removed += 1
+        if not removals:
+            output.append(line)
+            continue
+        pieces: list[str] = []
+        cursor = 0
+        for start, end in removals:
+            pieces.append(line[cursor:start])
+            cursor = end
+        pieces.append(line[cursor:])
+        cleaned = re.sub(r"[ \t]{2,}", " ", "".join(pieces)).strip()
+        if cleaned:
+            output.append(cleaned)
+    trimmed = re.sub(r"\n{3,}", "\n\n", "\n".join(output)).strip()
+    if not re.search(r"[A-Za-z0-9\u3400-\u9fff]", trimmed):
+        return content, 0
+    return trimmed, removed
+
+
+def _is_prose_line(line: str) -> bool:
+    stripped = line.strip()
+    return bool(
+        stripped
+        and not stripped.startswith("#")
+        and not re.match(r"^\[S\d+\]", stripped)
+    )
+
+
+def _near_duplicate(tokens: set[str], other: set[str]) -> bool:
+    shared = len(tokens & other)
+    if shared < _REPEAT_MIN_SHARED:
+        return False
+    union = len(tokens | other)
+    if union and shared / union >= _REPEAT_JACCARD:
+        return True
+    return (
+        shared / min(len(tokens), len(other)) >= _REPEAT_CONTAINMENT
+        and len(tokens) <= len(other) * _REPEAT_LENGTH_SLACK
+    )
 
 
 def _deterministic_section(
@@ -922,6 +1043,8 @@ def _writing_prompt(
         "Every paragraph must add a new claim, mechanism, scope condition, "
         "contrast, or implication. Do not spend a paragraph restating what an "
         "earlier section already established.",
+        "`target_words` is an upper bound, not a quota. Stop when the section's "
+        "new step is complete; never pad by restating evidence or the conclusion.",
         "Do not reuse the same caveat, limitation, or conclusion in more than "
         "one section. State it once, in the section where it changes the "
         "interpretation, and let other sections do their own work.",
@@ -994,9 +1117,9 @@ def _writing_prompt(
         rules.append(
             "Use prior_sections only for continuity and to avoid repeating "
             "earlier material. They are not evidence: do not cite them or copy "
-            "facts, numbers, or citations from them. Treat their summaries as "
-            "already established: your section must add a step they do not "
-            "contain, and must not reuse their sentences or conclusions."
+            "facts, numbers, or citations from them. Treat their summaries and "
+            "endings as already established: your section must add a step they "
+            "do not contain, and must not reuse their sentences or conclusions."
         )
     rules.append(
         "When returning markdown, also return a 1-2 sentence `summary` for "
@@ -1038,11 +1161,17 @@ def _prior_prompt_sections(
     for entry in reversed(prior_sections):
         title = " ".join(str(entry.get("title") or "").split())[:200]
         summary = " ".join(str(entry.get("summary") or "").split())
+        ending = " ".join(str(entry.get("ending") or "").split())
         if summary and remaining > 0:
             summary = summary[:remaining]
             remaining -= len(summary)
         else:
             summary = ""
+        if ending and remaining > 0:
+            ending = ending[-remaining:]
+            remaining -= len(ending)
+        else:
+            ending = ""
         rendered.append(
             {
                 "index": entry.get("index"),
@@ -1050,6 +1179,11 @@ def _prior_prompt_sections(
                 "summary": (
                     wrap_untrusted(summary, label="prior_section_summary")
                     if summary
+                    else None
+                ),
+                "ending": (
+                    wrap_untrusted(ending, label="prior_section_ending")
+                    if ending
                     else None
                 ),
             }

@@ -32,6 +32,7 @@ from dr_core.research.writing import (
     compose_section,
     numeric_tokens,
     summarize_section_content,
+    trim_cross_section_repetition,
 )
 from dr_core.research.text import is_low_value_sentence, sentence_spans
 
@@ -691,6 +692,7 @@ def test_llm_section_receives_prior_section_context():
                 "index": 0,
                 "title": "Introduction",
                 "summary": "The introduction frames the enforcement debate.",
+                "ending": "The section closes by naming the compliance dispute.",
             }
         ],
     )
@@ -701,6 +703,9 @@ def test_llm_section_receives_prior_section_context():
     assert "Introduction" in prompt["prior_sections"][0]["title"]
     assert prompt["prior_sections"][0]["summary"].startswith(
         '<UNTRUSTED_SOURCE_DATA label="prior_section_summary"'
+    )
+    assert prompt["prior_sections"][0]["ending"].startswith(
+        '<UNTRUSTED_SOURCE_DATA label="prior_section_ending"'
     )
     assert any("not evidence" in rule for rule in prompt["rules"])
     assert any("must add a step they do not contain" in rule for rule in prompt["rules"])
@@ -725,6 +730,69 @@ def test_template_disclosure_names_source_only_sections_without_process_meta():
     )
     assert chinese.startswith("仅含引文的章节：范围与证据。")
     assert "研究问题" not in chinese
+
+
+def test_repetition_trim_removes_a_restated_sentence_when_citations_survive():
+    prior = (
+        "## Evidence\n\n"
+        "Enforcement improves compliance among audited firms through repeated "
+        "inspections [S1]. Audits raise administrative costs for small firms [S1]."
+    )
+    content = (
+        "## Context\n\n"
+        "Enforcement improves compliance among audited firms through repeated "
+        "inspections [S1]. The same audit data show firms adapt their reporting "
+        "practices over time [S1]. A separate survey reports lower trust in the "
+        "regulator [S2]."
+    )
+
+    trimmed, removed = trim_cross_section_repetition(content, [prior])
+
+    assert removed == 1
+    assert "improves compliance among audited firms through repeated inspections" not in trimmed
+    assert "firms adapt their reporting practices" in trimmed
+    assert "[S2]" in trimmed
+
+
+def test_repetition_trim_keeps_a_restatement_that_carries_a_unique_citation():
+    prior = (
+        "## Evidence\n\n"
+        "Enforcement improves compliance among audited firms through repeated "
+        "inspections [S1]."
+    )
+    content = (
+        "## Context\n\n"
+        "Enforcement improves compliance among audited firms through repeated "
+        "inspections [S3]. A separate survey reports lower trust in the "
+        "regulator [S2]."
+    )
+
+    trimmed, removed = trim_cross_section_repetition(content, [prior])
+
+    assert removed == 0
+    assert trimmed == content
+
+
+def test_repetition_trim_removes_an_uncited_restatement():
+    prior = (
+        "## Evidence\n\n"
+        "The available evidence does not identify a time horizon for the "
+        "measured effect at all."
+    )
+    content = (
+        "## Context\n\n"
+        "The available evidence does not identify a time horizon for the "
+        "measured effect at all. A separate survey reports lower trust in the "
+        "regulator [S2]."
+    )
+
+    trimmed, removed = trim_cross_section_repetition(content, [prior])
+
+    assert removed == 1
+    assert trimmed == (
+        "## Context\n\n"
+        "A separate survey reports lower trust in the regulator [S2]."
+    )
 
 
 def test_summarize_section_content_keeps_leading_sentences_without_markers():

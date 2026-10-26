@@ -229,6 +229,22 @@ def test_outline_llm_prompt_carries_article_type_and_avoids_questions():
     assert "evidence_ids" not in dumped
 
 
+def test_outline_payload_rejects_sections_that_name_questions():
+    payload = _full_payload()
+    payload["sections"].insert(
+        3,
+        _section("Decision and Open Questions", role="body"),
+    )
+
+    outline = outline_from_payload(payload, _brief(), version=1)
+
+    assert outline is not None
+    assert all(
+        "question" not in section.title.casefold()
+        for section in outline.sections
+    )
+
+
 def test_outline_llm_failure_returns_none():
     model = _FakeLLM(_full_payload(), raises=True)
     assert (

@@ -135,7 +135,12 @@ from dr_core.research.usage import (
 )
 from dr_core.research.verification import audit_section, verify_run_claims
 from dr_core.research.write_search import WriteSearchSession
-from dr_core.research.writing import compose_section, summarize_section_content
+from dr_core.research.writing import (
+    compose_section,
+    summarize_section_content,
+    summarize_section_ending,
+    trim_cross_section_repetition,
+)
 from dr_core.schemas import (
     DraftSectionCreate,
     OutlineCreate,
@@ -2267,6 +2272,7 @@ def write_sections(ctx: ResearchContext):
             )
             new_evidence_ids: set[str] = set()
             prior_sections: list[dict] = []
+            committed_contents: list[str] = []
             sections_state: list[dict] = []
             template_sections: list[str] = []
             total_sections = len(outline.sections)
@@ -2350,6 +2356,25 @@ def write_sections(ctx: ResearchContext):
                     ),
                 )
                 content = draft.content
+                if committed_contents:
+                    content, repeated = trim_cross_section_repetition(
+                        content,
+                        committed_contents,
+                    )
+                    if repeated:
+                        ctx.emit(
+                            RunEventType.PROGRESS,
+                            message=(
+                                f"Removed {repeated} repeated sentence(s) "
+                                f"from {section.title}"
+                            ),
+                            payload={
+                                "section_index": section.index,
+                                "removed_sentences": repeated,
+                            },
+                            dedupe_key=f"section:{section.index}:repetition-trim",
+                            stage=RunStatus.WRITING,
+                        )
                 if llm is not None and not draft.used_llm:
                     template_sections.append(section.title)
                 if (
@@ -2363,12 +2388,14 @@ def write_sections(ctx: ResearchContext):
                         f"{content.rstrip()}\n\n"
                         f"{_template_disclosure(template_sections, brief)}\n"
                     )
+                committed_contents.append(content)
                 prior_sections.append(
                     {
                         "index": section.index,
                         "title": section.title,
                         "summary": draft.summary
                         or summarize_section_content(content),
+                        "ending": summarize_section_ending(content),
                     }
                 )
                 content_hash = text_sha256(content)

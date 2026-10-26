@@ -54,6 +54,7 @@ _WHITESPACE_RE = re.compile(r"\s+")
 _CJK_RE = re.compile(r"[\u3400-\u4dbf\u4e00-\u9fff]")
 _LATIN_RE = re.compile(r"[A-Za-z]")
 _QUESTION_MARKS = ("?", "？")
+_QUESTION_WORDING = re.compile(r"\bquestions?\b|问题", re.IGNORECASE)
 _INTRO_TITLES = {"introduction", "引言", "导言", "概述", "开篇"}
 _CONCLUSION_TITLES = {"conclusion", "结论", "结语", "总结"}
 _LIMITATION_TITLES = {
@@ -331,7 +332,11 @@ def _section(value: Any, brief: ResearchBrief) -> OutlineSection | None:
         _MAX_TEXTS["title"],
         min_chars=_MIN_TITLE_CHARS,
     )
-    if not title or title.rstrip().endswith(_QUESTION_MARKS):
+    if (
+        not title
+        or title.rstrip().endswith(_QUESTION_MARKS)
+        or _QUESTION_WORDING.search(title)
+    ):
         return None
     purpose = clean_model_text(
         value.get("purpose"),
