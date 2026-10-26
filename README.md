@@ -274,7 +274,7 @@ Changing the public API address `NEXT_PUBLIC_API_BASE_URL` requires rebuilding `
 Tests are fully isolated from real keys: `docker-compose.test.yml` forces `RESEARCH_PROVIDER_MODE=mock` and clears every provider key and LLM switch, so even a `.env` with real keys never reaches the network or consumes quota.
 
 ```bash
-# Unit + integration + evaluation (currently 388 passed)
+# Unit + integration + evaluation (currently 407 passed)
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -288,7 +288,7 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --articles /app/data/files/eval_articles
 ```
 
-The evaluation set has two halves. Ten cases use generated placeholder snippets and assert that the workflow itself holds together: interruption recovery, rate limiting, budget exhaustion, incomplete metadata. Two corpus cases replay frozen full-text documents from `tests/evaluation/corpus/` through the production parser, chunker and evidence extractor, and gate the quality metrics that the placeholder cases cannot move: evidence target achievement, the share of evidence taken from full text, citations that rest only on snippets, and whether a quotation actually occurs in the source it cites. The corpus documents are authored for this suite and marked `synthetic_content`; replacing the files with real documents is the intended way to evaluate a real corpus.
+The evaluation set has two halves. Ten cases use generated placeholder snippets and assert that the workflow itself holds together: interruption recovery, rate limiting, budget exhaustion, incomplete metadata. Two corpus cases replay frozen full-text documents from `tests/evaluation/corpus/` through the production parser, chunker and evidence extractor, and gate the quality metrics that the placeholder cases cannot move: evidence target achievement, the share of evidence taken from full text, citations that rest only on snippets, whether a quotation actually occurs in the source it cites, and whether contradicting results in real prose are recognised. The corpus documents are authored for this suite and marked `synthetic_content`; replacing the files with real documents is the intended way to evaluate a real corpus. Extraction splits the global evidence budget across sections by what each section still needs, so an early section cannot consume every later section's allowance; citation traceability checks every version of a source, so a quotation taken from a search snippet remains traceable once the full text has been fetched.
 
 Frontend static checks:
 

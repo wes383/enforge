@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from dataclasses import asdict, dataclass
 from typing import Any, Iterable
 from uuid import UUID
@@ -109,6 +110,15 @@ def collect_case_metrics(
             )
         )
     }
+    source_ids = {item.source_id for item in evidence}
+    versions_by_source: dict[UUID, list[SourceVersion]] = defaultdict(list)
+    if source_ids:
+        for version in session.scalars(
+            select(SourceVersion)
+            .where(SourceVersion.source_id.in_(source_ids))
+            .order_by(SourceVersion.created_at)
+        ):
+            versions_by_source[version.source_id].append(version)
     failed_queries = sum(
         1
         for query in session.scalars(
@@ -153,7 +163,7 @@ def collect_case_metrics(
     )
     report_text = _latest_report_text(session, storage, run)
     evidence_by_id = {item.id: item for item in evidence}
-    quoted_by_version = _QuotedVersions(storage, versions)
+    quoted_by_source = _QuotedVersions(storage, versions_by_source)
     snippet_only_cited = 0
     traceable_cited = 0
     for evidence_ids in claim_links.values():
@@ -171,7 +181,7 @@ def collect_case_metrics(
         ):
             snippet_only_cited += 1
         if any(
-            quoted_by_version.contains(item.source_version_id, item.quoted_text)
+            quoted_by_source.contains(item.source_id, item.quoted_text)
             for item in linked
         ):
             traceable_cited += 1
@@ -351,46 +361,49 @@ def _version_kind(version: SourceVersion | None) -> SourceVersionKind | None:
 class _QuotedVersions:
     """Answers whether a quotation really occurs in the source it cites.
 
-    Every quotation is extracted from a document the pipeline fetched, so a
-    traceability rate below 1.0 means a claim is citing a span that is not in
-    the cited version. The text is read once per version because a full-text
-    source usually supports several quotations.
+    A source can hold several versions: the search snippet that was indexed
+    first and the full text fetched later. Evidence points at one version,
+    but the quotation is traceable as soon as any version of the same source
+    contains it, so the lookup is per source rather than per version. The
+    text is read once per version because a source usually supports several
+    quotations.
     """
 
     def __init__(
         self,
         storage: FileStorage,
-        versions: dict[UUID, SourceVersion],
+        versions_by_source: dict[UUID, list[SourceVersion]],
     ) -> None:
         self._storage = storage
-        self._versions = versions
+        self._versions = versions_by_source
         self._cache: dict[UUID, str] = {}
 
-    def contains(self, version_id: UUID, quote: str) -> bool:
+    def contains(self, source_id: UUID, quote: str) -> bool:
         needle = " ".join(quote.split())
         if not needle:
             return False
-        return needle in self._text(version_id)
+        return any(
+            needle in self._text(version)
+            for version in self._versions.get(source_id, ())
+        )
 
-    def _text(self, version_id: UUID) -> str:
-        cached = self._cache.get(version_id)
+    def _text(self, version: SourceVersion) -> str:
+        cached = self._cache.get(version.id)
         if cached is not None:
             return cached
-        version = self._versions.get(version_id)
         text = ""
-        if version is not None:
-            if version.storage_key:
-                try:
-                    text = self._storage.read(version.storage_key).decode(
-                        "utf-8",
-                        "replace",
-                    )
-                except Exception:
-                    text = ""
-            if not text:
-                text = str((version.version_metadata or {}).get("snippet") or "")
+        if version.storage_key:
+            try:
+                text = self._storage.read(version.storage_key).decode(
+                    "utf-8",
+                    "replace",
+                )
+            except Exception:
+                text = ""
+        if not text:
+            text = str((version.version_metadata or {}).get("snippet") or "")
         normalized = " ".join(text.split())
-        self._cache[version_id] = normalized
+        self._cache[version.id] = normalized
         return normalized
 
 

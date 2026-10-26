@@ -3,11 +3,12 @@ from __future__ import annotations
 import contextvars
 import json
 import logging
+from collections import defaultdict
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from decimal import Decimal
-from typing import Any
+from typing import Any, Iterable
 from uuid import UUID, uuid4
 
 from langgraph.types import interrupt
@@ -1160,6 +1161,61 @@ def _quote_key(sentence: str) -> str:
     return " ".join(sentence.split()).casefold()[:400]
 
 
+def _section_quotas(
+    sections: list[OutlineSection],
+    states: dict[UUID, _SectionEvidenceState],
+    remaining: int,
+) -> dict[UUID, int]:
+    """Split the remaining evidence budget across sections that still need it.
+
+    Sections are extracted in outline order. A section whose own target is
+    unreachable (for example, it asks for more independent sources than the
+    run collected) would otherwise keep consuming the global cap and leave
+    every later section with nothing. The split is proportional to each
+    section's unmet evidence target, so a long section is funded better than
+    a short one instead of the first section taking everything.
+    """
+    pending = [
+        section for section in sections if not states[section.section_id].target_reached
+    ]
+    if not pending or remaining <= 0:
+        return {}
+    needs = {
+        section.section_id: max(
+            1,
+            states[section.section_id].target_evidence
+            - states[section.section_id].support,
+        )
+        for section in pending
+    }
+    if remaining < len(pending):
+        ordered = sorted(
+            pending,
+            key=lambda section: needs[section.section_id],
+            reverse=True,
+        )
+        return {section.section_id: 1 for section in ordered[:remaining]}
+    total = sum(needs.values())
+    quotas = {
+        section.section_id: max(1, remaining * needs[section.section_id] // total)
+        for section in pending
+    }
+    while sum(quotas.values()) > remaining:
+        largest = max(quotas, key=lambda key: (quotas[key], needs[key]))
+        quotas[largest] -= 1
+    leftover = remaining - sum(quotas.values())
+    for section in sorted(
+        pending,
+        key=lambda section: needs[section.section_id],
+        reverse=True,
+    ):
+        if leftover <= 0:
+            break
+        quotas[section.section_id] += 1
+        leftover -= 1
+    return quotas
+
+
 def _source_identity_for(
     sources: dict[UUID, Any],
     source_id: UUID,
@@ -1170,12 +1226,33 @@ def _source_identity_for(
     return source_identity(source)
 
 
+def _available_source_identities(
+    records: list[SourceRecord],
+    sources: dict[UUID, Any],
+    extra_source_ids: Iterable[UUID] = (),
+) -> int:
+    """Independent sources this run can actually quote from."""
+    source_ids = {
+        record.source_id
+        for record in records
+        if record.source_version_id is not None
+    }
+    source_ids.update(extra_source_ids)
+    return len(
+        {
+            _source_identity_for(sources, source_id)
+            for source_id in source_ids
+        }
+    )
+
+
 def extract_evidence(ctx: ResearchContext):
     def node(state: ResearchState) -> ResearchState:
         with node_timeout(ctx.settings.research_node_timeout_seconds):
             ctx.guard()
             brief = _brief(state)
             sections = _searchable_sections(_outline(state))
+            records = _source_records(state)
             ctx.ensure_status(
                 RunStatus.BUILDING_EVIDENCE,
                 event_type=RunEventType.PHASE_STARTED,
@@ -1191,11 +1268,17 @@ def extract_evidence(ctx: ResearchContext):
                 evidence_ids.update(str(item.id) for item in existing)
                 total_evidence = len(existing)
                 sources = source_views(session, ctx.project_id)
+            available_sources = _available_source_identities(
+                records,
+                sources,
+                (item.source_id for item in existing),
+            )
             section_states: dict[UUID, _SectionEvidenceState] = {}
             for section in sections:
                 target_evidence, target_identities = section_evidence_target(
                     section,
                     ctx.settings,
+                    available_sources=available_sources,
                 )
                 section_states[section.section_id] = _SectionEvidenceState(
                     target_evidence=target_evidence,
@@ -1223,7 +1306,12 @@ def extract_evidence(ctx: ResearchContext):
                     "current_node": "extract_evidence",
                 }
 
-            records = _source_records(state)
+            created_by_section: dict[UUID, int] = defaultdict(int)
+            quotas = _section_quotas(
+                sections,
+                section_states,
+                brief.max_evidence - total_evidence,
+            )
             parser = next(iter(ctx.registry.parsers), None)
             created = 0
             skipped = 0
@@ -1254,8 +1342,12 @@ def extract_evidence(ctx: ResearchContext):
                     for section in sections:
                         if total_evidence >= brief.max_evidence:
                             break
-                        section_state = section_states[section.section_id]
+                        section_id = section.section_id
+                        section_state = section_states[section_id]
                         if section_state.target_reached:
+                            continue
+                        quota = quotas.get(section_id, 0)
+                        if created_by_section[section_id] >= quota:
                             continue
                         queries = _section_queries(section)
                         unproductive = 0
@@ -1263,6 +1355,8 @@ def extract_evidence(ctx: ResearchContext):
                             if total_evidence >= brief.max_evidence:
                                 break
                             if section_state.target_reached:
+                                break
+                            if created_by_section[section_id] >= quota:
                                 break
                             known = len(section_state.identities)
                             result = retriever.search(
@@ -1281,6 +1375,8 @@ def extract_evidence(ctx: ResearchContext):
                                 if total_evidence >= brief.max_evidence:
                                     break
                                 if section_state.target_reached:
+                                    break
+                                if created_by_section[section_id] >= quota:
                                     break
                                 if not section_state.can_quote(hit.source_id):
                                     continue
@@ -1315,6 +1411,7 @@ def extract_evidence(ctx: ResearchContext):
                                     evidence_ids.add(str(item.id))
                                 total_evidence += 1
                                 created += 1
+                                created_by_section[section_id] += 1
                                 section_state.remember(sentence)
                                 section_state.track(
                                     hit.source_id,
@@ -1340,6 +1437,14 @@ def extract_evidence(ctx: ResearchContext):
                 if not section_states[section.section_id].target_reached
             ]
             if pending and total_evidence < brief.max_evidence:
+                quotas = {
+                    section_id: created_by_section[section_id] + quota
+                    for section_id, quota in _section_quotas(
+                        sections,
+                        section_states,
+                        brief.max_evidence - total_evidence,
+                    ).items()
+                }
                 for record in records:
                     ctx.guard()
                     if total_evidence >= brief.max_evidence:
@@ -1365,8 +1470,13 @@ def extract_evidence(ctx: ResearchContext):
                     for section in source_sections:
                         if total_evidence >= brief.max_evidence:
                             break
-                        section_state = section_states[section.section_id]
+                        section_id = section.section_id
+                        section_state = section_states[section_id]
                         if section_state.target_reached:
+                            continue
+                        if created_by_section[section_id] >= quotas.get(
+                            section_id, 0
+                        ):
                             continue
                         if not section_state.can_quote(record.source_id):
                             continue
@@ -1414,6 +1524,7 @@ def extract_evidence(ctx: ResearchContext):
                             evidence_ids.add(str(item.id))
                         total_evidence += 1
                         created += 1
+                        created_by_section[section_id] += 1
                         section_state.remember(sentence)
                         section_state.track(
                             record.source_id,
@@ -1479,6 +1590,7 @@ def analyze_evidence(ctx: ResearchContext):
                 ctx,
                 _outline(state).sections,
                 brief,
+                available_source_ids=_run_source_ids(state),
             )
             ctx.emit(
                 RunEventType.PROGRESS,
@@ -2197,6 +2309,10 @@ def write_sections(ctx: ResearchContext):
                                 ctx,
                                 outline.sections,
                                 brief,
+                                available_source_ids=(
+                                    _run_source_ids(state)
+                                    | {item.source_id for item in evidence}
+                                ),
                             )
                         return outcome
 
@@ -2957,17 +3073,33 @@ def _refresh_evidence_matrix(
     ctx: ResearchContext,
     sections: list[OutlineSection],
     brief: ResearchBrief,
+    *,
+    available_source_ids: set[UUID] | None = None,
 ) -> EvidenceMatrix:
-    targets = {
-        section.section_id: section_evidence_target(section, ctx.settings)
-        for section in sections
-    }
     with ctx.database.session_scope() as session:
         evidence = EvidenceRepository(session).list_for_run(
             ctx.project_id,
             ctx.run_id,
         )
         sources = source_views(session, ctx.project_id)
+        available_sources = (
+            None
+            if available_source_ids is None
+            else len(
+                {
+                    _source_identity_for(sources, source_id)
+                    for source_id in available_source_ids
+                }
+            )
+        )
+        targets = {
+            section.section_id: section_evidence_target(
+                section,
+                ctx.settings,
+                available_sources=available_sources,
+            )
+            for section in sections
+        }
         matrix = build_evidence_matrix(
             sections,
             evidence,
@@ -3012,6 +3144,15 @@ def _source_records(state: ResearchState) -> list[SourceRecord]:
         SourceRecord.model_validate(value)
         for value in state.get("sources", [])
     ]
+
+
+def _run_source_ids(state: ResearchState) -> set[UUID]:
+    """Sources this run fetched content for, not every source in the project."""
+    return {
+        record.source_id
+        for record in _source_records(state)
+        if record.source_version_id is not None
+    }
 
 
 def _normalize_outline(outline: Outline) -> Outline:

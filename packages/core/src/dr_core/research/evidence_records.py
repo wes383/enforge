@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from uuid import UUID
 
@@ -9,21 +10,63 @@ from dr_core.db.enums import EvidenceType, EvidenceVerificationStatus
 from dr_core.research.text import context_window, sentence_spans
 from dr_core.schemas import EvidenceCreate
 
-
-def evidence_type(sentence: str) -> EvidenceType:
-    lowered = sentence.casefold()
-    refutation_terms = (
-        "however",
-        "but ",
-        "contradict",
-        "contrary",
-        "refute",
+# Real research prose refutes a claim by reporting an absent effect, not by
+# saying "however". A literal contrast-word list found no refutations on real
+# corpora, so the patterns below also cover the negations a study uses when it
+# finds nothing: "no significant difference", "did not replicate", "found no
+# association". Limitation sentences such as "the design cannot establish
+# causality" stay out on purpose; they describe the study, not its result.
+_REFUTATION_PATTERNS = tuple(
+    re.compile(pattern)
+    for pattern in (
+        r"\bhowever\b",
+        r"\bbut\b",
+        r"\bcontradict",
+        r"\bcontrary\b",
+        r"\brefut",
+        r"\bdisagree",
+        r"\bdispute",
+        r"\bundermine",
+        r"\binconsistent with\b",
+        r"\bat odds with\b",
+        r"\bno\s+(?:significant|measurable|reliable|consistent|detectable|"
+        r"established|clear|evidence|association|effect|relationship|"
+        r"difference|dose[- ]response)\b",
+        r"\bno\s+(?:\w+\s+){0,2}stud(?:y|ies)\b",
+        r"\bnot\s+(?:significantly\s+)?(?:associated|correlated|related|"
+        r"support(?:ed|s)?|differ(?:s|ed)?|consistent|show(?:s|ed|n)?|"
+        r"find|found|reach(?:ed)?|establish(?:ed)?)\b",
+        r"\b(?:did|does|do)(?:n't| not)\s+(?:differ|support|show|agree|"
+        r"find|replicate|detect|observe|increase|reduce|affect|predict|"
+        r"reach|establish|constitute)\b",
+        r"\bfail(?:ed|s)?\s+to\s+(?:replicate|find|detect|show|confirm|"
+        r"reach)\b",
+        r"\bunsupported\b",
+        r"\bno\s+support(?:ing|ed)?\b",
         "相反",
         "然而",
         "但是",
         "反驳",
+        "质疑",
+        "矛盾",
+        "不一致",
+        "不显著",
+        "无显著",
+        "没有显著",
+        "无关联",
+        "无关",
+        "不支持",
+        "未能",
+        "没有证据",
+        "未发现",
+        "未观察到",
     )
-    if any(term in lowered for term in refutation_terms):
+)
+
+
+def evidence_type(sentence: str) -> EvidenceType:
+    lowered = " ".join(sentence.casefold().split())
+    if any(pattern.search(lowered) for pattern in _REFUTATION_PATTERNS):
         return EvidenceType.REFUTATION
     if any(character.isdigit() for character in sentence):
         return EvidenceType.STATISTIC

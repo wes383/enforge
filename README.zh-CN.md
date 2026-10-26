@@ -269,7 +269,7 @@ docker compose up -d --force-recreate api worker
 测试与真实密钥完全隔离：`docker-compose.test.yml` 强制 `RESEARCH_PROVIDER_MODE=mock` 并清空所有提供商密钥与 LLM 开关，即使 `.env` 里有真实 Key 也不会联网或消耗配额。
 
 ```bash
-# 单元 + 集成 + 评测（当前 388 passed）
+# 单元 + 集成 + 评测（当前 407 passed）
 docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --profile test run --rm --build test
 
@@ -283,7 +283,7 @@ docker compose -f docker-compose.yml -f docker-compose.test.yml \
   --articles /app/data/files/eval_articles
 ```
 
-评测集分两部分。10 个 case 使用生成的占位摘要，验证工作流自身的正确性：中断恢复、限流、预算耗尽、元数据缺失。另 2 个语料 case 把 `tests/evaluation/corpus/` 里冻结的全文文档送进生产解析器、切片器与证据抽取器，并守住占位数据无法撼动的质量指标：证据目标达成率、全文证据占比、仅凭摘要引用的主张比例、引文是否真的出现在所引来源里。语料文档为本评测集撰写并标注 `synthetic_content`；替换文件即可用真实语料评测。
+评测集分两部分。10 个 case 使用生成的占位摘要，验证工作流自身的正确性：中断恢复、限流、预算耗尽、元数据缺失。另 2 个语料 case 把 `tests/evaluation/corpus/` 里冻结的全文文档送进生产解析器、切片器与证据抽取器，并守住占位数据无法撼动的质量指标：证据目标达成率、全文证据占比、仅凭摘要引用的主张比例、引文是否真的出现在所引来源里、真实文本中的矛盾证据能否被识别。语料文档为本评测集撰写并标注 `synthetic_content`；替换文件即可用真实语料评测。抽取阶段会按各章节尚未满足的目标分配全局证据预算，避免靠前的章节吃光额度；引文追溯按来源检查全部版本，因此搜索摘要阶段产生的引文也能在后续抓取的正文里找到。
 
 前端静态检查：
 

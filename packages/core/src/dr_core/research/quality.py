@@ -451,12 +451,17 @@ def assess_evidence_quality(
 def section_evidence_target(
     section: OutlineSection,
     settings: Settings,
+    *,
+    available_sources: int | None = None,
 ) -> tuple[int, int]:
     """Evidence a section needs, derived from its own writing budget.
 
     The target scales with the section's word budget, so a short section
     stops earlier than a long one instead of every section sharing one
-    hard-coded floor.
+    hard-coded floor. ``available_sources`` caps the independent-source
+    target at what the run actually collected; a target of eight sources is
+    unreachable when the corpus holds five, and an unreachable target makes
+    the achievement ratio meaningless.
     """
     words = section.target_words or 0
     wanted = words // max(1, settings.research_section_target_words_per_evidence)
@@ -468,6 +473,8 @@ def section_evidence_target(
         settings.research_section_target_sources_max,
         max(settings.research_section_target_sources_min, evidence // 2 + 1),
     )
+    if available_sources is not None:
+        identities = min(identities, max(0, available_sources))
     return evidence, identities
 
 

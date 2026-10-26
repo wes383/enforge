@@ -83,7 +83,11 @@ def evaluation_settings() -> Settings:
             "research_max_queries_per_round": 6,
             "research_max_sources": 20,
             "research_max_fetches_per_round": 8,
-            "research_max_evidence": 40,
+            # Seven sections at the default one-quote-per-35-words target ask
+            # for roughly eighty quotations. A cap of forty made the target
+            # unreachable no matter how extraction allocated it, so the
+            # harness now funds the same target the production default does.
+            "research_max_evidence": 70,
             "research_node_timeout_seconds": 60,
             "langfuse_enabled": False,
         }
